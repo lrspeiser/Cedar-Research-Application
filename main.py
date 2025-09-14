@@ -226,6 +226,22 @@ def interpret_file(path: str, original_name: str) -> Dict[str, Any]:
     is_text = _is_probably_text(path)
     meta["is_text"] = is_text
 
+    # Store a UTF-8 text sample of the first N bytes (for LLM inspection)
+    try:
+        limit = int(os.getenv("CEDARPY_SAMPLE_BYTES", "65536"))
+    except Exception:
+        limit = 65536
+    try:
+        with open(path, "rb") as f:
+            sample_b = f.read(max(0, limit))
+        sample_text = sample_b.decode("utf-8", errors="replace")
+        meta["sample_text"] = sample_text
+        meta["sample_bytes_read"] = len(sample_b)
+        meta["sample_truncated"] = (meta.get("size_bytes") or 0) > len(sample_b)
+        meta["sample_encoding"] = "utf-8-replace"
+    except Exception:
+        pass
+
     if is_text:
         # Try JSON validation for .json / .ndjson / .ipynb
         if ext in {"json", "ndjson", "ipynb"}:

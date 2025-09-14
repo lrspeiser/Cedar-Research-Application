@@ -40,6 +40,7 @@ Environment variables
 - CEDARPY_MYSQL_URL: Legacy variable for MySQL DSN; used if CEDARPY_DATABASE_URL is not set.
 - CEDARPY_UPLOAD_DIR: Directory where uploaded files are stored. Defaults to ./user_uploads and is mounted at /uploads by the app for convenience.
 - CEDARPY_DATA_DIR: Base directory for default SQLite database location (defaults to ~/CedarPyData).
+- CEDARPY_SAMPLE_BYTES: How many bytes to capture as a UTF-8 text sample from each file (default: 65536).
 
 Architecture overview
 - Configuration
