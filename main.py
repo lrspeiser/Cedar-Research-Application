@@ -674,8 +674,15 @@ SELECT * FROM demo LIMIT 10;""")
           <form method=\"post\" action=\"/project/{project.id}/merge_to_main?branch_id={current.id}\" class=\"inline\" style=\"margin-bottom:6px\">
             <button type=\"submit\">Merge Branch → Main</button>
           </form>
-          <form method=\"post\" action=\"/project/{project.id}/files/delete_all?branch_id={current.id}\" class=\"inline\">
+          <form method=\"post\" action=\"/project/{project.id}/files/delete_all?branch_id={current.id}\" class=\"inline\" style=\"margin-bottom:6px\">
             <button type=\"submit\" class=\"secondary\" onclick=\"return confirm('Delete all files in this branch?');\">Delete All Files (this branch)</button>
+          </form>
+          <h4>Make Table Branch-aware (SQLite)</h4>
+          <div class=\"small muted\">Adds project_id and branch_id, moving existing rows to Main.</div>
+          <form method=\"post\" action=\"/project/{project.id}/sql/make_branch_aware?branch_id={current.id}\" class=\"inline\">
+            <input type=\"text\" name=\"table\" placeholder=\"demo\" required />
+            <div style=\"height:6px\"></div>
+            <button type=\"submit\">Convert Table</button>
           </form>
         </div>
       </div>
@@ -1159,6 +1166,70 @@ def delete_all_files(project_id: int, request: Request, db: Session = Depends(ge
         db.delete(f)
     db.commit()
     return RedirectResponse(f"/project/{project.id}?branch_id={current_b.id}&msg=Files+deleted", status_code=303)
+
+# -------------------- Make existing table branch-aware (SQLite) --------------------
+
+@app.post("/project/{project_id}/sql/make_branch_aware")
+def make_table_branch_aware(project_id: int, request: Request, table: str = Form(...), db: Session = Depends(get_db)):
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        return RedirectResponse("/", status_code=303)
+    branch_id = request.query_params.get("branch_id")
+    try:
+        branch_id = int(branch_id) if branch_id is not None else None
+    except Exception:
+        branch_id = None
+    current_b = current_branch(db, project.id, branch_id)
+    main_b = ensure_main_branch(db, project.id)
+
+    tbl = _safe_identifier(table)
+    try:
+        with engine.begin() as conn:
+            if _dialect() != "sqlite":
+                return RedirectResponse(f"/project/{project.id}?branch_id={current_b.id}&msg=Only+SQLite+supported+for+now", status_code=303)
+            # Introspect
+            info = conn.exec_driver_sql(f"PRAGMA table_info({tbl})").fetchall()
+            if not info:
+                return RedirectResponse(f"/project/{project.id}?branch_id={current_b.id}&msg=Table+not+found", status_code=303)
+            cols = [{"cid": r[0], "name": r[1], "type": r[2] or "", "notnull": int(r[3]) == 1, "dflt": r[4], "pk": int(r[5])} for r in info]
+            names = {c["name"].lower() for c in cols}
+            if "project_id" in names and "branch_id" in names:
+                return RedirectResponse(f"/project/{project.id}?branch_id={current_b.id}&msg=Already+branch-aware", status_code=303)
+            # Rename old
+            tmp = f"{tbl}_old_ba"
+            conn.exec_driver_sql(f"ALTER TABLE {tbl} RENAME TO {tmp}")
+            # Build CREATE for new table
+            col_defs = []
+            pk_cols = [c["name"] for c in cols if c["pk"]]
+            for c in cols:
+                line = f"{c['name']} {c['type']}".strip()
+                if c["notnull"]:
+                    line += " NOT NULL"
+                # Inline PRIMARY KEY if single PK col
+                if len(pk_cols) == 1 and c["name"] == pk_cols[0] and ("int" in c["type"].lower()):
+                    line += " PRIMARY KEY"
+                col_defs.append(line)
+            # Add branch columns
+            col_defs.append("project_id INTEGER NOT NULL")
+            col_defs.append("branch_id INTEGER NOT NULL")
+            # Table-level PK for composite keys
+            if len(pk_cols) > 1:
+                pk_list = ", ".join(pk_cols)
+                col_defs.append(f"PRIMARY KEY ({pk_list})")
+            create_sql = f"CREATE TABLE {tbl} (" + ", ".join(col_defs) + ")"
+            conn.exec_driver_sql(create_sql)
+            # Copy data into Main
+            old_cols_list = ", ".join([c["name"] for c in cols])
+            insert_cols_list = old_cols_list + ", project_id, branch_id"
+            conn.exec_driver_sql(
+                f"INSERT INTO {tbl} ({insert_cols_list}) SELECT {old_cols_list}, {project.id}, {main_b.id} FROM {tmp}"
+            )
+            # Drop old
+            conn.exec_driver_sql(f"DROP TABLE {tmp}")
+    except Exception as e:
+        return RedirectResponse(f"/project/{project.id}?branch_id={current_b.id}&msg=Error:+{html.escape(str(e))}", status_code=303)
+
+    return RedirectResponse(f"/project/{project.id}?branch_id={current_b.id}&msg=Converted+{tbl}+to+branch-aware", status_code=303)
 
 BRANCH_AWARE_SQL_DEFAULT = os.getenv("CEDARPY_SQL_BRANCH_MODE", "1") == "1"
 
