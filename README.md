@@ -82,6 +82,7 @@ API endpoints (for LLM integration):
   - Response: { job_id, pid, started_at }
 - GET /api/shell/stream/{job_id}
   - Server-Sent Events (text/event-stream). Each message is one line of output. A terminal message "__CEDARPY_EOF__" indicates completion.
+  - Auth: If CEDARPY_SHELL_API_TOKEN is set, pass it as a query parameter token=<token> (EventSource cannot set custom headers). Otherwise local-only.
 - POST /api/shell/stop/{job_id}
   - Stops the process group for the job (SIGTERM). Requires token or local request.
 - GET /api/shell/status/{job_id}

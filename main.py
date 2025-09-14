@@ -811,7 +811,8 @@ def shell_ui(request: Request):
         """
         return layout("Shell – disabled", body)
 
-    body = f"""
+    default_shell = escape(os.environ.get("SHELL", "/bin/bash"))
+    body = """
       <h1>Shell</h1>
       <p class='muted small'>Runs scripts with your user privileges via {{SHELL or /bin/bash}}. Output streams live below. <strong>Danger:</strong> Any command you run can modify your system.</p>
       <div class='card' style='flex:1'>
@@ -821,7 +822,7 @@ def shell_ui(request: Request):
         <div class='row'>
           <div style='flex:1'>
             <label class='small muted'>Shell path</label>
-            <input id='shellPath' type='text' placeholder='{escape(os.environ.get("SHELL", "/bin/bash"))}' style='width:100%; padding:8px; border:1px solid var(--border); border-radius:6px;' />
+            <input id='shellPath' type='text' placeholder='__DEFAULT_SHELL__' style='width:100%; padding:8px; border:1px solid var(--border); border-radius:6px;' />
           </div>
           <div style='flex:1'>
             <label class='small muted'>X-API-Token (optional)</label>
@@ -874,8 +875,9 @@ def shell_ui(request: Request):
             const data = await resp.json();
             currentJob = data.job_id;
             setStatus('running (pid '+(data.pid || '?')+')');
-            // Stream
-            evtSource = new EventSource(`/api/shell/stream/${data.job_id}`);
+            // Stream (token via query param if present)
+            const qs = token ? ('?token='+encodeURIComponent(token)) : '';
+            evtSource = new EventSource(`/api/shell/stream/${data.job_id}${qs}`);
             evtSource.onmessage = (e) => {
               if (e.data === '__CEDARPY_EOF__') {
                 setStatus('finished');
@@ -911,6 +913,7 @@ def shell_ui(request: Request):
         });
       </script>
     """
+    body = body.replace("__DEFAULT_SHELL__", default_shell)
     return layout("Shell", body)
 
 
@@ -927,7 +930,17 @@ def api_shell_run(request: Request, payload: Dict[str, Any], x_api_token: Option
 
 
 @app.get("/api/shell/stream/{job_id}")
-def api_shell_stream(job_id: str):
+def api_shell_stream(job_id: str, request: Request, token: Optional[str] = None):
+    # Enforce same auth policy: if token is configured, allow token via query param for EventSource; otherwise local-only
+    if not SHELL_API_ENABLED:
+        raise HTTPException(status_code=403, detail="Shell API is disabled")
+    if SHELL_API_TOKEN:
+        if token != SHELL_API_TOKEN:
+            raise HTTPException(status_code=401, detail="Unauthorized (token query param required for stream)")
+    else:
+        if not _is_local_request(request):
+            raise HTTPException(status_code=401, detail="Unauthorized (local only)")
+
     job = get_shell_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="job not found")
