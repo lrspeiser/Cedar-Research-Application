@@ -63,6 +63,57 @@ This matches: *"I should be able to see that file in the branch and in main, but
 Uploaded files are saved under `user_uploads/project_{id}/branch_{branchName}/...` (relative to the app working directory by default).  
 Override with `CEDARPY_UPLOAD_DIR` if desired.
 
+## Shell window and API
+
+Danger zone: This feature executes arbitrary shell scripts with the same privileges as the user running the server. It is disabled by default and should only be enabled on your own machine in trusted environments.
+
+Enable and secure:
+- CEDARPY_SHELL_API_ENABLED=1: Enable the UI and API. Default is disabled (0).
+- CEDARPY_SHELL_API_TOKEN=<token>: Optional. If set, API requests must include header X-API-Token: <token>.
+  If not set, only local requests (127.0.0.1/::1) are allowed.
+
+UI:
+- Navigate to /shell for a textarea to enter a script and a live output pane. You can optionally specify a shell path; defaults to $SHELL or /bin/bash.
+
+API endpoints (for LLM integration):
+- POST /api/shell/run
+  - Headers: X-API-Token: <token> (required if CEDARPY_SHELL_API_TOKEN set)
+  - Body (JSON): { "script": "echo hello", "shell_path": "/bin/zsh" (optional) }
+  - Response: { job_id, pid, started_at }
+- GET /api/shell/stream/{job_id}
+  - Server-Sent Events (text/event-stream). Each message is one line of output. A terminal message "__CEDARPY_EOF__" indicates completion.
+- POST /api/shell/stop/{job_id}
+  - Stops the process group for the job (SIGTERM). Requires token or local request.
+- GET /api/shell/status/{job_id}
+  - Returns status, return_code, timestamps, and on-disk log path.
+
+Logging:
+- Logs are written under $CEDARPY_DATA_DIR/logs/shell/ with filenames like YYYYmmddTHHMMSSZ__<jobid>.log
+- The UI streams output live and also writes to these log files for later inspection.
+
+Security model:
+- By default, the feature is OFF. When enabled, commands run with your user account, using your login shell ($SHELL or /bin/bash) with -l -c semantics.
+- If CEDARPY_SHELL_API_TOKEN is set, the token must be provided via X-API-Token for all API calls. Otherwise, only local requests are accepted.
+- There is no sandbox. Treat this as giving full shell access to anyone with the token or local access to the machine.
+
+Examples:
+```bash
+# Enable locally (bash/zsh)
+export CEDARPY_SHELL_API_ENABLED=1
+export CEDARPY_SHELL_API_TOKEN="<choose-a-strong-secret>"
+
+# Run the server
+uvicorn main:app --reload
+
+# Submit a job (macOS/Linux)
+curl -sS -H "Content-Type: application/json" \
+     -H "X-API-Token: $CEDARPY_SHELL_API_TOKEN" \
+     -d '{"script":"echo hello && uname -a"}' \
+     http://127.0.0.1:8000/api/shell/run
+```
+
+Note on API keys: This feature uses environment variables for configuration. See above for how to set them securely. Code comments reference this README for usage and pitfalls.
+
 ## Next steps (future stages)
 
 - Thread content & LLM runs

@@ -6,11 +6,17 @@ import mimetypes
 import json
 import csv
 import hashlib
+import subprocess
+import threading
+import uuid
+import queue
+import signal
+import time
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
-from fastapi import FastAPI, Request, UploadFile, File, Form, Depends
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi import FastAPI, Request, UploadFile, File, Form, Depends, Header, HTTPException
+from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from sqlalchemy import (
@@ -30,6 +36,18 @@ DEFAULT_SQLITE_PATH = os.path.join(DATA_DIR, "cedarpy.db")
 
 DATABASE_URL = os.getenv("CEDARPY_DATABASE_URL") or os.getenv("CEDARPY_MYSQL_URL") or f"sqlite:///{DEFAULT_SQLITE_PATH}"
 UPLOAD_DIR = os.getenv("CEDARPY_UPLOAD_DIR", os.path.abspath("./user_uploads"))
+
+# Shell API feature flag and token
+# See README for details on enabling and securing the Shell API.
+# - CEDARPY_SHELL_API_ENABLED: "1" to enable the UI and API, default "0" (disabled)
+# - CEDARPY_SHELL_API_TOKEN: optional token. If set, requests must include X-API-Token header matching this value.
+#   If unset, API is limited to local requests (127.0.0.1/::1) only.
+SHELL_API_ENABLED = os.getenv("CEDARPY_SHELL_API_ENABLED", "0") == "1"
+SHELL_API_TOKEN = os.getenv("CEDARPY_SHELL_API_TOKEN")
+
+# Logs directory for shell runs (outside DMG and writable)
+LOGS_DIR = os.path.join(DATA_DIR, "logs", "shell")
+os.makedirs(LOGS_DIR, exist_ok=True)
 
 # Ensure writable dirs exist (important when running from a read-only DMG)
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -432,7 +450,7 @@ def layout(title: str, body: str) -> HTMLResponse:
     <div class="topbar">
       <div><strong>CedarPython</strong> <span class="muted">– Stage 1</span></div>
       <div class="muted small">FastAPI + MySQL prototype</div>
-      <div style="margin-left:auto"><a href="/">Projects</a></div>
+      <div style=\"margin-left:auto\"><a href=\"/\">Projects</a> | <a href=\"/shell\">Shell</a></div>
     </div>
   </header>
   <main>
@@ -650,6 +668,318 @@ SELECT * FROM demo LIMIT 10;""")
 
       <div class=\"row\">{sql_card}</div>
     """
+
+# ----------------------------------------------------------------------------------
+# Shell execution manager
+# ----------------------------------------------------------------------------------
+
+class ShellJob:
+    def __init__(self, script: str, shell_path: Optional[str] = None):
+        self.id = uuid.uuid4().hex
+        self.script = script
+        self.shell_path = shell_path or os.environ.get("SHELL", "/bin/bash")
+        self.start_time = datetime.utcnow()
+        self.end_time: Optional[datetime] = None
+        self.status = "starting"  # starting|running|finished|error|killed
+        self.return_code: Optional[int] = None
+        self.proc: Optional[subprocess.Popen] = None
+        self.queue: "queue.Queue[str]" = queue.Queue()
+        self.output_lines: List[str] = []
+        self.log_path = os.path.join(LOGS_DIR, f"{self.start_time.strftime('%Y%m%dT%H%M%SZ')}__{self.id}.log")
+        self._lock = threading.Lock()
+
+    def append_line(self, line: str):
+        try:
+            with open(self.log_path, "a", encoding="utf-8", errors="replace") as lf:
+                lf.write(line)
+        except Exception:
+            pass
+        with self._lock:
+            self.output_lines.append(line)
+        try:
+            self.queue.put_nowait(line)
+        except Exception:
+            pass
+
+    def kill(self):
+        with self._lock:
+            if self.proc and self.status in ("starting", "running"):
+                try:
+                    os.killpg(os.getpgid(self.proc.pid), signal.SIGTERM)
+                except Exception:
+                    try:
+                        self.proc.terminate()
+                    except Exception:
+                        pass
+                self.status = "killed"
+
+
+def _run_job(job: ShellJob):
+    shell = job.shell_path
+    # Run as login shell (-l) and execute command (-c) with a small wrapper to ensure POSIX semantics
+    # Using a new process group so we can kill the entire tree
+    job.status = "running"
+    try:
+        job.proc = subprocess.Popen(
+            [shell, "-lc", job.script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            text=True,
+            bufsize=1,
+            preexec_fn=os.setsid,
+            env=os.environ.copy(),
+        )
+    except Exception as e:
+        job.status = "error"
+        job.end_time = datetime.utcnow()
+        job.append_line(f"[spawn-error] {e}\n")
+        return
+
+    # Stream output
+    try:
+        assert job.proc and job.proc.stdout is not None
+        for line in job.proc.stdout:
+            job.append_line(line)
+    except Exception as e:
+        job.append_line(f"[stream-error] {e}\n")
+    finally:
+        if job.proc:
+            job.proc.wait()
+            job.return_code = job.proc.returncode
+        job.end_time = datetime.utcnow()
+        if job.status != "killed":
+            job.status = "finished" if (job.return_code == 0) else "error"
+        # Signal end of stream
+        try:
+            job.queue.put_nowait("__CEDARPY_EOF__\n")
+        except Exception:
+            pass
+
+
+_shell_jobs: Dict[str, ShellJob] = {}
+_shell_jobs_lock = threading.Lock()
+
+
+def start_shell_job(script: str, shell_path: Optional[str] = None) -> ShellJob:
+    job = ShellJob(script=script, shell_path=shell_path)
+    with _shell_jobs_lock:
+        _shell_jobs[job.id] = job
+    t = threading.Thread(target=_run_job, args=(job,), daemon=True)
+    t.start()
+    return job
+
+
+def get_shell_job(job_id: str) -> Optional[ShellJob]:
+    with _shell_jobs_lock:
+        return _shell_jobs.get(job_id)
+
+
+# ----------------------------------------------------------------------------------
+# Security helpers for Shell API
+# ----------------------------------------------------------------------------------
+
+def _is_local_request(request: Request) -> bool:
+    host = (request.client.host if request and request.client else None) or ""
+    return host in {"127.0.0.1", "::1", "localhost"}
+
+
+def require_shell_enabled_and_auth(request: Request, x_api_token: Optional[str] = Header(default=None)):
+    if not SHELL_API_ENABLED:
+        raise HTTPException(status_code=403, detail="Shell API is disabled. Set CEDARPY_SHELL_API_ENABLED=1 to enable.")
+    # If a token is configured, require it
+    if SHELL_API_TOKEN:
+        if not x_api_token or x_api_token != SHELL_API_TOKEN:
+            raise HTTPException(status_code=401, detail="Unauthorized (invalid or missing X-API-Token)")
+    else:
+        # No token set: only allow local requests
+        if not _is_local_request(request):
+            raise HTTPException(status_code=401, detail="Unauthorized (local requests only when no token configured)")
+
+
+# ----------------------------------------------------------------------------------
+# Shell UI and API routes
+# ----------------------------------------------------------------------------------
+
+@app.get("/shell", response_class=HTMLResponse)
+def shell_ui(request: Request):
+    if not SHELL_API_ENABLED:
+        body = """
+        <h1>Shell</h1>
+        <p class='muted'>The Shell feature is currently disabled.</p>
+        <p>To enable, set <code>CEDARPY_SHELL_API_ENABLED=1</code>. Optionally set <code>CEDARPY_SHELL_API_TOKEN</code> for API access. See README for details.</p>
+        """
+        return layout("Shell – disabled", body)
+
+    body = f"""
+      <h1>Shell</h1>
+      <p class='muted small'>Runs scripts with your user privileges via {{SHELL or /bin/bash}}. Output streams live below. <strong>Danger:</strong> Any command you run can modify your system.</p>
+      <div class='card' style='flex:1'>
+        <label for='script'>Script</label>
+        <textarea id='script' style='width:100%; height:180px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:13px;' placeholder='echo Hello world'></textarea>
+        <div style='height:8px'></div>
+        <div class='row'>
+          <div style='flex:1'>
+            <label class='small muted'>Shell path</label>
+            <input id='shellPath' type='text' placeholder='{escape(os.environ.get("SHELL", "/bin/bash"))}' style='width:100%; padding:8px; border:1px solid var(--border); border-radius:6px;' />
+          </div>
+          <div style='flex:1'>
+            <label class='small muted'>X-API-Token (optional)</label>
+            <input id='apiToken' type='text' placeholder='{{set if required}}' style='width:100%; padding:8px; border:1px solid var(--border); border-radius:6px;' />
+          </div>
+        </div>
+        <div style='height:10px'></div>
+        <button id='runBtn'>Run</button>
+        <button id='stopBtn' class='secondary' disabled>Stop</button>
+      </div>
+
+      <div style='height:16px'></div>
+      <div class='card'>
+        <div class='row' style='justify-content:space-between; align-items:center'>
+          <h3 style='margin:0'>Output</h3>
+          <div class='small muted' id='status'>idle</div>
+        </div>
+        <pre id='output' style='min-height:220px; max-height:520px; overflow:auto; background:#0b1021; color:#e6e6e6; padding:12px; border-radius:6px;'></pre>
+      </div>
+
+      <script>
+        const runBtn = document.getElementById('runBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const output = document.getElementById('output');
+        const statusEl = document.getElementById('status');
+        let currentJob = null;
+        let evtSource = null;
+
+        function setStatus(s) { statusEl.textContent = s; }
+        function append(text) {
+          output.textContent += text;
+          output.scrollTop = output.scrollHeight;
+        }
+        function disableRun(disabled) { runBtn.disabled = disabled; stopBtn.disabled = !disabled; }
+
+        runBtn.addEventListener('click', async () => {
+          output.textContent = '';
+          const script = document.getElementById('script').value;
+          const shellPath = document.getElementById('shellPath').value || null;
+          const token = document.getElementById('apiToken').value || null;
+          setStatus('starting…');
+          disableRun(true);
+          try {
+            const resp = await fetch('/api/shell/run', {
+              method: 'POST',
+              headers: Object.assign({'Content-Type': 'application/json'}, token ? {'X-API-Token': token} : {}),
+              body: JSON.stringify({ script, shell_path: shellPath }),
+            });
+            if (!resp.ok) { const t = await resp.text(); throw new Error(t || ('HTTP '+resp.status)); }
+            const data = await resp.json();
+            currentJob = data.job_id;
+            setStatus('running (pid '+(data.pid || '?')+')');
+            // Stream
+            evtSource = new EventSource(`/api/shell/stream/${data.job_id}`);
+            evtSource.onmessage = (e) => {
+              if (e.data === '__CEDARPY_EOF__') {
+                setStatus('finished');
+                disableRun(false);
+                evtSource && evtSource.close();
+                evtSource = null;
+              } else {
+                append(e.data + "\n");
+              }
+            };
+            evtSource.onerror = (e) => {
+              append('\n[stream-error]');
+              setStatus('error');
+              disableRun(false);
+              evtSource && evtSource.close();
+              evtSource = null;
+            };
+          } catch (err) {
+            append('[error] '+err+'\n');
+            setStatus('error');
+            disableRun(false);
+          }
+        });
+
+        stopBtn.addEventListener('click', async () => {
+          if (!currentJob) return;
+          const token = document.getElementById('apiToken').value || null;
+          try {
+            const resp = await fetch(`/api/shell/stop/${currentJob}`, { method: 'POST', headers: token ? {'X-API-Token': token} : {} });
+            if (!resp.ok) { append('[stop-error] '+(await resp.text())+'\n'); return; }
+            append('[killing]\n');
+          } catch (e) { append('[stop-error] '+e+'\n'); }
+        });
+      </script>
+    """
+    return layout("Shell", body)
+
+
+@app.post("/api/shell/run")
+def api_shell_run(request: Request, payload: Dict[str, Any], x_api_token: Optional[str] = Header(default=None)):
+    require_shell_enabled_and_auth(request, x_api_token)
+    script = (payload or {}).get("script")
+    shell_path = (payload or {}).get("shell_path")
+    if not script or not isinstance(script, str):
+        raise HTTPException(status_code=400, detail="script is required")
+    job = start_shell_job(script=script, shell_path=shell_path)
+    pid = job.proc.pid if job.proc else None
+    return {"job_id": job.id, "pid": pid, "started_at": job.start_time.isoformat() + "Z"}
+
+
+@app.get("/api/shell/stream/{job_id}")
+def api_shell_stream(job_id: str):
+    job = get_shell_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job not found")
+
+    def event_gen():
+        # Flush any existing buffered lines first
+        for line in job.output_lines:
+            yield f"data: {line.rstrip()}\n\n"
+        # Then stream live from queue
+        while True:
+            try:
+                line = job.queue.get(timeout=1.0)
+            except Exception:
+                # Heartbeat to keep connection alive
+                if job.status in ("finished", "error", "killed"):
+                    yield "data: __CEDARPY_EOF__\n\n"
+                    break
+                else:
+                    continue
+            if line == "__CEDARPY_EOF__\n":
+                yield "data: __CEDARPY_EOF__\n\n"
+                break
+            yield f"data: {line.rstrip()}\n\n"
+
+    return StreamingResponse(event_gen(), media_type="text/event-stream")
+
+
+@app.post("/api/shell/stop/{job_id}")
+def api_shell_stop(job_id: str, request: Request, x_api_token: Optional[str] = Header(default=None)):
+    require_shell_enabled_and_auth(request, x_api_token)
+    job = get_shell_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job not found")
+    job.kill()
+    return {"ok": True}
+
+
+@app.get("/api/shell/status/{job_id}")
+def api_shell_status(job_id: str, request: Request, x_api_token: Optional[str] = Header(default=None)):
+    require_shell_enabled_and_auth(request, x_api_token)
+    job = get_shell_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job not found")
+    return {
+        "job_id": job.id,
+        "status": job.status,
+        "return_code": job.return_code,
+        "started_at": job.start_time.isoformat() + "Z",
+        "ended_at": job.end_time.isoformat() + "Z" if job.end_time else None,
+        "log_path": job.log_path,
+    }
+
 
 # ----------------------------------------------------------------------------------
 # Routes

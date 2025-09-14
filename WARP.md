@@ -41,6 +41,8 @@ Environment variables
 - CEDARPY_UPLOAD_DIR: Directory where uploaded files are stored. Defaults to ./user_uploads and is mounted at /uploads by the app for convenience.
 - CEDARPY_DATA_DIR: Base directory for default SQLite database location (defaults to ~/CedarPyData).
 - CEDARPY_SAMPLE_BYTES: How many bytes to capture as a UTF-8 text sample from each file (default: 65536).
+- CEDARPY_SHELL_API_ENABLED: "1" to enable the Shell UI and API, otherwise disabled.
+- CEDARPY_SHELL_API_TOKEN: Optional token required via X-API-Token header for Shell API calls. If unset, API only permits local requests (127.0.0.1/::1).
 
 Architecture overview
 - Configuration
