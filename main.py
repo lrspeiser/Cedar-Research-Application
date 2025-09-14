@@ -3,8 +3,11 @@ import os
 import html
 import shutil
 import mimetypes
+import json
+import csv
+import hashlib
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 
 from fastapi import FastAPI, Request, UploadFile, File, Form, Depends
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -99,6 +102,7 @@ class FileEntry(Base):
     size_bytes = Column(Integer)
     storage_path = Column(String(1024))  # absolute/relative path on disk
     created_at = Column(DateTime, default=datetime.utcnow)
+    metadata_json = Column(JSON)  # extracted metadata from interpreter
 
     project = relationship("Project")
     branch = relationship("Branch")
@@ -145,9 +149,139 @@ class Version(Base):
 
 Base.metadata.create_all(engine)
 
+# Attempt a lightweight migration for existing DBs: add metadata_json if missing
+try:
+    with engine.begin() as conn:
+        dialect = engine.dialect.name
+        has_col = False
+        if dialect == "mysql":
+            res = conn.exec_driver_sql("SHOW COLUMNS FROM files LIKE 'metadata_json'")
+            has_col = res.fetchone() is not None
+            if not has_col:
+                conn.exec_driver_sql("ALTER TABLE files ADD COLUMN metadata_json JSON NULL")
+        elif dialect == "sqlite":
+            res = conn.exec_driver_sql("PRAGMA table_info(files)")
+            cols = [row[1] for row in res.fetchall()]
+            has_col = "metadata_json" in cols
+            if not has_col:
+                conn.exec_driver_sql("ALTER TABLE files ADD COLUMN metadata_json JSON")
+        else:
+            # best effort: try adding a JSON column with generic SQL
+            res = conn.exec_driver_sql("SELECT 1")
+            conn.exec_driver_sql("ALTER TABLE files ADD COLUMN metadata_json JSON")
+except Exception:
+    # Ignore migration issues in prototype mode
+    pass
+
 # ----------------------------------------------------------------------------------
 # Utilities
 # ----------------------------------------------------------------------------------
+
+def _is_probably_text(path: str, sample_bytes: int = 4096) -> bool:
+    try:
+        with open(path, "rb") as f:
+            chunk = f.read(sample_bytes)
+        if b"\x00" in chunk:
+            return False
+        # If mostly ASCII or UTF-8 bytes, consider text
+        text_chars = bytearray({7, 8, 9, 10, 12, 13, 27} | set(range(0x20, 0x100)))
+        nontext = chunk.translate(None, text_chars)
+        return len(nontext) / (len(chunk) or 1) < 0.30
+    except Exception:
+        return False
+
+
+def interpret_file(path: str, original_name: str) -> Dict[str, Any]:
+    """Extracts metadata from the file for storage in FileEntry.metadata_json.
+
+    Avoids heavy deps; best-effort using extension/mime and light parsing.
+    """
+    meta: Dict[str, Any] = {}
+    try:
+        stat = os.stat(path)
+        meta["size_bytes"] = stat.st_size
+        meta["mtime"] = datetime.utcfromtimestamp(stat.st_mtime).isoformat() + "Z"
+        meta["ctime"] = datetime.utcfromtimestamp(stat.st_ctime).isoformat() + "Z"
+    except Exception:
+        pass
+
+    ext = os.path.splitext(original_name)[1].lower().lstrip(".")
+    meta["extension"] = ext
+    mime, _ = mimetypes.guess_type(original_name)
+    meta["mime_guess"] = mime or ""
+
+    # Format (high-level) and language
+    ftype = file_extension_to_type(original_name)
+    meta["format"] = ftype
+    language_map = {
+        "python": "Python", "rust": "Rust", "javascript": "JavaScript", "typescript": "TypeScript",
+        "c": "C", "c-header": "C", "cpp": "C++", "cpp-header": "C++", "objective-c": "Objective-C", "objective-c++": "Objective-C++",
+        "java": "Java", "kotlin": "Kotlin", "go": "Go", "ruby": "Ruby", "php": "PHP", "csharp": "C#",
+        "swift": "Swift", "scala": "Scala", "haskell": "Haskell", "clojure": "Clojure", "elixir": "Elixir", "erlang": "Erlang",
+        "lua": "Lua", "r": "R", "perl": "Perl", "shell": "Shell",
+    }
+    meta["language"] = language_map.get(ftype)
+
+    # Text / JSON / CSV heuristics
+    is_text = _is_probably_text(path)
+    meta["is_text"] = is_text
+
+    if is_text:
+        # Try JSON validation for .json / .ndjson / .ipynb
+        if ext in {"json", "ndjson", "ipynb"}:
+            try:
+                with open(path, "r", encoding="utf-8", errors="replace") as f:
+                    if ext == "ndjson":
+                        # count lines and JSON-parse first line only
+                        first = f.readline()
+                        json.loads(first)
+                        meta["json_valid"] = True
+                    else:
+                        data = json.load(f)
+                        meta["json_valid"] = True
+                        if isinstance(data, dict):
+                            meta["json_top_level_keys"] = list(data.keys())[:50]
+                        elif isinstance(data, list):
+                            meta["json_list_length_sample"] = min(len(data), 1000)
+            except Exception:
+                meta["json_valid"] = False
+        # CSV sniffing
+        if ext in {"csv", "tsv"}:
+            try:
+                with open(path, "r", encoding="utf-8", errors="replace") as f:
+                    sample = f.read(2048)
+                dialect = csv.Sniffer().sniff(sample)
+                meta["csv_dialect"] = {
+                    "delimiter": getattr(dialect, "delimiter", ","),
+                    "quotechar": getattr(dialect, "quotechar", '"'),
+                    "doublequote": getattr(dialect, "doublequote", True),
+                    "skipinitialspace": getattr(dialect, "skipinitialspace", False),
+                }
+            except Exception:
+                pass
+        # Simple line count (bounded)
+        try:
+            lc = 0
+            with open(path, "rb") as f:
+                for i, _ in enumerate(f):
+                    lc = i + 1
+                    if lc > 2000000:
+                        break
+            meta["line_count"] = lc
+        except Exception:
+            pass
+
+    # Hash (sha256)
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
+        meta["sha256"] = h.hexdigest()
+    except Exception:
+        pass
+
+    return meta
 
 def get_db() -> Session:
     db = SessionLocal()
@@ -185,10 +319,25 @@ def ensure_main_branch(db: Session, project_id: int) -> Branch:
 def file_extension_to_type(filename: str) -> str:
     ext = os.path.splitext(filename)[1].lower().lstrip(".")
     mapping = {
-        "jpg": "jpg", "jpeg": "jpg", "png": "png", "gif": "gif",
-        "pdf": "pdf", "json": "json", "txt": "txt", "md": "md",
-        "py": "code", "rs": "code", "js": "code", "ts": "code",
-        "ipynb": "json"
+        # images
+        "jpg": "jpg", "jpeg": "jpg", "png": "png", "gif": "gif", "webp": "webp", "bmp": "bmp", "tiff": "tiff", "svg": "svg",
+        # docs
+        "pdf": "pdf", "md": "md", "txt": "txt", "rtf": "rtf", "html": "html", "htm": "html", "xml": "xml",
+        # data
+        "json": "json", "yaml": "yaml", "yml": "yaml", "toml": "toml", "csv": "csv", "tsv": "tsv", "ndjson": "ndjson", "parquet": "parquet",
+        # archives
+        "zip": "zip", "gz": "gz", "tar": "tar", "tgz": "tgz", "bz2": "bz2", "xz": "xz",
+        # notebooks
+        "ipynb": "json",
+        # code
+        "py": "python", "rs": "rust", "js": "javascript", "ts": "typescript", "tsx": "typescript", "jsx": "javascript",
+        "c": "c", "h": "c-header", "hpp": "cpp-header", "hh": "cpp-header", "hxx": "cpp-header",
+        "cc": "cpp", "cpp": "cpp", "cxx": "cpp",
+        "java": "java", "kt": "kotlin", "kts": "kotlin", "go": "go",
+        "rb": "ruby", "php": "php", "cs": "csharp", "swift": "swift", "m": "objective-c", "mm": "objective-c++",
+        "scala": "scala", "hs": "haskell", "clj": "clojure", "ex": "elixir", "exs": "elixir", "erl": "erlang",
+        "lua": "lua", "r": "r", "pl": "perl", "pm": "perl", "sh": "shell", "bash": "shell", "zsh": "shell",
+        "sql": "sql", "proto": "protobuf", "graphql": "graphql", "gql": "graphql",
     }
     return mapping.get(ext, ext or "bin")
 
@@ -594,6 +743,8 @@ def upload_file(project_id: int, request: Request, file: UploadFile = File(...),
     mime, _ = mimetypes.guess_type(original_name)
     ftype = file_extension_to_type(original_name)
 
+    meta = interpret_file(disk_path, original_name)
+
     record = FileEntry(
         project_id=project.id,
         branch_id=branch.id,
@@ -604,6 +755,7 @@ def upload_file(project_id: int, request: Request, file: UploadFile = File(...),
         mime_type=mime or file.content_type or "",
         size_bytes=size,
         storage_path=os.path.abspath(disk_path),
+        metadata_json=meta,
     )
     db.add(record)
     db.commit()
@@ -612,7 +764,8 @@ def upload_file(project_id: int, request: Request, file: UploadFile = File(...),
         "project_id": project.id, "branch_id": branch.id,
         "filename": record.filename, "display_name": record.display_name,
         "file_type": record.file_type, "structure": record.structure,
-        "mime_type": record.mime_type, "size_bytes": record.size_bytes
+        "mime_type": record.mime_type, "size_bytes": record.size_bytes,
+        "metadata": meta,
     })
 
     return RedirectResponse(f"/project/{project.id}?branch_id={branch.id}&msg=File+uploaded", status_code=303)
