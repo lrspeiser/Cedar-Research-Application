@@ -27,11 +27,16 @@ fi
 
 # 1) Build a one-file CLI binary that runs the server
 rm -rf "$DIST" "$BUILD"
-pyinstaller \
+pushd "$ROOT_DIR" >/dev/null
+"$VENV/bin/pyinstaller" \
   --clean \
   --onefile \
   --name "$BINARY_NAME" \
-  "$ROOT_DIR/run_cedarpy.py"
+  --distpath "$ROOT_DIR/dist" \
+  --workpath "$BUILD" \
+  --specpath "$BUILD" \
+  run_cedarpy.py
+popd >/dev/null
 
 # Copy artifacts into a staging dir for the DMG
 STAGE="$ROOT_DIR/.dmg_stage"
@@ -42,7 +47,11 @@ cp "$ROOT_DIR/dist/$BINARY_NAME" "$STAGE/$BINARY_NAME"
 # 2) Create a .command that opens Terminal and runs the server
 cat > "$STAGE/Run ${APP_NAME}.command" <<'EOS'
 #!/usr/bin/env bash
+set -euo pipefail
 cd "$(dirname "$0")"
+# Use a writable uploads directory outside the read-only DMG by default
+export CEDARPY_UPLOAD_DIR="${CEDARPY_UPLOAD_DIR:-$HOME/CedarPyUploads}"
+mkdir -p "$CEDARPY_UPLOAD_DIR"
 chmod +x ./cedarpy
 ./cedarpy
 EOS
@@ -56,7 +65,7 @@ on run
   set appPath to (path to me as alias)
   set dirPath to do shell script "dirname " & quoted form of POSIX path of appPath
   tell application "Terminal"
-    do script "cd " & quoted form of dirPath & " && chmod +x ./cedarpy && ./cedarpy"
+    do script "export CEDARPY_UPLOAD_DIR=\"$HOME/CedarPyUploads\"; mkdir -p \"$HOME/CedarPyUploads\"; cd " & quoted form of dirPath & " && chmod +x ./cedarpy && ./cedarpy"
     activate
   end tell
 end run

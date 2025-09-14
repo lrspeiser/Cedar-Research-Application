@@ -36,8 +36,10 @@ Notes on build/lint/tests
 - No tests or test runner configuration are present as of this version.
 
 Environment variables
-- CEDARPY_MYSQL_URL: SQLAlchemy connection string (mysql+pymysql scheme). Required to connect to MySQL.
+- CEDARPY_DATABASE_URL: SQLAlchemy DSN. Defaults to SQLite at ~/CedarPyData/cedarpy.db if not provided.
+- CEDARPY_MYSQL_URL: Legacy variable for MySQL DSN; used if CEDARPY_DATABASE_URL is not set.
 - CEDARPY_UPLOAD_DIR: Directory where uploaded files are stored. Defaults to ./user_uploads and is mounted at /uploads by the app for convenience.
+- CEDARPY_DATA_DIR: Base directory for default SQLite database location (defaults to ~/CedarPyData).
 
 Architecture overview
 - Configuration
@@ -69,8 +71,8 @@ Architecture overview
   - Simple inline layout/styles and string-built HTML generators (no templating engine). Links to /uploads for file previews when storage_path is inside UPLOAD_DIR.
 
 Operational considerations
-- Database: MySQL 8.x recommended (collation in README uses utf8mb4_0900_ai_ci). If you use another version, pick a compatible utf8mb4 collation.
-- Table creation: First run will create all tables automatically. To “reset,” drop the database or tables manually.
+- Database: Defaults to SQLite for out-of-the-box runs. For production-like testing, set a MySQL DSN (utf8mb4_0900_ai_ci recommended).
+- Table creation: First run will create all tables automatically. To “reset,” drop the database (SQLite file or MySQL schema) manually.
 - Auth/security: None implemented in this stage; app is for local prototype use.
 
 Git

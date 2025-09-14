@@ -13,5 +13,6 @@ bash packaging/build_dmg.sh
 Output: CedarPy-macOS.dmg at the repo root.
 
 Notes:
-- The app is unsigned; macOS Gatekeeper may require right-click → Open.
-- The server needs a reachable MySQL database. Set CEDARPY_MYSQL_URL appropriately before running.
+- The app is unsigned; macOS Gatekeeper may require right-click  Open.
+- The app defaults to SQLite at ~/CedarPyData/cedarpy.db if no DB URL is set. For MySQL, set CEDARPY_DATABASE_URL or CEDARPY_MYSQL_URL.
+- The launcher defaults CEDARPY_UPLOAD_DIR to ~/CedarPyUploads to avoid DMG read-only issues.

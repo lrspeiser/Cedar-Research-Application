@@ -20,16 +20,29 @@ from sqlalchemy.orm import sessionmaker, declarative_base, relationship, Session
 # Configuration
 # ----------------------------------------------------------------------------------
 
-DATABASE_URL = os.getenv("CEDARPY_MYSQL_URL", "mysql+pymysql://root:password@localhost/cedarpython")
+# Prefer a generic CEDARPY_DATABASE_URL; fall back to legacy CEDARPY_MYSQL_URL; otherwise use SQLite in ~/CedarPyData/cedarpy.db
+HOME_DIR = os.path.expanduser("~")
+DATA_DIR = os.getenv("CEDARPY_DATA_DIR", os.path.join(HOME_DIR, "CedarPyData"))
+DEFAULT_SQLITE_PATH = os.path.join(DATA_DIR, "cedarpy.db")
+
+DATABASE_URL = os.getenv("CEDARPY_DATABASE_URL") or os.getenv("CEDARPY_MYSQL_URL") or f"sqlite:///{DEFAULT_SQLITE_PATH}"
 UPLOAD_DIR = os.getenv("CEDARPY_UPLOAD_DIR", os.path.abspath("./user_uploads"))
 
+# Ensure writable dirs exist (important when running from a read-only DMG)
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+if DATABASE_URL.startswith("sqlite"):
+    os.makedirs(os.path.dirname(DEFAULT_SQLITE_PATH), exist_ok=True)
 
 # ----------------------------------------------------------------------------------
 # Database setup (SQLAlchemy, sync engine by design for simplicity)
 # ----------------------------------------------------------------------------------
 
-engine = create_engine(DATABASE_URL, pool_pre_ping=True, future=True)
+engeine_kwargs_typo_guard = None
+engine_kwargs = dict(pool_pre_ping=True, future=True)
+if DATABASE_URL.startswith("sqlite"):
+    # Allow usage across threads in the web server
+    engine_kwargs["connect_args"] = {"check_same_thread": False}
+engine = create_engine(DATABASE_URL, **engine_kwargs)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 Base = declarative_base()
 
