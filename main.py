@@ -168,6 +168,24 @@ class Version(Base):
     )
 
 
+class SQLUndoLog(Base):
+    __tablename__ = "sql_undo_log"
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, nullable=False)
+    branch_id = Column(Integer, nullable=False)
+    table_name = Column(String(255), nullable=False)
+    op = Column(String(20), nullable=False)  # insert | update | delete
+    sql_text = Column(Text)
+    pk_columns = Column(JSON)  # list of PK column names
+    rows_before = Column(JSON)  # list of row dicts
+    rows_after = Column(JSON)   # list of row dicts
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_undo_project_branch", "project_id", "branch_id", "created_at"),
+    )
+
+
 Base.metadata.create_all(engine)
 
 # Attempt a lightweight migration for existing DBs: add metadata_json if missing
@@ -598,6 +616,9 @@ SELECT * FROM demo LIMIT 10;""")
           <textarea name=\"sql\" rows=\"6\" placeholder=\"WRITE SQL HERE\" style=\"width:100%; font-family: ui-monospace, Menlo, Monaco, 'Courier New', monospace;\"></textarea>
           <div style=\"height:8px\"></div>
           <button type=\"submit\">Run SQL</button>
+        </form>
+        <form method=\"post\" action=\"/project/{project.id}/sql/undo_last?branch_id={current.id}\" class=\"inline\" style=\"margin-top:6px\">
+          <button type=\"submit\" class=\"secondary\">Undo Last SQL</button>
         </form>
         {sql_result_block or ''}
       </div>
@@ -1238,6 +1259,66 @@ def make_table_branch_aware(project_id: int, request: Request, table: str = Form
 
 BRANCH_AWARE_SQL_DEFAULT = os.getenv("CEDARPY_SQL_BRANCH_MODE", "1") == "1"
 
+# -------------------- Undo last SQL --------------------
+
+@app.post("/project/{project_id}/sql/undo_last")
+def undo_last_sql(project_id: int, request: Request, db: Session = Depends(get_db)):
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        return RedirectResponse("/", status_code=303)
+    branch_id = request.query_params.get("branch_id")
+    try:
+        branch_id = int(branch_id) if branch_id is not None else None
+    except Exception:
+        branch_id = None
+    current_b = current_branch(db, project.id, branch_id)
+
+    log = db.query(SQLUndoLog).filter(SQLUndoLog.project_id==project.id, SQLUndoLog.branch_id==current_b.id).order_by(SQLUndoLog.created_at.desc(), SQLUndoLog.id.desc()).first()
+    if not log:
+        return RedirectResponse(f"/project/{project.id}?branch_id={current_b.id}&msg=Nothing+to+undo", status_code=303)
+
+    table = _safe_identifier(log.table_name)
+    pk_cols = log.pk_columns or []
+    try:
+        with engine.begin() as conn:
+            if log.op == "insert":
+                # Delete rows we inserted
+                for row in (log.rows_after or []):
+                    conds = [f"{pc} = {_sql_quote(row.get(pc))}" for pc in pk_cols if pc in row]
+                    conds.append(f"project_id = {project.id}")
+                    conds.append(f"branch_id = {current_b.id}")
+                    if conds:
+                        conn.exec_driver_sql(f"DELETE FROM {table} WHERE " + " AND ".join(conds))
+            elif log.op == "delete":
+                # Re-insert rows
+                for row in (log.rows_before or []):
+                    cols = list(row.keys())
+                    vals = ", ".join(_sql_quote(row[c]) for c in cols)
+                    conn.exec_driver_sql(f"INSERT INTO {table} (" + ", ".join(cols) + ") VALUES (" + vals + ")")
+            elif log.op == "update":
+                # Restore before values
+                for row in (log.rows_before or []):
+                    sets = []
+                    conds = []
+                    for k, v in row.items():
+                        if k in pk_cols or k in ("project_id","branch_id"):
+                            conds.append(f"{k} = {_sql_quote(v)}")
+                        else:
+                            sets.append(f"{k} = {_sql_quote(v)}")
+                    if sets and conds:
+                        conn.exec_driver_sql(f"UPDATE {table} SET " + ", ".join(sets) + " WHERE " + " AND ".join(conds))
+    except Exception as e:
+        return RedirectResponse(f"/project/{project.id}?branch_id={current_b.id}&msg=Undo+failed:+{html.escape(str(e))}", status_code=303)
+
+    # Remove the log entry we just undid
+    try:
+        db.delete(log)
+        db.commit()
+    except Exception:
+        db.rollback()
+
+    return RedirectResponse(f"/project/{project.id}?branch_id={current_b.id}&msg=Undone", status_code=303)
+
 # -------------------- SQL Helpers for Branch-Aware Mode --------------------
 
 def _dialect() -> str:
@@ -1414,7 +1495,7 @@ def execute_sql(project_id: int, request: Request, sql: str = Form(...), db: Ses
     with engine.begin() as conn:
         main = db.query(Branch).filter(Branch.project_id == project.id, Branch.name == "Main").first()
         transformed_sql, transformed = _preprocess_sql_branch_aware(conn, sql, project.id, current.id, main.id)
-    result = _execute_sql(transformed_sql, max_rows=max_rows)
+    result = _execute_sql_with_undo(db, transformed_sql, project.id, current.id, max_rows=max_rows)
     sql_block = _render_sql_result_html(result)
 
     return layout(project.title, project_page_html(project, branches, current, files, threads, datasets, msg="Branch-aware SQL mode is active", sql_result_block=sql_block))
@@ -1457,6 +1538,24 @@ def _render_sql_result_html(result: dict) -> str:
     """
 
 
+def _sql_quote(val: Any) -> str:
+    if val is None:
+        return "NULL"
+    if isinstance(val, (int, float)):
+        return str(val)
+    s = str(val).replace("'", "''")
+    return "'" + s + "'"
+
+
+def _extract_where_clause(sql_text: str) -> Optional[str]:
+    s = sql_text
+    low = s.lower()
+    i = low.find(" where ")
+    if i == -1:
+        return None
+    return s[i+7:].strip()
+
+
 def _execute_sql(sql_text: str, max_rows: int = 200) -> dict:
     sql_text = (sql_text or "").strip()
     if not sql_text:
@@ -1473,7 +1572,7 @@ def _execute_sql(sql_text: str, max_rows: int = 200) -> dict:
                 count = 0
                 if res.returns_rows:
                     for r in res:
-                        rows.append([r[c] if isinstance(r, dict) else getattr(r, c, r[idx]) if False else r[idx] for idx, c in enumerate(cols)])
+                        rows.append([r[c] if isinstance(r, dict) else r[idx] for idx, c in enumerate(cols)])
                         count += 1
                         if count >= max_rows:
                             break
@@ -1493,6 +1592,126 @@ def _execute_sql(sql_text: str, max_rows: int = 200) -> dict:
     except Exception as e:
         result.update({"success": False, "error": str(e)})
     return result
+
+
+def _execute_sql_with_undo(db: Session, sql_text: str, project_id: int, branch_id: int, max_rows: int = 200) -> dict:
+    s = sql_text.strip()
+    if not s:
+        return {"success": False, "error": "Empty SQL"}
+    first = s.split()[0].lower() if s.split() else ""
+    if first in ("select", "pragma", "show", "create"):
+        return _execute_sql(s, max_rows=max_rows)
+
+    # Simple parse
+    m_ins = re.match(r"insert\s+into\s+([a-zA-Z0-9_]+)\s*\(([^\)]+)\)\s*values\s*\((.+)\)\s*;?$", s, flags=re.IGNORECASE | re.DOTALL)
+    m_upd = re.match(r"update\s+([a-zA-Z0-9_]+)\s+set\s+(.+?)\s*(where\s+(.+))?;?$", s, flags=re.IGNORECASE | re.DOTALL)
+    m_del = re.match(r"delete\s+from\s+([a-zA-Z0-9_]+)\s*(where\s+(.+))?;?$", s, flags=re.IGNORECASE | re.DOTALL)
+
+    op = None
+    table = None
+    where_sql = None
+    cols_list = []
+    vals_list = []
+
+    if m_ins:
+        op = "insert"; table = _safe_identifier(m_ins.group(1))
+        cols_list = [c.strip() for c in m_ins.group(2).split(",")]
+        vals_list = [v.strip() for v in m_ins.group(3).split(",")]
+    elif m_upd:
+        op = "update"; table = _safe_identifier(m_upd.group(1))
+        where_sql = m_upd.group(4)
+    elif m_del:
+        op = "delete"; table = _safe_identifier(m_del.group(1))
+        where_sql = m_del.group(3)
+
+    if not op or not table:
+        # Fallback
+        return _execute_sql(s, max_rows=max_rows)
+
+    # Only capture for manageable row counts
+    try:
+        undo_cap = int(os.getenv("CEDARPY_SQL_UNDO_MAX_ROWS", "1000"))
+    except Exception:
+        undo_cap = 1000
+
+    with engine.begin() as conn:
+        # Determine PK columns if any
+        pk_cols = _get_pk_columns(conn, table)
+        rows_before = []
+        rows_after = []
+
+        if op in ("update", "delete"):
+            w = _extract_where_clause(s)
+            if w:
+                sel_sql = f"SELECT * FROM {table} WHERE {w}"
+                res = conn.exec_driver_sql(sel_sql)
+                cols = list(res.keys()) if res.returns_rows else []
+                count = 0
+                for r in res:
+                    row = {cols[i]: r[i] for i in range(len(cols))}
+                    rows_before.append(row)
+                    count += 1
+                    if count >= undo_cap: break
+
+        # Execute original statement
+        conn.exec_driver_sql(s)
+
+        if op == "insert":
+            # Try to identify inserted row
+            if pk_cols:
+                # Construct a WHERE from provided PK values if present
+                provided = {c.lower(): vals_list[i] for i, c in enumerate(cols_list)} if cols_list and vals_list else {}
+                have_pk_vals = all(pc.lower() in provided for pc in pk_cols)
+                if have_pk_vals:
+                    conds = []
+                    for pc in pk_cols:
+                        raw = provided[pc.lower()]
+                        conds.append(f"{pc} = {raw}")
+                    conds.append(f"project_id = {project_id}")
+                    conds.append(f"branch_id = {branch_id}")
+                    sel = f"SELECT * FROM {table} WHERE " + " AND ".join(conds)
+                    res2 = conn.exec_driver_sql(sel)
+                    cols2 = list(res2.keys()) if res2.returns_rows else []
+                    for r in res2:
+                        rows_after.append({cols2[i]: r[i] for i in range(len(cols2))})
+                else:
+                    # SQLite last_insert_rowid for single integer PK
+                    if _dialect() == "sqlite" and len(pk_cols) == 1:
+                        pk = pk_cols[0]
+                        rid = conn.exec_driver_sql("SELECT last_insert_rowid()").scalar()
+                        res2 = conn.exec_driver_sql(f"SELECT * FROM {table} WHERE {pk} = {rid}")
+                        cols2 = list(res2.keys()) if res2.returns_rows else []
+                        for r in res2:
+                            rows_after.append({cols2[i]: r[i] for i in range(len(cols2))})
+        elif op == "update":
+            if where_sql:
+                res3 = conn.exec_driver_sql(f"SELECT * FROM {table} WHERE {where_sql}")
+                cols3 = list(res3.keys()) if res3.returns_rows else []
+                count = 0
+                for r in res3:
+                    rows_after.append({cols3[i]: r[i] for i in range(len(cols3))})
+                    count += 1
+                    if count >= undo_cap: break
+
+        # Store undo log
+        try:
+            log = SQLUndoLog(
+                project_id=project_id,
+                branch_id=branch_id,
+                table_name=table,
+                op=op,
+                sql_text=s,
+                pk_columns=pk_cols,
+                rows_before=rows_before,
+                rows_after=rows_after,
+            )
+            db.add(log)
+            db.commit()
+        except Exception:
+            db.rollback()
+
+    # Return a generic result (we can run a SELECT for UPDATE/DELETE to show rowcount)
+    return _execute_sql(f"SELECT changes() as affected" if _dialect()=="sqlite" else s, max_rows=max_rows)
 
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request, db: Session = Depends(get_db)):
