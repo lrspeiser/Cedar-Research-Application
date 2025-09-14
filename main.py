@@ -43,7 +43,8 @@ UPLOAD_DIR = os.getenv("CEDARPY_UPLOAD_DIR", os.path.abspath("./user_uploads"))
 # - CEDARPY_SHELL_API_ENABLED: "1" to enable the UI and API, default "0" (disabled)
 # - CEDARPY_SHELL_API_TOKEN: optional token. If set, requests must include X-API-Token header matching this value.
 #   If unset, API is limited to local requests (127.0.0.1/::1) only.
-SHELL_API_ENABLED = os.getenv("CEDARPY_SHELL_API_ENABLED", "0") == "1"
+# Default: ENABLED (set to "0" to disable). We default-on to match DMG behavior and ease local development.
+SHELL_API_ENABLED = str(os.getenv("CEDARPY_SHELL_API_ENABLED", "1")).strip().lower() not in {"", "0", "false", "no", "off"}
 SHELL_API_TOKEN = os.getenv("CEDARPY_SHELL_API_TOKEN")
 
 # Logs directory for shell runs (outside DMG and writable)
@@ -817,7 +818,7 @@ def shell_ui(request: Request):
     if not SHELL_API_ENABLED:
         body = """
         <h1>Shell</h1>
-        <p class='muted'>The Shell feature is currently disabled.</p>
+        <p class='muted'>The Shell feature is disabled by configuration.</p>
         <p>To enable, set <code>CEDARPY_SHELL_API_ENABLED=1</code>. Optionally set <code>CEDARPY_SHELL_API_TOKEN</code> for API access. See README for details.</p>
         """
         return layout("Shell – disabled", body)

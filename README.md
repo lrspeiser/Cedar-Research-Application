@@ -68,7 +68,7 @@ Override with `CEDARPY_UPLOAD_DIR` if desired.
 Danger zone: This feature executes arbitrary shell scripts with the same privileges as the user running the server. It is disabled by default and should only be enabled on your own machine in trusted environments.
 
 Enable and secure:
-- CEDARPY_SHELL_API_ENABLED=1: Enable the UI and API. Default is disabled (0).
+- CEDARPY_SHELL_API_ENABLED: Defaults to 1 (enabled). Set to 0/false to disable.
 - CEDARPY_SHELL_API_TOKEN=<token>: Optional. If set, API requests must include header X-API-Token: <token>.
   If not set, only local requests (127.0.0.1/::1) are allowed.
 
