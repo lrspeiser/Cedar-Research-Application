@@ -15,9 +15,10 @@ import time
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Tuple
 
-from fastapi import FastAPI, Request, UploadFile, File, Form, Depends, Header, HTTPException
+from fastapi import FastAPI, Request, UploadFile, File, Form, Depends, Header, HTTPException, Body
 from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from sqlalchemy import (
     create_engine, Column, Integer, String, Text, ForeignKey, DateTime, Boolean,
@@ -820,6 +821,10 @@ def require_shell_enabled_and_auth(request: Request, x_api_token: Optional[str] 
 # Shell UI and API routes
 # ----------------------------------------------------------------------------------
 
+class ShellRunRequest(BaseModel):
+    script: str
+    shell_path: Optional[str] = None
+
 @app.get("/shell", response_class=HTMLResponse)
 def shell_ui(request: Request):
     if not SHELL_API_ENABLED:
@@ -849,8 +854,8 @@ def shell_ui(request: Request):
           </div>
         </div>
         <div style='height:10px'></div>
-        <button id='runBtn'>Run</button>
-        <button id='stopBtn' class='secondary' disabled>Stop</button>
+        <button id='runBtn' type='button'>Run</button>
+        <button id='stopBtn' type='button' class='secondary' disabled>Stop</button>
       </div>
 
       <div style='height:16px'></div>
@@ -937,10 +942,10 @@ def shell_ui(request: Request):
 
 
 @app.post("/api/shell/run")
-def api_shell_run(request: Request, payload: Dict[str, Any], x_api_token: Optional[str] = Header(default=None)):
+def api_shell_run(request: Request, body: ShellRunRequest, x_api_token: Optional[str] = Header(default=None)):
     require_shell_enabled_and_auth(request, x_api_token)
-    script = (payload or {}).get("script")
-    shell_path = (payload or {}).get("shell_path")
+    script = body.script
+    shell_path = body.shell_path
     if not script or not isinstance(script, str):
         raise HTTPException(status_code=400, detail="script is required")
     job = start_shell_job(script=script, shell_path=shell_path)
