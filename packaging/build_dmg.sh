@@ -51,6 +51,8 @@ set -euo pipefail
 cd "$(dirname "$0")"
 # Use a writable uploads directory outside the read-only DMG by default
 export CEDARPY_UPLOAD_DIR="${CEDARPY_UPLOAD_DIR:-$HOME/CedarPyUploads}"
+# Default-on Shell API in DMG build; override by unsetting or setting to 0 before launch
+export CEDARPY_SHELL_API_ENABLED="${CEDARPY_SHELL_API_ENABLED:-1}"
 mkdir -p "$CEDARPY_UPLOAD_DIR"
 chmod +x ./cedarpy
 ./cedarpy
@@ -64,8 +66,8 @@ cat > "$OSA_SRC" <<'EOF'
 on run
   set appPath to (path to me as alias)
   set dirPath to do shell script "dirname " & quoted form of POSIX path of appPath
-  tell application "Terminal"
-    do script "export CEDARPY_UPLOAD_DIR=\"$HOME/CedarPyUploads\"; mkdir -p \"$HOME/CedarPyUploads\"; cd " & quoted form of dirPath & " && chmod +x ./cedarpy && ./cedarpy"
+tell application "Terminal"
+    do script "export CEDARPY_SHELL_API_ENABLED=\"1\"; export CEDARPY_UPLOAD_DIR=\"$HOME/CedarPyUploads\"; mkdir -p \"$HOME/CedarPyUploads\"; cd " & quoted form of dirPath & " && chmod +x ./cedarpy && ./cedarpy"
     activate
   end tell
 end run
