@@ -13,7 +13,7 @@ import queue
 import signal
 import time
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 
 from fastapi import FastAPI, Request, UploadFile, File, Form, Depends, Header, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
@@ -24,6 +24,7 @@ from sqlalchemy import (
     UniqueConstraint, JSON, Index, func, text
 )
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship, Session
+import re
 
 # ----------------------------------------------------------------------------------
 # Configuration
@@ -666,7 +667,18 @@ SELECT * FROM demo LIMIT 10;""")
         </div>
       </div>
 
-      <div class=\"row\">{sql_card}</div>
+      <div class=\"row\">{sql_card}
+        <div class=\"card\" style=\"flex:1\">
+          <h3>Branch Ops</h3>
+          <div class=\"small muted\">Branch-aware SQL is active. Use these actions to manage data.</div>
+          <form method=\"post\" action=\"/project/{project.id}/merge_to_main?branch_id={current.id}\" class=\"inline\" style=\"margin-bottom:6px\">
+            <button type=\"submit\">Merge Branch → Main</button>
+          </form>
+          <form method=\"post\" action=\"/project/{project.id}/files/delete_all?branch_id={current.id}\" class=\"inline\">
+            <button type=\"submit\" class=\"secondary\" onclick=\"return confirm('Delete all files in this branch?');\">Delete All Files (this branch)</button>
+          </form>
+        </div>
+      </div>
     """
 
 # ----------------------------------------------------------------------------------
@@ -998,6 +1010,291 @@ def api_shell_status(job_id: str, request: Request, x_api_token: Optional[str] =
 # Routes
 # ----------------------------------------------------------------------------------
 
+# -------------------- Merge to Main (SQLite-first implementation) --------------------
+
+@app.post("/project/{project_id}/merge_to_main")
+def merge_to_main(project_id: int, request: Request, db: Session = Depends(get_db)):
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        return RedirectResponse("/", status_code=303)
+    branch_id = request.query_params.get("branch_id")
+    try:
+        branch_id = int(branch_id) if branch_id is not None else None
+    except Exception:
+        branch_id = None
+    current_b = current_branch(db, project.id, branch_id)
+    main_b = ensure_main_branch(db, project.id)
+    if current_b.id == main_b.id:
+        return RedirectResponse(f"/project/{project.id}?branch_id={main_b.id}&msg=Already+in+Main", status_code=303)
+
+    merged_counts = {"files": 0, "threads": 0, "datasets": 0, "tables": 0}
+
+    # Merge Files: copy physical files and create Main records
+    src_dir = os.path.join(UPLOAD_DIR, f"project_{project.id}", f"branch_{current_b.name}")
+    dst_dir = os.path.join(UPLOAD_DIR, f"project_{project.id}", f"branch_{main_b.name}")
+    os.makedirs(dst_dir, exist_ok=True)
+    files = db.query(FileEntry).filter(FileEntry.project_id == project.id, FileEntry.branch_id == current_b.id).all()
+    for f in files:
+        try:
+            src_path = f.storage_path
+            base_name = os.path.basename(f.filename)
+            target_name = base_name
+            target_path = os.path.join(dst_dir, target_name)
+            # Avoid collision
+            i = 1
+            while os.path.exists(target_path):
+                name, ext = os.path.splitext(base_name)
+                target_name = f"{name}__m{i}{ext}"
+                target_path = os.path.join(dst_dir, target_name)
+                i += 1
+            shutil.copy2(src_path, target_path)
+            rec = FileEntry(
+                project_id=project.id,
+                branch_id=main_b.id,
+                filename=target_name,
+                display_name=f.display_name,
+                file_type=f.file_type,
+                structure=f.structure,
+                mime_type=f.mime_type,
+                size_bytes=f.size_bytes,
+                storage_path=os.path.abspath(target_path),
+                metadata_json=f.metadata_json,
+            )
+            db.add(rec)
+            db.commit(); db.refresh(rec)
+            add_version(db, "file", rec.id, {"merged_from_branch_id": current_b.id, "file_id": rec.id})
+            merged_counts["files"] += 1
+        except Exception:
+            db.rollback()
+
+    # Merge Threads
+    threads = db.query(Thread).filter(Thread.project_id == project.id, Thread.branch_id == current_b.id).all()
+    for t in threads:
+        nt = Thread(project_id=project.id, branch_id=main_b.id, title=t.title)
+        db.add(nt)
+        db.commit(); db.refresh(nt)
+        add_version(db, "thread", nt.id, {"merged_from_branch_id": current_b.id, "thread_id": nt.id})
+        merged_counts["threads"] += 1
+
+    # Merge Datasets
+    datasets = db.query(Dataset).filter(Dataset.project_id == project.id, Dataset.branch_id == current_b.id).all()
+    for d in datasets:
+        nd = Dataset(project_id=project.id, branch_id=main_b.id, name=d.name, description=d.description)
+        db.add(nd)
+        db.commit(); db.refresh(nd)
+        add_version(db, "dataset", nd.id, {"merged_from_branch_id": current_b.id, "dataset_id": nd.id})
+        merged_counts["datasets"] += 1
+
+    # Merge user tables (SQLite only)
+    try:
+        with engine.begin() as conn:
+            if _dialect() == "sqlite":
+                # Find tables excluding our internal ones
+                tbls = [r[0] for r in conn.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+                skip = {"projects","branches","threads","files","datasets","settings","versions","sql_undo_log"}
+                for t in tbls:
+                    if t in skip:
+                        continue
+                    if not _table_has_branch_columns(conn, t):
+                        continue
+                    pk_cols = _get_pk_columns(conn, t)
+                    if not pk_cols:
+                        continue
+                    # Build column list
+                    cols_rows = conn.exec_driver_sql(f"PRAGMA table_info({t})").fetchall()
+                    cols = [r[1] for r in cols_rows]
+                    nonkey_cols = [c for c in cols if c not in set(["project_id","branch_id"]) | set(pk_cols)]
+                    # Insert missing
+                    on_clause = " AND ".join([f"m.{c} = b.{c}" for c in pk_cols]) + f" AND m.project_id = b.project_id"
+                    insert_cols = ", ".join(cols)
+                    select_cols = ", ".join([f"b.{c}" if c not in ("branch_id",) else str(main_b.id) + " as branch_id" for c in cols])
+                    conn.exec_driver_sql(f"""
+                        INSERT INTO {t} ({insert_cols})
+                        SELECT {select_cols}
+                        FROM {t} b
+                        LEFT JOIN {t} m ON {on_clause} AND m.branch_id = {main_b.id}
+                        WHERE b.project_id = {project.id} AND b.branch_id = {current_b.id} AND m.rowid IS NULL
+                    """)
+                    # Update existing
+                    if nonkey_cols:
+                        set_clause = ", ".join([f"m.{c} = b.{c}" for c in nonkey_cols])
+                        conn.exec_driver_sql(f"""
+                            UPDATE {t} AS m
+                            SET {set_clause}
+                            FROM {t} AS b
+                            WHERE m.project_id = {project.id}
+                              AND m.branch_id = {main_b.id}
+                              AND b.project_id = {project.id}
+                              AND b.branch_id = {current_b.id}
+                              AND """ + " AND ".join([f"b.{c} = m.{c}" for c in pk_cols]) + """
+                        """)
+                    merged_counts["tables"] += 1
+    except Exception:
+        pass
+
+    msg = f"Merged files={merged_counts['files']}, threads={merged_counts['threads']}, datasets={merged_counts['datasets']}, tables={merged_counts['tables']}"
+    return RedirectResponse(f"/project/{project.id}?branch_id={main_b.id}&msg=" + html.escape(msg), status_code=303)
+
+# -------------------- Delete all files in branch --------------------
+
+@app.post("/project/{project_id}/files/delete_all")
+def delete_all_files(project_id: int, request: Request, db: Session = Depends(get_db)):
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        return RedirectResponse("/", status_code=303)
+    branch_id = request.query_params.get("branch_id")
+    try:
+        branch_id = int(branch_id) if branch_id is not None else None
+    except Exception:
+        branch_id = None
+    current_b = current_branch(db, project.id, branch_id)
+    # Delete records and physical files
+    files = db.query(FileEntry).filter(FileEntry.project_id == project.id, FileEntry.branch_id == current_b.id).all()
+    for f in files:
+        try:
+            if f.storage_path and os.path.exists(f.storage_path):
+                os.remove(f.storage_path)
+        except Exception:
+            pass
+        db.delete(f)
+    db.commit()
+    return RedirectResponse(f"/project/{project.id}?branch_id={current_b.id}&msg=Files+deleted", status_code=303)
+
+BRANCH_AWARE_SQL_DEFAULT = os.getenv("CEDARPY_SQL_BRANCH_MODE", "1") == "1"
+
+# -------------------- SQL Helpers for Branch-Aware Mode --------------------
+
+def _dialect() -> str:
+    return engine.dialect.name
+
+
+def _table_has_branch_columns(conn, table: str) -> bool:
+    try:
+        if _dialect() == "sqlite":
+            rows = conn.exec_driver_sql(f"PRAGMA table_info({table})").fetchall()
+            cols = {r[1] for r in rows}
+            return "project_id" in cols and "branch_id" in cols
+        elif _dialect() == "mysql":
+            rows = conn.exec_driver_sql(
+                "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s",
+                (table,),
+            ).fetchall()
+            cols = {r[0] for r in rows}
+            return "project_id" in cols and "branch_id" in cols
+    except Exception:
+        return False
+    return False
+
+
+def _get_pk_columns(conn, table: str) -> List[str]:
+    try:
+        if _dialect() == "sqlite":
+            rows = conn.exec_driver_sql(f"PRAGMA table_info({table})").fetchall()
+            return [r[1] for r in rows if r[5]]  # r[5] is pk flag
+        elif _dialect() == "mysql":
+            rows = conn.exec_driver_sql(
+                "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND COLUMN_KEY='PRI'",
+                (table,),
+            ).fetchall()
+            return [r[0] for r in rows]
+    except Exception:
+        return []
+    return []
+
+
+def _safe_identifier(name: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9_]+", "", name)
+
+
+def _preprocess_sql_branch_aware(conn, sql_text: str, project_id: int, branch_id: int, main_id: int) -> Tuple[str, bool]:
+    """
+    Returns (possibly transformed_sql, transformed_flag).
+    Best-effort handling for simple single-table queries.
+    """
+    s = sql_text.strip()
+    # Normalize whitespace
+    s_norm = re.sub(r"\s+", " ", s)
+    lower = s_norm.lower()
+
+    # Simple SELECT ... FROM table [WHERE ...]
+    m = re.match(r"select\s+(.+?)\s+from\s+([a-zA-Z0-9_]+)(\s+where\s+(.+))?", lower, flags=re.IGNORECASE)
+    if m:
+        table = _safe_identifier(m.group(2))
+        if _table_has_branch_columns(conn, table):
+            # Build roll-up select using window function
+            select_cols = s[s.lower().find("select") + 6 : s.lower().find(" from ")]  # keep original projection
+            where_clause = m.group(4)
+            where_sql = f" AND {where_clause}" if where_clause else ""
+            if _dialect() in ("sqlite", "mysql"):
+                sql = f"""
+                WITH __src AS (
+                  SELECT *,
+                         CASE WHEN branch_id = {branch_id} THEN 2 WHEN branch_id = {main_id} THEN 1 ELSE 0 END AS __rank
+                  FROM {table}
+                  WHERE project_id = {project_id} AND branch_id IN ({main_id}, {branch_id}){where_sql}
+                ), __pick AS (
+                  SELECT *, ROW_NUMBER() OVER (PARTITION BY id ORDER BY __rank DESC) AS rn FROM __src
+                )
+                SELECT {select_cols} FROM __pick WHERE rn = 1
+                """
+                return (sql.strip(), True)
+    # INSERT INTO table [(cols...)] VALUES (...)
+    m = re.match(r"insert\s+into\s+([a-zA-Z0-9_]+)\s*\(([^\)]+)\)\s*values\s*\((.+)\)", lower, flags=re.IGNORECASE)
+    if m:
+        table = _safe_identifier(m.group(1))
+        if _table_has_branch_columns(conn, table):
+            cols_part = s[s.lower().find("(")+1 : s.lower().find(")", s.lower().find("("))]
+            vals_start = s.lower().find("values") + len("values")
+            vals_part = s[vals_start:].strip()
+            # Expect single VALUES (...) form
+            mv = re.match(r"\((.*)\)", vals_part, flags=re.IGNORECASE | re.DOTALL)
+            if mv:
+                cols_list = [c.strip() for c in cols_part.split(",")]
+                vals_list = [v.strip() for v in mv.group(1).split(",")]
+                if "project_id" not in [c.lower() for c in cols_list]:
+                    cols_list.append("project_id")
+                    vals_list.append(str(project_id))
+                if "branch_id" not in [c.lower() for c in cols_list]:
+                    cols_list.append("branch_id")
+                    vals_list.append(str(branch_id))
+                sql = f"INSERT INTO {table} (" + ", ".join(cols_list) + ") VALUES (" + ", ".join(vals_list) + ")"
+                return (sql, True)
+    # UPDATE table SET ... [WHERE ...]
+    m = re.match(r"update\s+([a-zA-Z0-9_]+)\s+set\s+", lower, flags=re.IGNORECASE)
+    if m:
+        table = _safe_identifier(m.group(1))
+        if _table_has_branch_columns(conn, table):
+            if " where " in lower:
+                sql = s + f" AND project_id = {project_id} AND branch_id = {branch_id}"
+            else:
+                sql = s + f" WHERE project_id = {project_id} AND branch_id = {branch_id}"
+            return (sql, True)
+    # DELETE FROM table [WHERE ...]
+    m = re.match(r"delete\s+from\s+([a-zA-Z0-9_]+)", lower, flags=re.IGNORECASE)
+    if m:
+        table = _safe_identifier(m.group(1))
+        if _table_has_branch_columns(conn, table):
+            if " where " in lower:
+                sql = s + f" AND project_id = {project_id} AND branch_id = {branch_id}"
+            else:
+                sql = s + f" WHERE project_id = {project_id} AND branch_id = {branch_id}"
+            return (sql, True)
+    # CREATE TABLE injection: add project_id/branch_id if missing and simple form
+    m = re.match(r"create\s+table\s+([a-zA-Z0-9_]+)\s*\((.*)\)\s*;?$", s, flags=re.IGNORECASE | re.DOTALL)
+    if m:
+        table = _safe_identifier(m.group(1))
+        cols_def = m.group(2)
+        lower_cols = cols_def.lower()
+        if "project_id" not in lower_cols and "branch_id" not in lower_cols:
+            new_cols = cols_def.strip()
+            if new_cols and not new_cols.endswith(","):
+                new_cols += ", "
+            new_cols += "project_id INTEGER NOT NULL, branch_id INTEGER NOT NULL"
+            sql = f"CREATE TABLE {table} ({new_cols})"
+            return (sql, True)
+    return (s, False)
+
+
 @app.post("/project/{project_id}/sql", response_class=HTMLResponse)
 def execute_sql(project_id: int, request: Request, sql: str = Form(...), db: Session = Depends(get_db)):
     # resolve current project and branch
@@ -1033,15 +1330,18 @@ def execute_sql(project_id: int, request: Request, sql: str = Form(...), db: Ses
         .order_by(Dataset.created_at.desc()) \
         .all()
 
-    # Execute SQL
+    # Execute SQL with branch-aware preprocessing by default
     try:
         max_rows = int(os.getenv("CEDARPY_SQL_MAX_ROWS", "200"))
     except Exception:
         max_rows = 200
-    result = _execute_sql(sql, max_rows=max_rows)
+    with engine.begin() as conn:
+        main = db.query(Branch).filter(Branch.project_id == project.id, Branch.name == "Main").first()
+        transformed_sql, transformed = _preprocess_sql_branch_aware(conn, sql, project.id, current.id, main.id)
+    result = _execute_sql(transformed_sql, max_rows=max_rows)
     sql_block = _render_sql_result_html(result)
 
-    return layout(project.title, project_page_html(project, branches, current, files, threads, datasets, msg=None, sql_result_block=sql_block))
+    return layout(project.title, project_page_html(project, branches, current, files, threads, datasets, msg="Branch-aware SQL mode is active", sql_result_block=sql_block))
 
 def _render_sql_result_html(result: dict) -> str:
     if not result:
