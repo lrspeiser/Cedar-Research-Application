@@ -406,7 +406,7 @@ def current_branch(db: Session, project_id: int, branch_id: Optional[int]) -> Br
 # FastAPI app
 # ----------------------------------------------------------------------------------
 
-app = FastAPI(title="CedarPython (Stage 1)")
+app = FastAPI(title="Cedar")
 
 # Serve uploaded files for convenience
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
@@ -449,8 +449,7 @@ def layout(title: str, body: str) -> HTMLResponse:
 <body>
   <header>
     <div class="topbar">
-      <div><strong>CedarPython</strong> <span class="muted">– Stage 1</span></div>
-      <div class="muted small">FastAPI + MySQL prototype</div>
+      <div><strong>Cedar</strong></div>
       <div style=\"margin-left:auto\"><a href=\"/\">Projects</a> | <a href=\"/shell\">Shell</a></div>
     </div>
   </header>
@@ -1421,7 +1420,7 @@ def _execute_sql(sql_text: str, max_rows: int = 200) -> dict:
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request, db: Session = Depends(get_db)):
     projects = db.query(Project).order_by(Project.created_at.desc()).all()
-    return layout("Projects – CedarPython", projects_list_html(projects))
+    return layout("Cedar", projects_list_html(projects))
 
 
 @app.post("/projects/create")
