@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 
 from sqlalchemy import (
     create_engine, Column, Integer, String, Text, ForeignKey, DateTime, Boolean,
-    UniqueConstraint, JSON, Index, func
+    UniqueConstraint, JSON, Index, func, text
 )
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship, Session
 
@@ -494,7 +494,8 @@ def project_page_html(
     files: List[FileEntry],
     threads: List[Thread],
     datasets: List[Dataset],
-    msg: Optional[str] = None
+    msg: Optional[str] = None,
+    sql_result_block: Optional[str] = None,
 ) -> str:
     # branch tabs
     tabs = []
@@ -529,6 +530,7 @@ def project_page_html(
               <td class="small muted">{f.created_at.strftime("%Y-%m-%d %H:%M:%S")} UTC</td>
             </tr>
         """)
+    files_tbody = ''.join(file_rows) if file_rows else '<tr><td colspan="6" class="muted">No files yet.</td></tr>'
 
     # threads table
     thread_rows = []
@@ -540,6 +542,7 @@ def project_page_html(
              <td class="small muted">{t.created_at.strftime("%Y-%m-%d %H:%M:%S")} UTC</td>
            </tr>
         """)
+    thread_tbody = ''.join(thread_rows) if thread_rows else '<tr><td colspan="3" class="muted">No threads yet.</td></tr>'
 
     # datasets table (placeholder list)
     dataset_rows = []
@@ -551,79 +554,226 @@ def project_page_html(
              <td class="small muted">{d.created_at.strftime("%Y-%m-%d %H:%M:%S")} UTC</td>
            </tr>
         """)
+    dataset_tbody = ''.join(dataset_rows) if dataset_rows else '<tr><td colspan="3" class="muted">No databases yet.</td></tr>'
 
     # message
     flash = f"<div class='muted' style='margin-bottom:8px'>{escape(msg)}</div>" if msg else ""
+    flash_html = flash if msg else ""
+
+    # SQL console card with basic instructions
+    examples = escape("""Examples:
+-- Create a table
+CREATE TABLE IF NOT EXISTS demo (id INTEGER PRIMARY KEY, name VARCHAR(100));
+-- Insert a row
+INSERT INTO demo (name) VALUES ('Alice');
+-- Read rows
+SELECT * FROM demo LIMIT 10;""")
+
+    sql_card = f"""
+      <div class=\"card\" style=\"flex:1\">
+        <h3>SQL Console</h3>
+        <div class=\"small muted\">Run SQL against the current database (SQLite by default, or your configured MySQL). Max rows is controlled by CEDARPY_SQL_MAX_ROWS.</div>
+        <pre class=\"small\" style=\"white-space:pre-wrap; background:#f9fafb; padding:8px; border-radius:6px;\">{examples}</pre>
+        <form method=\"post\" action=\"/project/{project.id}/sql?branch_id={current.id}\" class=\"inline\"> 
+          <textarea name=\"sql\" rows=\"6\" placeholder=\"WRITE SQL HERE\" style=\"width:100%; font-family: ui-monospace, Menlo, Monaco, 'Courier New', monospace;\"></textarea>
+          <div style=\"height:8px\"></div>
+          <button type=\"submit\">Run SQL</button>
+        </form>
+        {sql_result_block or ''}
+      </div>
+    """
 
     return f"""
       <h1>{escape(project.title)}</h1>
-      <div class="muted small">Project ID: {project.id}</div>
-      <div style="height:10px"></div>
+      <div class=\"muted small\">Project ID: {project.id}</div>
+      <div style=\"height:10px\"></div>
       <div>Branches: {tabs_html}</div>
 
-      <div class="row" style="margin-top:16px">
-        <div class="card" style="flex:2">
+      <div class=\"row\" style=\"margin-top:16px\">
+        <div class=\"card\" style=\"flex:2\">
           <h3>Files</h3>
-          {flash if msg else ""}
-          <table class="table">
+          {flash_html}
+          <table class=\"table\">
             <thead><tr><th>Name</th><th>Type</th><th>Structure</th><th>Branch</th><th>Size</th><th>Created</th></tr></thead>
-            <tbody>{''.join(file_rows) if file_rows else '<tr><td colspan="6" class="muted">No files yet.</td></tr>'}</tbody>
+            <tbody>{files_tbody}</tbody>
           </table>
           <h4>Upload a file to this branch</h4>
-          <form method="post" action="/project/{project.id}/files/upload?branch_id={current.id}" enctype="multipart/form-data">
-            <input type="file" name="file" required />
-            <div style="height:8px"></div>
+          <form method=\"post\" action=\"/project/{project.id}/files/upload?branch_id={current.id}\" enctype=\"multipart/form-data\">
+            <input type=\"file\" name=\"file\" required />
+            <div style=\"height:8px\"></div>
             <label>Structure</label>
-            <select name="structure" required>
-              <option value="notes">notes</option>
-              <option value="writeup">writeup</option>
-              <option value="images">images</option>
-              <option value="sources">sources</option>
-              <option value="code">code</option>
+            <select name=\"structure\" required>
+              <option value=\"notes\">notes</option>
+              <option value=\"writeup\">writeup</option>
+              <option value=\"images\">images</option>
+              <option value=\"sources\">sources</option>
+              <option value=\"code\">code</option>
             </select>
-            <div style="height:8px"></div>
-            <button type="submit">Upload</button>
+            <div style=\"height:8px\"></div>
+            <button type=\"submit\">Upload</button>
           </form>
         </div>
 
-        <div class="card" style="flex:1">
+        <div class=\"card\" style=\"flex:1\">
           <h3>Create Branch</h3>
-          <form method="post" action="/project/{project.id}/branches/create">
-            <input type="text" name="name" placeholder="experiment-1" required />
-            <div style="height:8px"></div>
-            <button type="submit">Create Branch</button>
+          <form method=\"post\" action=\"/project/{project.id}/branches/create\">
+            <input type=\"text\" name=\"name\" placeholder=\"experiment-1\" required />
+            <div style=\"height:8px\"></div>
+            <button type=\"submit\">Create Branch</button>
           </form>
-          <div style="height:16px"></div>
+          <div style=\"height:16px\"></div>
           <h3>Create Thread</h3>
-          <form method="post" action="/project/{project.id}/threads/create?branch_id={current.id}">
-            <input type="text" name="title" placeholder="New exploration..." required />
-            <div style="height:8px"></div>
-            <button type="submit">Create Thread</button>
+          <form method=\"post\" action=\"/project/{project.id}/threads/create?branch_id={current.id}\">
+            <input type=\"text\" name=\"title\" placeholder=\"New exploration...\" required />
+            <div style=\"height:8px\"></div>
+            <button type=\"submit\">Create Thread</button>
           </form>
         </div>
       </div>
 
-      <div class="row">
-        <div class="card" style="flex:1">
+      <div class=\"row\">
+        <div class=\"card\" style=\"flex:1\">
           <h3>Threads</h3>
-          <table class="table">
+          <table class=\"table\">
             <thead><tr><th>Title</th><th>Branch</th><th>Created</th></tr></thead>
-            <tbody>{''.join(thread_rows) if thread_rows else '<tr><td colspan="3" class="muted">No threads yet.</td></tr>'}</tbody>
+            <tbody>{thread_tbody}</tbody>
           </table>
         </div>
-        <div class="card" style="flex:1">
+        <div class=\"card\" style=\"flex:1\">
           <h3>Databases</h3>
-          <table class="table">
+          <table class=\"table\">
             <thead><tr><th>Name</th><th>Branch</th><th>Created</th></tr></thead>
-            <tbody>{''.join(dataset_rows) if dataset_rows else '<tr><td colspan="3" class="muted">No databases yet.</td></tr>'}</tbody>
+            <tbody>{dataset_tbody}</tbody>
           </table>
         </div>
       </div>
+
+      <div class=\"row\">{sql_card}</div>
     """
 
 # ----------------------------------------------------------------------------------
 # Routes
 # ----------------------------------------------------------------------------------
+
+@app.post("/project/{project_id}/sql", response_class=HTMLResponse)
+def execute_sql(project_id: int, request: Request, sql: str = Form(...), db: Session = Depends(get_db)):
+    # resolve current project and branch
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        return layout("Not found", "<h1>Project not found</h1>")
+
+    branches = db.query(Branch).filter(Branch.project_id == project.id).order_by(Branch.created_at.asc()).all()
+    if not branches:
+        ensure_main_branch(db, project.id)
+        branches = db.query(Branch).filter(Branch.project_id == project.id).order_by(Branch.created_at.asc()).all()
+
+    # Support branch context for links back to Files/Threads views
+    branch_id = request.query_params.get("branch_id")
+    try:
+        branch_id = int(branch_id) if branch_id is not None else None
+    except Exception:
+        branch_id = None
+    current = current_branch(db, project.id, branch_id)
+
+    # Prepare standard lists for the page
+    show_branch_ids = branch_filter_ids(db, project.id, current.id)
+    files = db.query(FileEntry) \
+        .filter(FileEntry.project_id == project.id, FileEntry.branch_id.in_(show_branch_ids)) \
+        .order_by(FileEntry.created_at.desc()) \
+        .all()
+    threads = db.query(Thread) \
+        .filter(Thread.project_id == project.id, Thread.branch_id.in_(show_branch_ids)) \
+        .order_by(Thread.created_at.desc()) \
+        .all()
+    datasets = db.query(Dataset) \
+        .filter(Dataset.project_id == project.id, Dataset.branch_id.in_(show_branch_ids)) \
+        .order_by(Dataset.created_at.desc()) \
+        .all()
+
+    # Execute SQL
+    try:
+        max_rows = int(os.getenv("CEDARPY_SQL_MAX_ROWS", "200"))
+    except Exception:
+        max_rows = 200
+    result = _execute_sql(sql, max_rows=max_rows)
+    sql_block = _render_sql_result_html(result)
+
+    return layout(project.title, project_page_html(project, branches, current, files, threads, datasets, msg=None, sql_result_block=sql_block))
+
+def _render_sql_result_html(result: dict) -> str:
+    if not result:
+        return ""
+    if not result.get("success"):
+        return f"<div class='muted' style='color:#b91c1c'>Error: {escape(str(result.get('error') or 'unknown error'))}</div>"
+    info = []
+    if result.get("statement_type"):
+        info.append(f"<span class='pill'>{escape(result['statement_type'].upper())}</span>")
+    if "rowcount" in result and result["rowcount"] is not None:
+        info.append(f"<span class='small muted'>rowcount: {result['rowcount']}</span>")
+    if result.get("truncated"):
+        info.append("<span class='small muted'>truncated</span>")
+    info_html = " ".join(info)
+
+    # Table for rows
+    rows_html = ""
+    if result.get("columns") and result.get("rows") is not None:
+        headers = ''.join(f"<th>{escape(str(c))}</th>" for c in result["columns"])
+        body_rows = []
+        for row in result["rows"]:
+            tds = []
+            for val in row:
+                s = str(val)
+                if len(s) > 400:
+                    s = s[:400] + "…"
+                tds.append(f"<td class='small'>{escape(s)}</td>")
+            body_rows.append(f"<tr>{''.join(tds)}</tr>")
+        body_rows_html = ''.join(body_rows) or '<tr><td class="muted">(no rows)</td></tr>'
+        rows_html = f"<table class='table'><thead><tr>{headers}</tr></thead><tbody>{body_rows_html}</tbody></table>"
+
+    return f"""
+      <div style='margin-top:10px'>
+        <div>{info_html}</div>
+        {rows_html}
+      </div>
+    """
+
+
+def _execute_sql(sql_text: str, max_rows: int = 200) -> dict:
+    sql_text = (sql_text or "").strip()
+    if not sql_text:
+        return {"success": False, "error": "Empty SQL"}
+    first = sql_text.split()[0].lower() if sql_text.split() else ""
+    stype = first
+    result: dict = {"success": False, "statement_type": stype}
+    try:
+        with engine.begin() as conn:
+            if first == "select" or first == "pragma" or first == "show":
+                res = conn.exec_driver_sql(sql_text)
+                cols = list(res.keys()) if res.returns_rows else []
+                rows = []
+                count = 0
+                if res.returns_rows:
+                    for r in res:
+                        rows.append([r[c] if isinstance(r, dict) else getattr(r, c, r[idx]) if False else r[idx] for idx, c in enumerate(cols)])
+                        count += 1
+                        if count >= max_rows:
+                            break
+                result.update({
+                    "success": True,
+                    "columns": cols,
+                    "rows": rows,
+                    "rowcount": None,
+                    "truncated": res.returns_rows and (count >= max_rows)
+                })
+            else:
+                res = conn.exec_driver_sql(sql_text)
+                result.update({
+                    "success": True,
+                    "rowcount": res.rowcount,
+                })
+    except Exception as e:
+        result.update({"success": False, "error": str(e)})
+    return result
 
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request, db: Session = Depends(get_db)):
