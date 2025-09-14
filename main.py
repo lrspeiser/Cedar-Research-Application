@@ -612,11 +612,21 @@ SELECT * FROM demo LIMIT 10;""")
         <h3>SQL Console</h3>
         <div class=\"small muted\">Run SQL against the current database (SQLite by default, or your configured MySQL). Max rows is controlled by CEDARPY_SQL_MAX_ROWS.</div>
         <pre class=\"small\" style=\"white-space:pre-wrap; background:#f9fafb; padding:8px; border-radius:6px;\">{examples}</pre>
-        <form method=\"post\" action=\"/project/{project.id}/sql?branch_id={current.id}\" class=\"inline\"> 
+        <form method=\"post\" action=\"/project/{project.id}/sql?branch_id={current.id}\" class=\"inline\" onsubmit=\"return cedarSqlConfirm(this)\"> 
           <textarea name=\"sql\" rows=\"6\" placeholder=\"WRITE SQL HERE\" style=\"width:100%; font-family: ui-monospace, Menlo, Monaco, 'Courier New', monospace;\"></textarea>
           <div style=\"height:8px\"></div>
           <button type=\"submit\">Run SQL</button>
         </form>
+        <script>
+        function cedarSqlConfirm(f) {
+          var t = (f.querySelector('[name=sql]')||{}).value || '';
+          var re = /^\s*(drop|delete|truncate|update|alter)\b/i;
+          if (re.test(t)) {
+            return confirm('This SQL looks destructive. Proceed?');
+          }
+          return true;
+        }
+        </script>
         <form method=\"post\" action=\"/project/{project.id}/sql/undo_last?branch_id={current.id}\" class=\"inline\" style=\"margin-top:6px\">
           <button type=\"submit\" class=\"secondary\">Undo Last SQL</button>
         </form>
