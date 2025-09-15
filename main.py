@@ -1191,7 +1191,7 @@ def shell_ui(request: Request):
               if (line === '__CEDARPY_EOF__') {
                 setStatus('finished');
                 disableRun(false);
-                try { ws && ws.close(); } catch {}
+                try { ws && ws.close(); } catch (e) {}
                 ws = null;
               } else {
                 append(line);
@@ -1202,7 +1202,7 @@ def shell_ui(request: Request):
               append('[ws-error]');
               setStatus('error');
               disableRun(false);
-              try { ws && ws.close(); } catch {}
+              try { ws && ws.close(); } catch (e2) {}
               ws = null;
             };
             ws.onclose = function (e) {
@@ -1230,7 +1230,7 @@ def shell_ui(request: Request):
             const resp = await fetch(`/api/shell/stop/${currentJob}`, { method: 'POST', headers: token ? {'X-API-Token': token} : {} });
             if (!resp.ok) { append('[stop-error] ' + (await resp.text())); return; }
             append('[killing]');
-            try { ws && ws.close(); } catch {}
+            try { ws && ws.close(); } catch (e2) {}
             ws = null;
           } catch (e) { console.error('[stop-error]', e); append('[stop-error] ' + e); }
         });

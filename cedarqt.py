@@ -7,7 +7,7 @@ import time
 import urllib.request
 import urllib.error
 import errno
-from datetime import datetime
+from datetime import datetime, timezone
 from threading import Thread
 
 # Initialize logging similar to run_cedarpy
@@ -20,7 +20,7 @@ LOCK_PATH = os.path.join(os.getenv("CEDARPY_LOG_DIR", LOG_DIR_DEFAULT), "cedarqt
 def _init_logging() -> str:
     log_dir = os.getenv("CEDARPY_LOG_DIR", LOG_DIR_DEFAULT)
     os.makedirs(log_dir, exist_ok=True)
-    ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     log_path = os.path.join(log_dir, f"cedarqt_{ts}.log")
     f = open(log_path, "a", buffering=1)
     sys.stdout = f
