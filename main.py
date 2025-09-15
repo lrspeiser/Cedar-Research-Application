@@ -1099,15 +1099,16 @@ def shell_ui(request: Request):
 
         // Prove WS handshake at page load via /ws/health
         (function healthWS(){
-          const token = document.getElementById('apiToken')?.value || null;
+          var tokenEl0 = document.getElementById('apiToken');
+          const token = tokenEl0 ? tokenEl0.value : null;
           const wsScheme = (location.protocol === 'https:') ? 'wss' : 'ws';
           const qs = token ? ('?token='+encodeURIComponent(token)) : '';
           try {
-            const hws = new WebSocket(`${wsScheme}://${location.host}/ws/health${qs}`);
-            hws.onopen = () => { console.log('[ws-health-open]'); append('[ws-health-open]\n'); };
-            hws.onmessage = (e) => { console.log('[ws-health]', e.data); append('[ws-health] '+e.data+'\n'); };
-            hws.onerror = (e) => { console.error('[ws-health-error]', e); append('[ws-health-error]\n'); };
-            hws.onclose = (e) => { console.log('[ws-health-close]', e?.code); append('[ws-health-close '+(e?.code||'')+']\n'); };
+            const hws = new WebSocket(wsScheme + '://' + location.host + '/ws/health' + qs);
+            hws.onopen = function () { console.log('[ws-health-open]'); append('[ws-health-open]\n'); };
+            hws.onmessage = function (e) { console.log('[ws-health]', e.data); append('[ws-health] '+e.data+'\n'); };
+            hws.onerror = function (e) { console.error('[ws-health-error]', e); append('[ws-health-error]\n'); };
+            hws.onclose = function (e) { var code=(e && e.code) ? e.code : ''; console.log('[ws-health-close]', code); append('[ws-health-close '+code+']\n'); };
           } catch (e) {
             console.error('[ws-health-exc]', e);
             append('[ws-health-exc] '+e+'\n');
@@ -1121,8 +1122,9 @@ def shell_ui(request: Request):
           const script = document.getElementById('script').value;
           const shellPathRaw = document.getElementById('shellPath').value;
           const shellPath = (shellPathRaw && shellPathRaw.trim()) ? shellPathRaw.trim() : null;
-          const token = document.getElementById('apiToken').value || null;
-          setStatus('starting…');
+          var tokenEl = document.getElementById('apiToken');
+          const token = tokenEl ? tokenEl.value : null;
+          setStatus('starting...');
           disableRun(true);
           try {
             append('[ui] POST /api/shell/run\n');
@@ -1139,9 +1141,9 @@ def shell_ui(request: Request):
             // WebSocket stream (token via query string if present)
             const wsScheme = (location.protocol === 'https:') ? 'wss' : 'ws';
             const qs = token ? ('?token='+encodeURIComponent(token)) : '';
-            ws = new WebSocket(`${wsScheme}://${location.host}/ws/shell/${data.job_id}${qs}`);
-            ws.onopen = () => { console.log('[ws-open]'); append('[ws-open]\n'); };
-            ws.onmessage = (e) => {
+            ws = new WebSocket(wsScheme + '://' + location.host + '/ws/shell/' + data.job_id + qs);
+            ws.onopen = function () { console.log('[ws-open]'); append('[ws-open]\n'); };
+            ws.onmessage = function (e) {
               const line = e.data;
               if (line === '__CEDARPY_EOF__') {
                 setStatus('finished');
@@ -1152,7 +1154,7 @@ def shell_ui(request: Request):
                 append(line);
               }
             };
-            ws.onerror = (e) => {
+            ws.onerror = function (e) {
               console.error('[ws-error]', e);
               append('\n[ws-error]');
               setStatus('error');
@@ -1160,9 +1162,10 @@ def shell_ui(request: Request):
               try { ws && ws.close(); } catch {}
               ws = null;
             };
-            ws.onclose = (e) => {
-              console.log('[ws-close]', e?.code);
-              if (statusEl.textContent === 'starting…' || statusEl.textContent.startsWith('running')) {
+            ws.onclose = function (e) {
+              var code=(e && e.code) ? e.code : '';
+              console.log('[ws-close]', code);
+              if (statusEl.textContent === 'starting...' || statusEl.textContent.indexOf('running') === 0) {
                 setStatus('closed');
                 disableRun(false);
               }
