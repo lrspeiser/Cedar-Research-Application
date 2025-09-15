@@ -112,7 +112,7 @@ What was wrong and how it was fixed:
 - Test performed: Created a fake lock file with a non-running PID and launched the app; observed log lines indicating stale lock removal and successful re-acquisition. Also validated that if a real process is running with that PID, the app exits cleanly without attempting removal.
 - Additional logging was added at startup to print lock_path and current pid for easier diagnosis.
 
-## Shell window and API
+## Shell window and API (WebSockets-only)
 
 Danger zone: This feature executes arbitrary shell scripts with the same privileges as the user running the server. It is disabled by default and should only be enabled on your own machine in trusted environments.
 
@@ -122,16 +122,18 @@ Enable and secure:
   If not set, only local requests (127.0.0.1/::1) are allowed.
 
 UI:
-- Navigate to /shell for a textarea to enter a script and a live output pane. You can optionally specify a shell path; defaults to $SHELL or /bin/bash.
+- Navigate to /shell for a textarea to enter a script and a live output pane. You can optionally specify a shell path; defaults to $SHELL or /bin/bash. The page uses WebSockets to stream lines back to the browser. No SSE is used anywhere.
 
 API endpoints (for LLM integration):
 - POST /api/shell/run
   - Headers: X-API-Token: <token> (required if CEDARPY_SHELL_API_TOKEN set)
   - Body (JSON): { "script": "echo hello", "shell_path": "/bin/zsh" (optional) }
   - Response: { job_id, pid, started_at }
-- GET /api/shell/stream/{job_id}
-  - Server-Sent Events (text/event-stream). Each message is one line of output. A terminal message "__CEDARPY_EOF__" indicates completion.
-  - Auth: If CEDARPY_SHELL_API_TOKEN is set, pass it as a query parameter token=<token> (EventSource cannot set custom headers). Otherwise local-only.
+- WS /ws/shell/{job_id}
+  - Text WebSocket streaming. Each message is one line of output. A terminal message "__CEDARPY_EOF__" indicates completion.
+  - Auth: If CEDARPY_SHELL_API_TOKEN is set, pass token in the query string (?token=...) or Cookie (Cedar-Shell-Token). Otherwise local-only.
+- WS /ws/health
+  - Simple handshake that replies "WS-OK" and closes. Useful for front-end readiness checks.
 - POST /api/shell/stop/{job_id}
   - Stops the process group for the job (SIGTERM). Requires token or local request.
 - GET /api/shell/status/{job_id}
@@ -163,6 +165,15 @@ curl -sS -H "Content-Type: application/json" \
 ```
 
 Note on API keys: This feature uses environment variables for configuration. See above for how to set them securely. Code comments reference this README for usage and pitfalls.
+
+## Front-end choice for embedded browser (QtWebEngine)
+
+- We standardize on vanilla ES modules and minimal inline JS for the built-in browser (QtWebEngine, Chromium-based). No SSE is used; all live streams use WebSockets.
+- Rationale:
+  - Keeps the bundle small and avoids additional frameworks.
+  - Works reliably in the embedded runtime and regular browsers.
+  - Our current UI is server-rendered HTML plus small JS. This remains the default.
+- Future: If we want richer UX, we can layer in a lightweight micro-framework (e.g., preact/lit) as ES modules without a big toolchain, still using WebSockets for live updates.
 
 ## Packaging (macOS DMG)
 

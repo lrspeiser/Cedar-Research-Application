@@ -1424,6 +1424,79 @@ async def ws_health(websocket: WebSocket):
     except Exception:
         pass
 
+# WebSocket SQL endpoint (WebSockets-only contract for DB queries)
+# Accepts JSON messages: { sql: "...", max_rows?: number }
+# Responds with JSON per message: { ok, statement_type, columns?, rows?, rowcount?, truncated?, error? }
+# Auth mirrors other WS endpoints: token via query (?token=...) when CEDARPY_SHELL_API_TOKEN is set; otherwise local-only.
+@app.websocket("/ws/sql/{project_id}")
+async def ws_sql(websocket: WebSocket, project_id: int):
+    token_q = websocket.query_params.get("token") if hasattr(websocket, "query_params") else None
+    if not SHELL_API_ENABLED:
+        await websocket.close(code=4403)
+        return
+    if SHELL_API_TOKEN:
+        cookie_tok = websocket.cookies.get("Cedar-Shell-Token") if hasattr(websocket, "cookies") else None
+        if (token_q or cookie_tok) != SHELL_API_TOKEN:
+            await websocket.close(code=4401)
+            return
+    else:
+        try:
+            client_host = (websocket.client.host if websocket.client else "")
+        except Exception:
+            client_host = ""
+        if client_host not in {"127.0.0.1", "::1", "localhost"}:
+            await websocket.close(code=4401)
+            return
+    await websocket.accept()
+    # Ensure per-project database exists
+    try:
+        ensure_project_initialized(project_id)
+    except Exception:
+        pass
+    # Process messages
+    while True:
+        try:
+            msg = await websocket.receive_text()
+        except WebSocketDisconnect:
+            break
+        except Exception:
+            break
+        if not msg:
+            continue
+        if msg.strip() == "__CLOSE__":
+            break
+        payload = None
+        try:
+            payload = json.loads(msg)
+        except Exception:
+            payload = {"sql": msg}
+        sql_text = (payload.get("sql") if isinstance(payload, dict) else msg) or ""
+        try:
+            try:
+                max_rows = int(payload.get("max_rows", int(os.getenv("CEDARPY_SQL_MAX_ROWS", "200")))) if isinstance(payload, dict) else int(os.getenv("CEDARPY_SQL_MAX_ROWS", "200"))
+            except Exception:
+                max_rows = 200
+            result = _execute_sql(sql_text, project_id, max_rows=max_rows)
+            out = {
+                "ok": bool(result.get("success")),
+                "statement_type": result.get("statement_type"),
+                "columns": result.get("columns"),
+                "rows": result.get("rows"),
+                "rowcount": result.get("rowcount"),
+                "truncated": result.get("truncated"),
+                "error": None if result.get("success") else result.get("error"),
+            }
+        except Exception as e:
+            out = {"ok": False, "error": str(e)}
+        try:
+            await websocket.send_text(json.dumps(out))
+        except Exception:
+            break
+    try:
+        await websocket.close()
+    except Exception:
+        pass
+
 
 @app.post("/api/shell/stop/{job_id}")
 def api_shell_stop(job_id: str, request: Request, x_api_token: Optional[str] = Header(default=None)):
