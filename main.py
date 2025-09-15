@@ -1105,10 +1105,10 @@ def shell_ui(request: Request):
           const qs = token ? ('?token='+encodeURIComponent(token)) : '';
           try {
             const hws = new WebSocket(wsScheme + '://' + location.host + '/ws/health' + qs);
-            hws.onopen = function () { console.log('[ws-health-open]'); append('[ws-health-open]\n'); };
-            hws.onmessage = function (e) { console.log('[ws-health]', e.data); append('[ws-health] '+e.data+'\n'); };
-            hws.onerror = function (e) { console.error('[ws-health-error]', e); append('[ws-health-error]\n'); };
-            hws.onclose = function (e) { var code=(e && e.code) ? e.code : ''; console.log('[ws-health-close]', code); append('[ws-health-close '+code+']\n'); };
+            hws.onopen = function () { console.log('[ws-health-open]'); append('[ws-health-open]'); };
+            hws.onmessage = function (e) { console.log('[ws-health]', e.data); append('[ws-health] ' + e.data); };
+            hws.onerror = function (e) { console.error('[ws-health-error]', e); append('[ws-health-error]'); };
+            hws.onclose = function (e) { var code=(e && e.code) ? e.code : ''; console.log('[ws-health-close]', code); append('[ws-health-close ' + code + ']'); };
           } catch (e) {
             console.error('[ws-health-exc]', e);
             append('[ws-health-exc] '+e+'\n');
@@ -1118,7 +1118,7 @@ def shell_ui(request: Request):
         runBtn.addEventListener('click', async () => {
           output.textContent = '';
           console.log('[ui] run clicked');
-          append('[ui] run clicked\n');
+          append('[ui] run clicked');
           const script = document.getElementById('script').value;
           const shellPathRaw = document.getElementById('shellPath').value;
           const shellPath = (shellPathRaw && shellPathRaw.trim()) ? shellPathRaw.trim() : null;
@@ -1127,7 +1127,7 @@ def shell_ui(request: Request):
           setStatus('starting...');
           disableRun(true);
           try {
-            append('[ui] POST /api/shell/run\n');
+            append('[ui] POST /api/shell/run');
             const resp = await fetch('/api/shell/run', {
               method: 'POST',
               headers: Object.assign({'Content-Type': 'application/json'}, token ? {'X-API-Token': token} : {}),
@@ -1136,13 +1136,13 @@ def shell_ui(request: Request):
             if (!resp.ok) { const t = await resp.text(); throw new Error(t || ('HTTP '+resp.status)); }
             const data = await resp.json();
             currentJob = data.job_id;
-            append('[ui] job '+currentJob+' started\n');
+            append('[ui] job ' + currentJob + ' started');
             setStatus('running (pid '+(data.pid || '?')+')');
             // WebSocket stream (token via query string if present)
             const wsScheme = (location.protocol === 'https:') ? 'wss' : 'ws';
             const qs = token ? ('?token='+encodeURIComponent(token)) : '';
             ws = new WebSocket(wsScheme + '://' + location.host + '/ws/shell/' + data.job_id + qs);
-            ws.onopen = function () { console.log('[ws-open]'); append('[ws-open]\n'); };
+            ws.onopen = function () { console.log('[ws-open]'); append('[ws-open]'); };
             ws.onmessage = function (e) {
               const line = e.data;
               if (line === '__CEDARPY_EOF__') {
@@ -1156,7 +1156,7 @@ def shell_ui(request: Request):
             };
             ws.onerror = function (e) {
               console.error('[ws-error]', e);
-              append('\n[ws-error]');
+              append('[ws-error]');
               setStatus('error');
               disableRun(false);
               try { ws && ws.close(); } catch {}
@@ -1172,7 +1172,7 @@ def shell_ui(request: Request):
             };
           } catch (err) {
             console.error('[ui] run error', err);
-            append('[error] '+err+'\n');
+            append('[error] ' + err);
             setStatus('error');
             disableRun(false);
           }
@@ -1182,14 +1182,14 @@ def shell_ui(request: Request):
           if (!currentJob) return;
           const token = document.getElementById('apiToken').value || null;
           console.log('[ui] stop clicked for job', currentJob);
-          append('[ui] stop clicked\n');
+          append('[ui] stop clicked');
           try {
             const resp = await fetch(`/api/shell/stop/${currentJob}`, { method: 'POST', headers: token ? {'X-API-Token': token} : {} });
-            if (!resp.ok) { append('[stop-error] '+(await resp.text())+'\n'); return; }
-            append('[killing]\n');
+            if (!resp.ok) { append('[stop-error] ' + (await resp.text())); return; }
+            append('[killing]');
             try { ws && ws.close(); } catch {}
             ws = null;
-          } catch (e) { console.error('[stop-error]', e); append('[stop-error] '+e+'\n'); }
+          } catch (e) { console.error('[stop-error]', e); append('[stop-error] ' + e); }
         });
       </script>
     """
