@@ -43,7 +43,10 @@ PROJECTS_ROOT = os.path.join(DATA_DIR, "projects")
 REGISTRY_DATABASE_URL = os.getenv("CEDARPY_DATABASE_URL") or f"sqlite:///{DEFAULT_SQLITE_PATH}"
 
 # Deprecated: CEDARPY_UPLOAD_DIR (files now under per-project folders). Keep for backward compatibility during migration.
-LEGACY_UPLOAD_DIR = os.getenv("CEDARPY_UPLOAD_DIR", os.path.abspath("./user_uploads"))
+# Default the legacy uploads path under the user data dir so it is writable when running from a read-only app bundle.
+# See PROJECT_SEPARATION_README.md for details.
+_default_legacy_dir = os.path.join(DATA_DIR, "user_uploads")
+LEGACY_UPLOAD_DIR = os.getenv("CEDARPY_UPLOAD_DIR", _default_legacy_dir)
 
 # Shell API feature flag and token
 # See README for details on enabling and securing the Shell API.
@@ -526,7 +529,20 @@ app = FastAPI(title="Cedar")
 # Serve uploaded files (legacy path no longer used). We mount a dynamic per-project files app below.
 # See PROJECT_SEPARATION_README.md
 # Keep legacy mount to avoid 404s for older links; it will contain only migrated symlinks if created.
-app.mount("/uploads-legacy", StaticFiles(directory=LEGACY_UPLOAD_DIR), name="uploads_legacy")
+# Be resilient: only mount if the directory exists; if using the default path, create it lazily.
+try:
+    if os.path.isdir(LEGACY_UPLOAD_DIR):
+        app.mount("/uploads-legacy", StaticFiles(directory=LEGACY_UPLOAD_DIR), name="uploads_legacy")
+        print(f"[cedarpy] Mounted /uploads-legacy from {LEGACY_UPLOAD_DIR}")
+    else:
+        if LEGACY_UPLOAD_DIR == _default_legacy_dir:
+            os.makedirs(LEGACY_UPLOAD_DIR, exist_ok=True)
+            app.mount("/uploads-legacy", StaticFiles(directory=LEGACY_UPLOAD_DIR), name="uploads_legacy")
+            print(f"[cedarpy] Created and mounted /uploads-legacy at {LEGACY_UPLOAD_DIR}")
+        else:
+            print(f"[cedarpy] Skipping /uploads-legacy mount; directory does not exist: {LEGACY_UPLOAD_DIR}")
+except Exception as e:
+    print(f"[cedarpy] Skipping /uploads-legacy mount due to error: {e}")
 
 @app.get("/uploads/{project_id}/{path:path}")
 def serve_project_upload(project_id: int, path: str):

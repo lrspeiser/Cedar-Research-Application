@@ -25,31 +25,51 @@ fi
 "$PIP" install -r "$ROOT_DIR/requirements.txt" >/dev/null
 "$PIP" install pyinstaller >/dev/null
 
-# 1) Build a one-file CLI binary that runs the server
+# 1) Build a macOS .app bundle (single item)
 rm -rf "$DIST" "$BUILD"
 pushd "$ROOT_DIR" >/dev/null
 "$VENV/bin/pyinstaller" \
   --clean \
-  --onefile \
-  --name "$BINARY_NAME" \
+--onefile \
+  --windowed \
+  --name "$APP_NAME" \
   --distpath "$ROOT_DIR/dist" \
   --workpath "$BUILD" \
   --specpath "$BUILD" \
   --hidden-import main \
+  --add-data "$ROOT_DIR/main.py:." \
   run_cedarpy.py
 popd >/dev/null
 
-# Copy artifacts into a staging dir for the DMG
+# 2) Stage only the .app into the DMG content
 STAGE="$ROOT_DIR/.dmg_stage"
 rm -rf "$STAGE"
 mkdir -p "$STAGE"
-cp "$ROOT_DIR/dist/$BINARY_NAME" "$STAGE/$BINARY_NAME"
+cp -R "$ROOT_DIR/dist/${APP_NAME}.app" "$STAGE/${APP_NAME}.app"
+
+# 3) Build the DMG with just the .app
+DMG_PATH="$ROOT_DIR/$DMG_NAME"
+rm -f "$DMG_PATH"
+hdiutil create -volname "$APP_NAME" -srcfolder "$STAGE" -ov -format UDZO "$DMG_PATH"
+
+echo "Built DMG: $DMG_PATH"
+exit 0
+
+# Legacy code below (kept for reference, no longer used)
 
 # 2) Create a .command that opens Terminal and runs the server
 cat > "$STAGE/Run ${APP_NAME}.command" <<'EOS'
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")"
+# Stop any existing running instance
+if command -v pkill >/dev/null 2>&1; then
+  pkill -f "$HOME/CedarPyApp/bin/cedarpy" || pkill -x cedarpy || true
+else
+  pids=$(pgrep -f "$HOME/CedarPyApp/bin/cedarpy" || true)
+  if [ -n "$pids" ]; then kill $pids || true; fi
+fi
+sleep 0.5
 # Use a writable uploads directory outside the read-only DMG by default
 export CEDARPY_UPLOAD_DIR="${CEDARPY_UPLOAD_DIR:-$HOME/CedarPyUploads}"
 # Default-on Shell API in DMG build; override by unsetting or setting to 0 before launch
@@ -71,8 +91,8 @@ cat > "$OSA_SRC" <<'EOF'
 on run
   set appPath to (path to me as alias)
   set dirPath to do shell script "dirname " & quoted form of POSIX path of appPath
-tell application "Terminal"
-    do script "export CEDARPY_SHELL_API_ENABLED=\"1\"; export CEDARPY_UPLOAD_DIR=\"$HOME/CedarPyUploads\"; mkdir -p \"$HOME/CedarPyUploads\"; cd " & quoted form of dirPath & " && DEST=\"$HOME/CedarPyApp/bin\"; mkdir -p \"$HOME/CedarPyApp/bin\"; cp -f ./cedarpy \"$HOME/CedarPyApp/bin/cedarpy\"; chmod +x \"$HOME/CedarPyApp/bin/cedarpy\"; \"$HOME/CedarPyApp/bin/cedarpy\""
+  tell application "Terminal"
+    do script "export CEDARPY_SHELL_API_ENABLED=\"1\"; export CEDARPY_UPLOAD_DIR=\"$HOME/CedarPyUploads\"; mkdir -p \"$HOME/CedarPyUploads\"; pkill -f \"$HOME/CedarPyApp/bin/cedarpy\" || pkill -x cedarpy || true; sleep 0.5; cd " & quoted form of dirPath & " && DEST=\"$HOME/CedarPyApp/bin\"; mkdir -p \"$HOME/CedarPyApp/bin\"; cp -f ./cedarpy \"$HOME/CedarPyApp/bin/cedarpy\"; chmod +x \"$HOME/CedarPyApp/bin/cedarpy\"; \"$HOME/CedarPyApp/bin/cedarpy\""
     activate
   end tell
 end run
