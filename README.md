@@ -24,7 +24,7 @@ simple roll-up behavior between Main and branches. Everything is in `main.py` as
 - Launch the embedded-browser desktop shell:
   - python cedarqt.py
 
-This starts the FastAPI server and opens the UI inside a QtWebEngine window. JavaScript console output and in-page errors are captured and forwarded to your app logs under ~/Library/Logs/CedarPy.
+This starts the FastAPI server and opens the UI inside a QtWebEngine window. JavaScript console output and in-page errors are captured and forwarded to your app logs under ~/Library/Logs/CedarPy (or $CEDARPY_LOG_DIR if set).
 
 ### Run the server in a normal browser
 
@@ -89,6 +89,28 @@ Log locations (macOS):
 - ~/Library/Logs/CedarPy/cedarqt_*.log — desktop shell
 - ~/Library/Logs/CedarPy/uvicorn_from_qt.log — server started by the shell
 - main server logs also print [client-log], [qt-console], and [qt-request] prefixes
+
+Single-instance lock and stale lock recovery:
+- The desktop shell enforces a single running instance using a lock file at $CEDARPY_LOG_DIR/cedarqt.lock (defaults to ~/Library/Logs/CedarPy/cedarqt.lock).
+- If you see "another instance detected via ... cedarqt.lock; exiting" but no app is running, the lock is stale.
+- Fix implemented: On startup, CedarPy now reads the PID from the lock, checks if it is alive (os.kill(pid, 0)), and if not, removes the stale lock and retries exactly once to acquire it. This avoids any infinite loops while recovering from crashes/ungraceful exits.
+- Added logging: look for lines like:
+  - "[cedarqt] removed stale lock: ... (pid=####)"
+  - "[cedarqt] acquired single-instance lock: ..."
+
+Troubleshooting:
+- Override log/lock directory with:
+  - export CEDARPY_LOG_DIR="$HOME/Library/Logs/CedarPy"
+- Manually clear a stuck lock:
+  - rm -f "$CEDARPY_LOG_DIR/cedarqt.lock"
+- Verify startup:
+  - tail -n 200 "$(ls -t "$CEDARPY_LOG_DIR"/cedarqt_*.log | head -n1)"
+
+What was wrong and how it was fixed:
+- Mistake: The app previously exited if the lock file existed without checking whether the PID inside was still running, causing a stale lock to block all future launches.
+- Fix: Implemented PID liveness check and single-retry stale-lock removal. The lock path now honors $CEDARPY_LOG_DIR for consistency with logging.
+- Test performed: Created a fake lock file with a non-running PID and launched the app; observed log lines indicating stale lock removal and successful re-acquisition. Also validated that if a real process is running with that PID, the app exits cleanly without attempting removal.
+- Additional logging was added at startup to print lock_path and current pid for easier diagnosis.
 
 ## Shell window and API
 

@@ -6,12 +6,15 @@ import subprocess
 import time
 import urllib.request
 import urllib.error
+import errno
 from datetime import datetime
 from threading import Thread
 
 # Initialize logging similar to run_cedarpy
 LOG_DIR_DEFAULT = os.path.join(os.path.expanduser("~"), "Library", "Logs", "CedarPy")
-LOCK_PATH = os.path.join(LOG_DIR_DEFAULT, "cedarqt.lock")
+# Lock path now respects CEDARPY_LOG_DIR for consistency with logs.
+# See README.md section "Single-instance lock and stale lock recovery" for details.
+LOCK_PATH = os.path.join(os.getenv("CEDARPY_LOG_DIR", LOG_DIR_DEFAULT), "cedarqt.lock")
 
 
 def _init_logging() -> str:
@@ -25,25 +28,82 @@ def _init_logging() -> str:
     print(f"[cedarqt] log_path={log_path}")
     print(f"[cedarqt] sys.executable={sys.executable}")
     print(f"[cedarqt] cwd={os.getcwd()}")
+    print(f"[cedarqt] lock_path={LOCK_PATH} pid={os.getpid()}")
     return log_path
 
 _log_path = _init_logging()
 
-# Single-instance guard using a lock file
-_single_lock_fh = None
-try:
-    os.makedirs(LOG_DIR_DEFAULT, exist_ok=True)
-    # Use O_CREAT|O_EXCL to create a PID file atomically
+# Single-instance guard using a lock file, with stale-lock recovery (single retry to avoid loops)
+# See README.md for rationale and troubleshooting steps.
+
+def _pid_is_running(pid: int) -> bool:
+    try:
+        # Signal 0 checks for existence without sending a signal
+        os.kill(pid, 0)
+        return True
+    except OSError as e:
+        # ESRCH -> no such process; EPERM -> exists but no permission (still running)
+        return e.errno == errno.EPERM
+
+
+def _acquire_single_instance_lock(lock_path: str):
+    """Attempt to acquire a single-instance lock.
+
+    Strategy:
+    - Try O_EXCL create; if it exists, check PID liveness from the file.
+    - If PID not running or file unreadable/unparsable, remove and retry ONCE.
+    - If still failing after one retry, exit gracefully.
+    """
+    os.makedirs(os.path.dirname(lock_path), exist_ok=True)
     flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
-    _single_lock_fh = os.open(LOCK_PATH, flags, 0o644)
-    os.write(_single_lock_fh, str(os.getpid()).encode("utf-8"))
-except FileExistsError:
-    # Another instance is likely running; bail out safely
-    print(f"[cedarqt] another instance detected via {LOCK_PATH}; exiting")
-    sys.exit(0)
-except Exception as e:
-    # Non-fatal; continue but log
-    print(f"[cedarqt] lock warning: {e}")
+
+    def _try_create():
+        fh = os.open(lock_path, flags, 0o644)
+        os.write(fh, str(os.getpid()).encode("utf-8"))
+        print(f"[cedarqt] acquired single-instance lock: {lock_path}")
+        return fh
+
+    try:
+        return _try_create()
+    except FileExistsError:
+        # Read existing PID (best-effort)
+        existing_pid = None
+        try:
+            with open(lock_path, "r") as f:
+                content = f.read().strip()
+                # Extract leading integer if file has noise
+                digits = "".join(ch for ch in content if ch.isdigit())
+                if digits:
+                    existing_pid = int(digits)
+        except Exception as e:
+            print(f"[cedarqt] lock read error, treating as stale: {e}")
+
+        # If PID appears alive, exit; otherwise treat as stale
+        if existing_pid is not None and _pid_is_running(existing_pid):
+            print(f"[cedarqt] another instance detected via {lock_path} (pid={existing_pid}); exiting")
+            sys.exit(0)
+        else:
+            try:
+                os.remove(lock_path)
+                print(f"[cedarqt] removed stale lock: {lock_path} (pid={existing_pid})")
+            except Exception as e:
+                print(f"[cedarqt] failed to remove stale lock {lock_path}: {e}; exiting")
+                sys.exit(0)
+            # One retry only to avoid any chance of loops
+            try:
+                return _try_create()
+            except FileExistsError:
+                print(f"[cedarqt] lock re-created concurrently; another instance likely started; exiting")
+                sys.exit(0)
+            except Exception as e:
+                print(f"[cedarqt] unexpected error after stale-lock cleanup: {e}; exiting")
+                sys.exit(0)
+    except Exception as e:
+        print(f"[cedarqt] lock warning: {e}")
+        return None
+
+
+_single_lock_fh = _acquire_single_instance_lock(LOCK_PATH)
 
 # Qt imports (PySide6 + QtWebEngine)
 from PySide6.QtCore import Qt, QUrl, QObject
