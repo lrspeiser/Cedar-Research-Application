@@ -12,11 +12,12 @@ import uuid
 import queue
 import signal
 import time
+import platform
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Tuple
 
 from fastapi import FastAPI, Request, UploadFile, File, Form, Depends, Header, HTTPException, Body
-from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -31,13 +32,18 @@ import re
 # Configuration
 # ----------------------------------------------------------------------------------
 
-# Prefer a generic CEDARPY_DATABASE_URL; fall back to legacy CEDARPY_MYSQL_URL; otherwise use SQLite in ~/CedarPyData/cedarpy.db
+# Prefer a generic CEDARPY_DATABASE_URL for the central registry only; otherwise use SQLite in ~/CedarPyData/cedarpy.db
+# See PROJECT_SEPARATION_README.md for architecture details.
 HOME_DIR = os.path.expanduser("~")
 DATA_DIR = os.getenv("CEDARPY_DATA_DIR", os.path.join(HOME_DIR, "CedarPyData"))
 DEFAULT_SQLITE_PATH = os.path.join(DATA_DIR, "cedarpy.db")
+PROJECTS_ROOT = os.path.join(DATA_DIR, "projects")
 
-DATABASE_URL = os.getenv("CEDARPY_DATABASE_URL") or os.getenv("CEDARPY_MYSQL_URL") or f"sqlite:///{DEFAULT_SQLITE_PATH}"
-UPLOAD_DIR = os.getenv("CEDARPY_UPLOAD_DIR", os.path.abspath("./user_uploads"))
+# Central registry DB (projects list only)
+REGISTRY_DATABASE_URL = os.getenv("CEDARPY_DATABASE_URL") or f"sqlite:///{DEFAULT_SQLITE_PATH}"
+
+# Deprecated: CEDARPY_UPLOAD_DIR (files now under per-project folders). Keep for backward compatibility during migration.
+LEGACY_UPLOAD_DIR = os.getenv("CEDARPY_UPLOAD_DIR", os.path.abspath("./user_uploads"))
 
 # Shell API feature flag and token
 # See README for details on enabling and securing the Shell API.
@@ -53,29 +59,116 @@ LOGS_DIR = os.path.join(DATA_DIR, "logs", "shell")
 os.makedirs(LOGS_DIR, exist_ok=True)
 
 # Ensure writable dirs exist (important when running from a read-only DMG)
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-if DATABASE_URL.startswith("sqlite"):
-    os.makedirs(os.path.dirname(DEFAULT_SQLITE_PATH), exist_ok=True)
+os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(PROJECTS_ROOT, exist_ok=True)
+os.makedirs(os.path.dirname(DEFAULT_SQLITE_PATH), exist_ok=True)
 
 # ----------------------------------------------------------------------------------
-# Database setup (SQLAlchemy, sync engine by design for simplicity)
+# Database setup
+# - Central registry: global engine
+# - Per-project: dynamic engine selected per request/project
 # ----------------------------------------------------------------------------------
 
 engeine_kwargs_typo_guard = None
-engine_kwargs = dict(pool_pre_ping=True, future=True)
-if DATABASE_URL.startswith("sqlite"):
-    # Allow usage across threads in the web server
-    engine_kwargs["connect_args"] = {"check_same_thread": False}
-engine = create_engine(DATABASE_URL, **engine_kwargs)
-SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+_engine_kwargs_base = dict(pool_pre_ping=True, future=True)
+
+# Central registry engine
+_registry_engine_kwargs = dict(**_engine_kwargs_base)
+if REGISTRY_DATABASE_URL.startswith("sqlite"):
+    _registry_engine_kwargs["connect_args"] = {"check_same_thread": False}
+registry_engine = create_engine(REGISTRY_DATABASE_URL, **_registry_engine_kwargs)
+RegistrySessionLocal = sessionmaker(bind=registry_engine, autoflush=False, autocommit=False, future=True)
 Base = declarative_base()
+
+# Per-project engine cache
+_project_engines: Dict[int, Any] = {}
+_project_engines_lock = threading.Lock()
+
+def _project_dirs(project_id: int) -> Dict[str, str]:
+    base = os.path.join(PROJECTS_ROOT, str(project_id))
+    db_path = os.path.join(base, "database.db")
+    files_root = os.path.join(base, "files")
+    return {"base": base, "db_path": db_path, "files_root": files_root}
+
+
+def _ensure_project_storage(project_id: int) -> None:
+    paths = _project_dirs(project_id)
+    os.makedirs(paths["base"], exist_ok=True)
+    os.makedirs(paths["files_root"], exist_ok=True)
+
+
+def _get_project_engine(project_id: int):
+    # See PROJECT_SEPARATION_README.md for architecture details
+    with _project_engines_lock:
+        eng = _project_engines.get(project_id)
+        if eng is not None:
+            return eng
+        paths = _project_dirs(project_id)
+        os.makedirs(os.path.dirname(paths["db_path"]), exist_ok=True)
+        kwargs = dict(**_engine_kwargs_base)
+        # SQLite per project
+        kwargs["connect_args"] = {"check_same_thread": False}
+        eng = create_engine(f"sqlite:///{paths['db_path']}", **kwargs)
+        _project_engines[project_id] = eng
+        return eng
+
+
+def get_registry_db() -> Session:
+    db = RegistrySessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+def get_project_db(project_id: int) -> Session:
+    engine = _get_project_engine(project_id)
+    SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+def ensure_project_initialized(project_id: int) -> None:
+    """Ensure the per-project database and storage exist and are seeded.
+    See PROJECT_SEPARATION_README.md
+    """
+    try:
+        eng = _get_project_engine(project_id)
+        # Create all tables for this project DB
+        Base.metadata.create_all(eng)
+        # Seed project row and Main branch if missing
+        SessionLocal = sessionmaker(bind=eng, autoflush=False, autocommit=False, future=True)
+        pdb = SessionLocal()
+        try:
+            proj = pdb.query(Project).filter(Project.id == project_id).first()
+            if not proj:
+                title = None
+                try:
+                    # Look up title in registry
+                    with RegistrySessionLocal() as reg:
+                        reg_proj = reg.query(Project).filter(Project.id == project_id).first()
+                        title = getattr(reg_proj, "title", None)
+                except Exception:
+                    title = None
+                title = title or f"Project {project_id}"
+                pdb.add(Project(id=project_id, title=title))
+                pdb.commit()
+            ensure_main_branch(pdb, project_id)
+        finally:
+            pdb.close()
+        _ensure_project_storage(project_id)
+    except Exception:
+        pass
 
 # ----------------------------------------------------------------------------------
 # Models
 # ----------------------------------------------------------------------------------
 
 class Project(Base):
-    __tablename__ = "projects"
+    __tablename__ = "projects"  # Central registry only
     id = Column(Integer, primary_key=True)
     title = Column(String(255), nullable=False, unique=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -186,12 +279,13 @@ class SQLUndoLog(Base):
     )
 
 
-Base.metadata.create_all(engine)
+# Create central registry tables
+Base.metadata.create_all(registry_engine)
 
-# Attempt a lightweight migration for existing DBs: add metadata_json if missing
+# Attempt a lightweight migration for existing DBs: add metadata_json if missing (registry only)
 try:
-    with engine.begin() as conn:
-        dialect = engine.dialect.name
+    with registry_engine.begin() as conn:
+        dialect = registry_engine.dialect.name
         has_col = False
         if dialect == "mysql":
             res = conn.exec_driver_sql("SHOW COLUMNS FROM files LIKE 'metadata_json'")
@@ -206,7 +300,6 @@ try:
                 conn.exec_driver_sql("ALTER TABLE files ADD COLUMN metadata_json JSON")
         else:
             # best effort: try adding a JSON column with generic SQL
-            res = conn.exec_driver_sql("SELECT 1")
             conn.exec_driver_sql("ALTER TABLE files ADD COLUMN metadata_json JSON")
 except Exception:
     # Ignore migration issues in prototype mode
@@ -339,7 +432,8 @@ def interpret_file(path: str, original_name: str) -> Dict[str, Any]:
     return meta
 
 def get_db() -> Session:
-    db = SessionLocal()
+    # Backward-compat shim: default DB equals central registry
+    db = RegistrySessionLocal()
     try:
         yield db
     finally:
@@ -429,7 +523,20 @@ def current_branch(db: Session, project_id: int, branch_id: Optional[int]) -> Br
 app = FastAPI(title="Cedar")
 
 # Serve uploaded files for convenience
-app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+# Serve uploaded files (legacy path no longer used). We mount a dynamic per-project files app below.
+# See PROJECT_SEPARATION_README.md
+# Keep legacy mount to avoid 404s for older links; it will contain only migrated symlinks if created.
+app.mount("/uploads-legacy", StaticFiles(directory=LEGACY_UPLOAD_DIR), name="uploads_legacy")
+
+@app.get("/uploads/{project_id}/{path:path}")
+def serve_project_upload(project_id: int, path: str):
+    # See PROJECT_SEPARATION_README.md
+    base = _project_dirs(project_id)["files_root"]
+    ab = os.path.abspath(os.path.join(base, path))
+    base_ab = os.path.abspath(base)
+    if not ab.startswith(base_ab) or not os.path.isfile(ab):
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(ab)
 
 # ----------------------------------------------------------------------------------
 # HTML helpers (all inline; no external templates)
@@ -483,6 +590,7 @@ def layout(title: str, body: str) -> HTMLResponse:
 
 
 def projects_list_html(projects: List[Project]) -> str:
+    # See PROJECT_SEPARATION_README.md
     if not projects:
         return f"""
         <h1>Projects</h1>
@@ -535,6 +643,7 @@ def project_page_html(
     msg: Optional[str] = None,
     sql_result_block: Optional[str] = None,
 ) -> str:
+    # See PROJECT_SEPARATION_README.md
     # branch tabs
     tabs = []
     for b in branches:
@@ -545,16 +654,15 @@ def project_page_html(
     # files table
     file_rows = []
     for f in files:
-        # display link to file (served from /uploads)
-        # Make relative storage path under UPLOAD_DIR to create URL
+        # display link to file (served from /uploads/{project_id}/...)
         storage_path = f.storage_path or ""
         url = None
         try:
             abs_path = os.path.abspath(storage_path)
-            base = os.path.abspath(os.getenv("CEDARPY_UPLOAD_DIR", "./user_uploads"))
-            if abs_path.startswith(base):
-                rel = abs_path[len(base):].lstrip(os.sep).replace(os.sep, "/")
-                url = f"/uploads/{rel}"
+            base_root = _project_dirs(project.id)["files_root"]
+            if abs_path.startswith(base_root):
+                rel = abs_path[len(base_root):].lstrip(os.sep).replace(os.sep, "/")
+                url = f"/uploads/{project.id}/{rel}"
         except Exception:
             url = None
         link_html = f"<a href='{url}' target='_blank'>{escape(f.display_name)}</a>" if url else escape(f.display_name)
@@ -618,14 +726,14 @@ SELECT * FROM demo LIMIT 10;""")
           <button type=\"submit\">Run SQL</button>
         </form>
         <script>
-        function cedarSqlConfirm(f) {
-          var t = (f.querySelector('[name=sql]')||{}).value || '';
+        function cedarSqlConfirm(f) {{
+          var t = (f.querySelector('[name=sql]')||{{}}).value || '';
           var re = /^\s*(drop|delete|truncate|update|alter)\b/i;
-          if (re.test(t)) {
+          if (re.test(t)) {{
             return confirm('This SQL looks destructive. Proceed?');
-          }
+          }}
           return true;
-        }
+        }}
         </script>
         <form method=\"post\" action=\"/project/{project.id}/sql/undo_last?branch_id={current.id}\" class=\"inline\" style=\"margin-top:6px\">
           <button type=\"submit\" class=\"secondary\">Undo Last SQL</button>
@@ -728,7 +836,8 @@ class ShellJob:
     def __init__(self, script: str, shell_path: Optional[str] = None):
         self.id = uuid.uuid4().hex
         self.script = script
-        self.shell_path = shell_path or os.environ.get("SHELL", "/bin/bash")
+        # Preserve requested shell_path if provided; resolution and fallbacks happen at run-time
+        self.shell_path = shell_path or os.environ.get("SHELL")
         self.start_time = datetime.utcnow()
         self.end_time: Optional[datetime] = None
         self.status = "starting"  # starting|running|finished|error|killed
@@ -766,13 +875,65 @@ class ShellJob:
 
 
 def _run_job(job: ShellJob):
-    shell = job.shell_path
-    # Run as login shell (-l) and execute command (-c) with a small wrapper to ensure POSIX semantics
-    # Using a new process group so we can kill the entire tree
+    def _is_executable(p: Optional[str]) -> bool:
+        try:
+            return bool(p) and os.path.isfile(p) and os.access(p, os.X_OK)
+        except Exception:
+            return False
+
+    def _candidate_shells(requested: Optional[str]) -> List[str]:
+        cands: List[str] = []
+        if requested and requested not in cands:
+            cands.append(requested)
+        env_shell = os.environ.get("SHELL")
+        if env_shell and env_shell not in cands:
+            cands.append(env_shell)
+        # macOS default first when applicable
+        if platform.system().lower() == "darwin" and "/bin/zsh" not in cands:
+            cands.append("/bin/zsh")
+        for p in ("/bin/bash", "/bin/sh"):
+            if p not in cands:
+                cands.append(p)
+        return cands
+
+    def _args_for(shell_path: str, script: str) -> List[str]:
+        base = os.path.basename(shell_path)
+        # bash/zsh/ksh/fish accept -l -c; sh/dash typically support only -c
+        if base in {"bash", "zsh", "ksh", "fish"}:
+            return ["-lc", script]
+        return ["-c", script]
+
+    # Resolve shell with fallbacks and emit helpful context
+    candidates = _candidate_shells(job.shell_path)
+    resolved: Optional[str] = None
+    for p in candidates:
+        if _is_executable(p):
+            resolved = p
+            break
+
+    if not resolved:
+        job.status = "error"
+        job.end_time = datetime.utcnow()
+        job.append_line(f"[shell-resolve-error] none executable among: {', '.join(candidates)}\n")
+        try:
+            job.queue.put_nowait("__CEDARPY_EOF__\n")
+        except Exception:
+            pass
+        return
+
+    args = _args_for(resolved, job.script)
+
+    # Start process group so Stop can kill descendants
     job.status = "running"
+    # Emit startup context to both UI and log file
+    job.append_line(f"[start] job_id={job.id} at={datetime.utcnow().isoformat()}Z\n")
+    job.append_line(f"[using-shell] path={resolved} args={' '.join(args[:-1])} (script length={len(job.script)} chars)\n")
+    job.append_line(f"[cwd] {os.getcwd()}\n")
+    job.append_line(f"[log] {job.log_path}\n")
+
     try:
         job.proc = subprocess.Popen(
-            [shell, "-lc", job.script],
+            [resolved] + args,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
@@ -784,7 +945,11 @@ def _run_job(job: ShellJob):
     except Exception as e:
         job.status = "error"
         job.end_time = datetime.utcnow()
-        job.append_line(f"[spawn-error] {e}\n")
+        job.append_line(f"[spawn-error] {type(e).__name__}: {e}\n")
+        try:
+            job.queue.put_nowait("__CEDARPY_EOF__\n")
+        except Exception:
+            pass
         return
 
     # Stream output
@@ -793,7 +958,7 @@ def _run_job(job: ShellJob):
         for line in job.proc.stdout:
             job.append_line(line)
     except Exception as e:
-        job.append_line(f"[stream-error] {e}\n")
+        job.append_line(f"[stream-error] {type(e).__name__}: {e}\n")
     finally:
         if job.proc:
             job.proc.wait()
@@ -866,10 +1031,10 @@ def shell_ui(request: Request):
         """
         return layout("Shell – disabled", body)
 
-    default_shell = escape(os.environ.get("SHELL", "/bin/bash"))
+    default_shell = html.escape(os.environ.get("SHELL", "/bin/zsh"))
     body = """
       <h1>Shell</h1>
-      <p class='muted small'>Runs scripts with your user privileges via {{SHELL or /bin/bash}}. Output streams live below. <strong>Danger:</strong> Any command you run can modify your system.</p>
+      <p class='muted small'>Runs scripts with your user privileges via {{SHELL or /bin/zsh}}. Output streams live below. <strong>Danger:</strong> Any command you run can modify your system.</p>
       <div class='card' style='flex:1'>
         <label for='script'>Script</label>
         <textarea id='script' style='width:100%; height:180px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:13px;' placeholder='echo Hello world'></textarea>
@@ -916,7 +1081,8 @@ def shell_ui(request: Request):
         runBtn.addEventListener('click', async () => {
           output.textContent = '';
           const script = document.getElementById('script').value;
-          const shellPath = document.getElementById('shellPath').value || null;
+          const shellPathRaw = document.getElementById('shellPath').value;
+          const shellPath = (shellPathRaw && shellPathRaw.trim()) ? shellPathRaw.trim() : null;
           const token = document.getElementById('apiToken').value || null;
           setStatus('starting…');
           disableRun(true);
@@ -1056,7 +1222,8 @@ def api_shell_status(job_id: str, request: Request, x_api_token: Optional[str] =
 # -------------------- Merge to Main (SQLite-first implementation) --------------------
 
 @app.post("/project/{project_id}/merge_to_main")
-def merge_to_main(project_id: int, request: Request, db: Session = Depends(get_db)):
+def merge_to_main(project_id: int, request: Request, db: Session = Depends(get_project_db)):
+    ensure_project_initialized(project_id)
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         return RedirectResponse("/", status_code=303)
@@ -1073,8 +1240,9 @@ def merge_to_main(project_id: int, request: Request, db: Session = Depends(get_d
     merged_counts = {"files": 0, "threads": 0, "datasets": 0, "tables": 0}
 
     # Merge Files: copy physical files and create Main records
-    src_dir = os.path.join(UPLOAD_DIR, f"project_{project.id}", f"branch_{current_b.name}")
-    dst_dir = os.path.join(UPLOAD_DIR, f"project_{project.id}", f"branch_{main_b.name}")
+    paths_files = _project_dirs(project.id)["files_root"]
+    src_dir = os.path.join(paths_files, f"branch_{current_b.name}")
+    dst_dir = os.path.join(paths_files, f"branch_{main_b.name}")
     os.makedirs(dst_dir, exist_ok=True)
     files = db.query(FileEntry).filter(FileEntry.project_id == project.id, FileEntry.branch_id == current_b.id).all()
     for f in files:
@@ -1130,8 +1298,8 @@ def merge_to_main(project_id: int, request: Request, db: Session = Depends(get_d
 
     # Merge user tables (SQLite only)
     try:
-        with engine.begin() as conn:
-            if _dialect() == "sqlite":
+        with _get_project_engine(project.id).begin() as conn:
+            if _dialect(_get_project_engine(project.id)) == "sqlite":
                 # Find tables excluding our internal ones
                 tbls = [r[0] for r in conn.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
                 skip = {"projects","branches","threads","files","datasets","settings","versions","sql_undo_log"}
@@ -1181,7 +1349,8 @@ def merge_to_main(project_id: int, request: Request, db: Session = Depends(get_d
 # -------------------- Delete all files in branch --------------------
 
 @app.post("/project/{project_id}/files/delete_all")
-def delete_all_files(project_id: int, request: Request, db: Session = Depends(get_db)):
+def delete_all_files(project_id: int, request: Request, db: Session = Depends(get_project_db)):
+    ensure_project_initialized(project_id)
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         return RedirectResponse("/", status_code=303)
@@ -1206,7 +1375,8 @@ def delete_all_files(project_id: int, request: Request, db: Session = Depends(ge
 # -------------------- Make existing table branch-aware (SQLite) --------------------
 
 @app.post("/project/{project_id}/sql/make_branch_aware")
-def make_table_branch_aware(project_id: int, request: Request, table: str = Form(...), db: Session = Depends(get_db)):
+def make_table_branch_aware(project_id: int, request: Request, table: str = Form(...), db: Session = Depends(get_project_db)):
+    ensure_project_initialized(project_id)
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         return RedirectResponse("/", status_code=303)
@@ -1220,8 +1390,8 @@ def make_table_branch_aware(project_id: int, request: Request, table: str = Form
 
     tbl = _safe_identifier(table)
     try:
-        with engine.begin() as conn:
-            if _dialect() != "sqlite":
+        with _get_project_engine(project.id).begin() as conn:
+            if _dialect(_get_project_engine(project.id)) != "sqlite":
                 return RedirectResponse(f"/project/{project.id}?branch_id={current_b.id}&msg=Only+SQLite+supported+for+now", status_code=303)
             # Introspect
             info = conn.exec_driver_sql(f"PRAGMA table_info({tbl})").fetchall()
@@ -1272,7 +1442,8 @@ BRANCH_AWARE_SQL_DEFAULT = os.getenv("CEDARPY_SQL_BRANCH_MODE", "1") == "1"
 # -------------------- Undo last SQL --------------------
 
 @app.post("/project/{project_id}/sql/undo_last")
-def undo_last_sql(project_id: int, request: Request, db: Session = Depends(get_db)):
+def undo_last_sql(project_id: int, request: Request, db: Session = Depends(get_project_db)):
+    ensure_project_initialized(project_id)
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         return RedirectResponse("/", status_code=303)
@@ -1290,7 +1461,7 @@ def undo_last_sql(project_id: int, request: Request, db: Session = Depends(get_d
     table = _safe_identifier(log.table_name)
     pk_cols = log.pk_columns or []
     try:
-        with engine.begin() as conn:
+        with _get_project_engine(project.id).begin() as conn:
             if log.op == "insert":
                 # Delete rows we inserted
                 for row in (log.rows_after or []):
@@ -1331,11 +1502,13 @@ def undo_last_sql(project_id: int, request: Request, db: Session = Depends(get_d
 
 # -------------------- SQL Helpers for Branch-Aware Mode --------------------
 
-def _dialect() -> str:
-    return engine.dialect.name
+def _dialect(engine_obj=None) -> str:
+    eng = engine_obj or registry_engine
+    return eng.dialect.name
 
 
 def _table_has_branch_columns(conn, table: str) -> bool:
+    # In per-project mode, branch-aware columns are optional. Keep helpers for backward-compat actions.
     try:
         if _dialect() == "sqlite":
             rows = conn.exec_driver_sql(f"PRAGMA table_info({table})").fetchall()
@@ -1374,6 +1547,7 @@ def _safe_identifier(name: str) -> str:
 
 
 def _preprocess_sql_branch_aware(conn, sql_text: str, project_id: int, branch_id: int, main_id: int) -> Tuple[str, bool]:
+    # In per-project DB mode, we no longer inject project_id/branch_id. Keep minimal compatibility for legacy tables.
     """
     Returns (possibly transformed_sql, transformed_flag).
     Best-effort handling for simple single-table queries.
@@ -1463,7 +1637,8 @@ def _preprocess_sql_branch_aware(conn, sql_text: str, project_id: int, branch_id
 
 
 @app.post("/project/{project_id}/sql", response_class=HTMLResponse)
-def execute_sql(project_id: int, request: Request, sql: str = Form(...), db: Session = Depends(get_db)):
+def execute_sql(project_id: int, request: Request, sql: str = Form(...), db: Session = Depends(get_project_db)):
+    ensure_project_initialized(project_id)
     # resolve current project and branch
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
@@ -1502,13 +1677,13 @@ def execute_sql(project_id: int, request: Request, sql: str = Form(...), db: Ses
         max_rows = int(os.getenv("CEDARPY_SQL_MAX_ROWS", "200"))
     except Exception:
         max_rows = 200
-    with engine.begin() as conn:
+    with _get_project_engine(project.id).begin() as conn:
         main = db.query(Branch).filter(Branch.project_id == project.id, Branch.name == "Main").first()
         transformed_sql, transformed = _preprocess_sql_branch_aware(conn, sql, project.id, current.id, main.id)
     result = _execute_sql_with_undo(db, transformed_sql, project.id, current.id, max_rows=max_rows)
     sql_block = _render_sql_result_html(result)
 
-    return layout(project.title, project_page_html(project, branches, current, files, threads, datasets, msg="Branch-aware SQL mode is active", sql_result_block=sql_block))
+    return layout(project.title, project_page_html(project, branches, current, files, threads, datasets, msg="Per-project database is active", sql_result_block=sql_block))
 
 def _render_sql_result_html(result: dict) -> str:
     if not result:
@@ -1566,7 +1741,8 @@ def _extract_where_clause(sql_text: str) -> Optional[str]:
     return s[i+7:].strip()
 
 
-def _execute_sql(sql_text: str, max_rows: int = 200) -> dict:
+def _execute_sql(sql_text: str, project_id: int, max_rows: int = 200) -> dict:
+    # Execute against the per-project database
     sql_text = (sql_text or "").strip()
     if not sql_text:
         return {"success": False, "error": "Empty SQL"}
@@ -1574,8 +1750,8 @@ def _execute_sql(sql_text: str, max_rows: int = 200) -> dict:
     stype = first
     result: dict = {"success": False, "statement_type": stype}
     try:
-        with engine.begin() as conn:
-            if first == "select" or first == "pragma" or first == "show":
+        with _get_project_engine(project_id).begin() as conn:
+            if first in ("select", "pragma", "show"):
                 res = conn.exec_driver_sql(sql_text)
                 cols = list(res.keys()) if res.returns_rows else []
                 rows = []
@@ -1591,7 +1767,7 @@ def _execute_sql(sql_text: str, max_rows: int = 200) -> dict:
                     "columns": cols,
                     "rows": rows,
                     "rowcount": None,
-                    "truncated": res.returns_rows and (count >= max_rows)
+                    "truncated": res.returns_rows and (count >= max_rows),
                 })
             else:
                 res = conn.exec_driver_sql(sql_text)
@@ -1610,7 +1786,7 @@ def _execute_sql_with_undo(db: Session, sql_text: str, project_id: int, branch_i
         return {"success": False, "error": "Empty SQL"}
     first = s.split()[0].lower() if s.split() else ""
     if first in ("select", "pragma", "show", "create"):
-        return _execute_sql(s, max_rows=max_rows)
+        return _execute_sql(s, project_id, max_rows=max_rows)
 
     # Simple parse
     m_ins = re.match(r"insert\s+into\s+([a-zA-Z0-9_]+)\s*\(([^\)]+)\)\s*values\s*\((.+)\)\s*;?$", s, flags=re.IGNORECASE | re.DOTALL)
@@ -1636,7 +1812,7 @@ def _execute_sql_with_undo(db: Session, sql_text: str, project_id: int, branch_i
 
     if not op or not table:
         # Fallback
-        return _execute_sql(s, max_rows=max_rows)
+        return _execute_sql(s, project_id, max_rows=max_rows)
 
     # Only capture for manageable row counts
     try:
@@ -1644,7 +1820,7 @@ def _execute_sql_with_undo(db: Session, sql_text: str, project_id: int, branch_i
     except Exception:
         undo_cap = 1000
 
-    with engine.begin() as conn:
+    with _get_project_engine(project_id).begin() as conn:
         # Determine PK columns if any
         pk_cols = _get_pk_columns(conn, table)
         rows_before = []
@@ -1686,7 +1862,7 @@ def _execute_sql_with_undo(db: Session, sql_text: str, project_id: int, branch_i
                         rows_after.append({cols2[i]: r[i] for i in range(len(cols2))})
                 else:
                     # SQLite last_insert_rowid for single integer PK
-                    if _dialect() == "sqlite" and len(pk_cols) == 1:
+                    if _dialect(_get_project_engine(project_id)) == "sqlite" and len(pk_cols) == 1:
                         pk = pk_cols[0]
                         rid = conn.exec_driver_sql("SELECT last_insert_rowid()").scalar()
                         res2 = conn.exec_driver_sql(f"SELECT * FROM {table} WHERE {pk} = {rid}")
@@ -1721,32 +1897,65 @@ def _execute_sql_with_undo(db: Session, sql_text: str, project_id: int, branch_i
             db.rollback()
 
     # Return a generic result (we can run a SELECT for UPDATE/DELETE to show rowcount)
-    return _execute_sql(f"SELECT changes() as affected" if _dialect()=="sqlite" else s, max_rows=max_rows)
+    return _execute_sql(
+        f"SELECT changes() as affected" if _dialect(_get_project_engine(project_id)) == "sqlite" else s,
+        project_id,
+        max_rows=max_rows,
+    )
 
 @app.get("/", response_class=HTMLResponse)
-def home(request: Request, db: Session = Depends(get_db)):
+def home(request: Request, db: Session = Depends(get_registry_db)):
+    # Central registry for list of projects
     projects = db.query(Project).order_by(Project.created_at.desc()).all()
     return layout("Cedar", projects_list_html(projects))
 
 
 @app.post("/projects/create")
-def create_project(title: str = Form(...), db: Session = Depends(get_db)):
+def create_project(title: str = Form(...), db: Session = Depends(get_registry_db)):
     title = title.strip()
     if not title:
         return RedirectResponse("/", status_code=303)
-    # create project
+    # create project in registry
     p = Project(title=title)
     db.add(p)
     db.commit()
     db.refresh(p)
     add_version(db, "project", p.id, {"title": p.title})
-    # ensure main branch
-    main = ensure_main_branch(db, p.id)
-    return RedirectResponse(f"/project/{p.id}?branch_id={main.id}", status_code=303)
+
+    # Initialize per-project DB schema and seed project + Main branch
+    try:
+        eng = _get_project_engine(p.id)
+        Base.metadata.create_all(eng)
+        SessionLocal = sessionmaker(bind=eng, autoflush=False, autocommit=False, future=True)
+        pdb = SessionLocal()
+        try:
+            # Insert the project row in the project DB with the same ID
+            if not pdb.query(Project).filter(Project.id == p.id).first():
+                pdb.add(Project(id=p.id, title=p.title))
+                pdb.commit()
+            ensure_main_branch(pdb, p.id)
+        finally:
+            pdb.close()
+        _ensure_project_storage(p.id)
+    except Exception:
+        pass
+
+    # Redirect into the new project's Main branch
+    # Open per-project DB to get Main ID again (safe)
+    try:
+        eng = _get_project_engine(p.id)
+        SessionLocal = sessionmaker(bind=eng, autoflush=False, autocommit=False, future=True)
+        with SessionLocal() as pdb:
+            main = ensure_main_branch(pdb, p.id)
+            main_id = main.id
+    except Exception:
+        main_id = 1
+    return RedirectResponse(f"/project/{p.id}?branch_id={main_id}", status_code=303)
 
 
 @app.get("/project/{project_id}", response_class=HTMLResponse)
-def view_project(project_id: int, branch_id: Optional[int] = None, msg: Optional[str] = None, db: Session = Depends(get_db)):
+def view_project(project_id: int, branch_id: Optional[int] = None, msg: Optional[str] = None, db: Session = Depends(get_project_db)):
+    ensure_project_initialized(project_id)
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         return layout("Not found", "<h1>Project not found</h1>")
@@ -1780,7 +1989,8 @@ def view_project(project_id: int, branch_id: Optional[int] = None, msg: Optional
 
 
 @app.post("/project/{project_id}/branches/create")
-def create_branch(project_id: int, name: str = Form(...), db: Session = Depends(get_db)):
+def create_branch(project_id: int, name: str = Form(...), db: Session = Depends(get_project_db)):
+    ensure_project_initialized(project_id)
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         return RedirectResponse("/", status_code=303)
@@ -1804,7 +2014,8 @@ def create_branch(project_id: int, name: str = Form(...), db: Session = Depends(
 
 
 @app.post("/project/{project_id}/threads/create")
-def create_thread(project_id: int, request: Request, title: str = Form(...), db: Session = Depends(get_db)):
+def create_thread(project_id: int, request: Request, title: str = Form(...), db: Session = Depends(get_project_db)):
+    ensure_project_initialized(project_id)
     # branch selected via query parameter
     branch_id = request.query_params.get("branch_id")
     try:
@@ -1826,7 +2037,8 @@ def create_thread(project_id: int, request: Request, title: str = Form(...), db:
 
 
 @app.post("/project/{project_id}/files/upload")
-def upload_file(project_id: int, request: Request, file: UploadFile = File(...), structure: str = Form(...), db: Session = Depends(get_db)):
+def upload_file(project_id: int, request: Request, file: UploadFile = File(...), structure: str = Form(...), db: Session = Depends(get_project_db)):
+    ensure_project_initialized(project_id)
     branch_id = request.query_params.get("branch_id")
     try:
         branch_id = int(branch_id) if branch_id is not None else None
@@ -1839,9 +2051,10 @@ def upload_file(project_id: int, request: Request, file: UploadFile = File(...),
 
     branch = current_branch(db, project.id, branch_id)
 
-    # Determine path: UPLOAD_DIR/project_{id}/branch_{name}/
+    # Determine path: per-project files root
+    paths = _project_dirs(project.id)
     branch_dir_name = f"branch_{branch.name}"
-    project_dir = os.path.join(UPLOAD_DIR, f"project_{project.id}", branch_dir_name)
+    project_dir = os.path.join(paths["files_root"], branch_dir_name)
     os.makedirs(project_dir, exist_ok=True)
 
     original_name = file.filename or "upload.bin"
