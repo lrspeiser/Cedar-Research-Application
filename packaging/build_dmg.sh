@@ -55,8 +55,12 @@ export CEDARPY_UPLOAD_DIR="${CEDARPY_UPLOAD_DIR:-$HOME/CedarPyUploads}"
 # Default-on Shell API in DMG build; override by unsetting or setting to 0 before launch
 export CEDARPY_SHELL_API_ENABLED="${CEDARPY_SHELL_API_ENABLED:-1}"
 mkdir -p "$CEDARPY_UPLOAD_DIR"
-chmod +x ./cedarpy
-./cedarpy
+# Copy the binary off the (possibly noexec) DMG and run from user directory
+DEST="$HOME/CedarPyApp/bin"
+mkdir -p "$DEST"
+cp -f ./cedarpy "$DEST/cedarpy"
+chmod +x "$DEST/cedarpy"
+exec "$DEST/cedarpy"
 EOS
 chmod +x "$STAGE/Run ${APP_NAME}.command"
 
@@ -68,7 +72,7 @@ on run
   set appPath to (path to me as alias)
   set dirPath to do shell script "dirname " & quoted form of POSIX path of appPath
 tell application "Terminal"
-    do script "export CEDARPY_SHELL_API_ENABLED=\"1\"; export CEDARPY_UPLOAD_DIR=\"$HOME/CedarPyUploads\"; mkdir -p \"$HOME/CedarPyUploads\"; cd " & quoted form of dirPath & " && chmod +x ./cedarpy && ./cedarpy"
+    do script "export CEDARPY_SHELL_API_ENABLED=\"1\"; export CEDARPY_UPLOAD_DIR=\"$HOME/CedarPyUploads\"; mkdir -p \"$HOME/CedarPyUploads\"; cd " & quoted form of dirPath & " && DEST=\"$HOME/CedarPyApp/bin\"; mkdir -p \"$HOME/CedarPyApp/bin\"; cp -f ./cedarpy \"$HOME/CedarPyApp/bin/cedarpy\"; chmod +x \"$HOME/CedarPyApp/bin/cedarpy\"; \"$HOME/CedarPyApp/bin/cedarpy\""
     activate
   end tell
 end run
