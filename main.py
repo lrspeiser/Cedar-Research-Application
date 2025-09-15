@@ -1113,7 +1113,7 @@ def shell_ui(request: Request):
         </div>
         <div style='height:10px'></div>
         <button id='runBtn' type='button'>Run</button>
-        <button id='openWorldBtn' type='button' class='secondary'>Open World</button>
+        <button id='openWorldBtn' type='button' class='secondary' onclick='(function(){try{var o=document.getElementById("output"); if(o){o.textContent=""; o.textContent+="[ui] open world clicked";} var t=document.getElementById("script"); if(t){t.value="echo hello world";} var rb=document.getElementById("runBtn"); if(rb){rb.click();}}catch(e){console.error("[openworld-error]", e);}})()'>Open World</button>
         <button id='stopBtn' type='button' class='secondary' disabled>Stop</button>
       </div>
 
