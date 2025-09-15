@@ -1113,6 +1113,7 @@ def shell_ui(request: Request):
         </div>
         <div style='height:10px'></div>
         <button id='runBtn' type='button'>Run</button>
+        <button id='openWorldBtn' type='button' class='secondary'>Open World</button>
         <button id='stopBtn' type='button' class='secondary' disabled>Stop</button>
       </div>
 
@@ -1128,6 +1129,7 @@ def shell_ui(request: Request):
       <script>
         const runBtn = document.getElementById('runBtn');
         const stopBtn = document.getElementById('stopBtn');
+        const openWorldBtn = document.getElementById('openWorldBtn');
         const output = document.getElementById('output');
         const statusEl = document.getElementById('status');
         let currentJob = null;
@@ -1234,6 +1236,22 @@ def shell_ui(request: Request):
             ws = null;
           } catch (e) { console.error('[stop-error]', e); append('[stop-error] ' + e); }
         });
+
+        // Quick action: Open World — one click to run a simple script and stream output
+        if (openWorldBtn) {
+          openWorldBtn.addEventListener('click', () => {
+            try {
+              output.textContent = '';
+              append('[ui] open world clicked');
+              const textarea = document.getElementById('script');
+              if (textarea) { textarea.value = 'echo open world'; }
+              runBtn && runBtn.click();
+            } catch (e) {
+              console.error('[openworld-error]', e);
+              append('[openworld-error] ' + e);
+            }
+          });
+        }
       </script>
     """
     body = body.replace("__DEFAULT_SHELL__", default_shell)
