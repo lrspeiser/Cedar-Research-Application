@@ -7,9 +7,12 @@ import time
 import urllib.request
 import urllib.error
 from datetime import datetime
+from threading import Thread
 
 # Initialize logging similar to run_cedarpy
 LOG_DIR_DEFAULT = os.path.join(os.path.expanduser("~"), "Library", "Logs", "CedarPy")
+LOCK_PATH = os.path.join(LOG_DIR_DEFAULT, "cedarqt.lock")
+
 
 def _init_logging() -> str:
     log_dir = os.getenv("CEDARPY_LOG_DIR", LOG_DIR_DEFAULT)
@@ -26,10 +29,26 @@ def _init_logging() -> str:
 
 _log_path = _init_logging()
 
+# Single-instance guard using a lock file
+_single_lock_fh = None
+try:
+    os.makedirs(LOG_DIR_DEFAULT, exist_ok=True)
+    # Use O_CREAT|O_EXCL to create a PID file atomically
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+    _single_lock_fh = os.open(LOCK_PATH, flags, 0o644)
+    os.write(_single_lock_fh, str(os.getpid()).encode("utf-8"))
+except FileExistsError:
+    # Another instance is likely running; bail out safely
+    print(f"[cedarqt] another instance detected via {LOCK_PATH}; exiting")
+    sys.exit(0)
+except Exception as e:
+    # Non-fatal; continue but log
+    print(f"[cedarqt] lock warning: {e}")
+
 # Qt imports (PySide6 + QtWebEngine)
 from PySide6.QtCore import Qt, QUrl, QObject
-from PySide6.QtWidgets import QApplication, QMainWindow
-from PySide6.QtWebEngineCore import QWebEngineUrlRequestInterceptor, QWebEnginePage
+from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox
+from PySide6.QtWebEngineCore import QWebEngineUrlRequestInterceptor, QWebEnginePage, QWebEngineProfile
 from PySide6.QtWebEngineWidgets import QWebEngineView
 
 class RequestLogger(QWebEngineUrlRequestInterceptor):
@@ -77,18 +96,25 @@ def _wait_for_server(url: str, timeout_sec: float = 20.0) -> bool:
     return False
 
 
-def _launch_server(host: str, port: int):
-    env = os.environ.copy()
-    env.setdefault("CEDARPY_OPEN_BROWSER", "0")  # prevent run_cedarpy from opening a system browser
-    # Prefer uvicorn CLI; avoid reload inside packaged app
-    cmd = [sys.executable, "-m", "uvicorn", "main:app", "--host", host, "--port", str(port), "--log-level", "info"]
-    print(f"[cedarqt] launching server: {' '.join(cmd)}")
+def _launch_server_inprocess(host: str, port: int):
+    # Run uvicorn in-process so PyInstaller bundles work without relying on -m
+    os.environ.setdefault("CEDARPY_OPEN_BROWSER", "0")
+    try:
+        from main import app as fastapi_app
+        from uvicorn import Config, Server
+    except Exception as e:
+        print(f"[cedarqt] failed to import server app: {e}")
+        return None, None
     log_dir = os.getenv("CEDARPY_LOG_DIR", LOG_DIR_DEFAULT)
     os.makedirs(log_dir, exist_ok=True)
     server_log_path = os.path.join(log_dir, "uvicorn_from_qt.log")
-    server_log = open(server_log_path, "a", buffering=1)
-    proc = subprocess.Popen(cmd, stdout=server_log, stderr=server_log, env=env)
-    return proc
+    # uvicorn logs will go to stdout/stderr; they are captured by our redirected f in _init_logging
+    config = Config(app=fastapi_app, host=host, port=port, log_level="info")
+    server = Server(config)
+    t = Thread(target=server.run, daemon=True)
+    print(f"[cedarqt] starting uvicorn in-process on http://{host}:{port}")
+    t.start()
+    return server, t
 
 
 def main():
@@ -96,16 +122,15 @@ def main():
     port = int(os.getenv("CEDARPY_PORT", "8000"))
     url = f"http://{host}:{port}/"
 
-    # Start server
-    proc = _launch_server(host, port)
+    # Start server (in-process)
+    server, server_thread = _launch_server_inprocess(host, port)
 
     # Prepare Qt app and view
     app = QApplication(sys.argv)
 
     # Interceptor must be installed on a profile; default profile is fine for now
     try:
-        from PySide6.QtWebEngineCore import QWebEngineProfile
-        QWebEngineProfile.defaultProfile().setRequestInterceptor(RequestLogger())
+        QWebEngineProfile.defaultProfile().setUrlRequestInterceptor(RequestLogger())
     except Exception as e:
         print(f"[cedarqt] failed to install request interceptor: {e}")
 
@@ -119,21 +144,46 @@ def main():
     win.setCentralWidget(view)
     win.resize(1200, 800)
 
-    # Poll server before showing; otherwise we just load and let it spin
-    _wait_for_server(url, timeout_sec=25.0)
+    # Poll server before showing; otherwise quit with a helpful dialog
+    if not _wait_for_server(url, timeout_sec=25.0):
+        try:
+            QMessageBox.critical(None, "CedarPy", "Server failed to start on 127.0.0.1:" + str(port) + "\nCheck logs in ~/Library/Logs/CedarPy.")
+        except Exception:
+            pass
+        # Clean up lock and exit
+        try:
+            if _single_lock_fh is not None:
+                os.close(_single_lock_fh)
+                os.remove(LOCK_PATH)
+        except Exception:
+            pass
+        sys.exit(1)
 
     win.show()
 
     # Ensure child server is terminated on exit
     def _shutdown():
         try:
-            if proc.poll() is None:
-                print("[cedarqt] terminating server ...")
-                proc.terminate()
+            if server is not None:
+                print("[cedarqt] stopping server ...")
                 try:
-                    proc.wait(timeout=5)
+                    # signal graceful shutdown
+                    server.should_exit = True  # type: ignore[attr-defined]
                 except Exception:
-                    proc.kill()
+                    pass
+                # Wait briefly for thread to finish
+                try:
+                    if server_thread and server_thread.is_alive():
+                        server_thread.join(timeout=5)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        # Release single-instance lock
+        try:
+            if _single_lock_fh is not None:
+                os.close(_single_lock_fh)
+                os.remove(LOCK_PATH)
         except Exception:
             pass
 
