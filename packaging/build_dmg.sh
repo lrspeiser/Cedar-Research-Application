@@ -35,6 +35,7 @@ pushd "$ROOT_DIR" >/dev/null
   --distpath "$ROOT_DIR/dist" \
   --workpath "$BUILD" \
   --specpath "$BUILD" \
+  --hidden-import main \
   run_cedarpy.py
 popd >/dev/null
 
