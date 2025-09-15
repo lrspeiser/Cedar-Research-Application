@@ -1053,10 +1053,10 @@ def shell_ui(request: Request):
     default_shell = html.escape(os.environ.get("SHELL", "/bin/zsh"))
     body = """
       <h1>Shell</h1>
-      <p class='muted small'>Runs scripts with your user privileges via {{SHELL or /bin/zsh}}. Output streams live below. <strong>Danger:</strong> Any command you run can modify your system.</p>
+      <p class='muted small'>Minimal shell UI. Proves WebSocket handshake on load and runs a simple script.</p>
       <div class='card' style='flex:1'>
         <label for='script'>Script</label>
-        <textarea id='script' style='width:100%; height:180px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:13px;' placeholder='echo Hello world'></textarea>
+        <textarea id='script' style='width:100%; height:120px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:13px;'>echo hello world</textarea>
         <div style='height:8px'></div>
         <div class='row'>
           <div style='flex:1'>
@@ -1097,7 +1097,24 @@ def shell_ui(request: Request):
         }
         function disableRun(disabled) { runBtn.disabled = disabled; stopBtn.disabled = !disabled; }
 
-runBtn.addEventListener('click', async () => {
+        // Prove WS handshake at page load via /ws/health
+        (function healthWS(){
+          const token = document.getElementById('apiToken')?.value || null;
+          const wsScheme = (location.protocol === 'https:') ? 'wss' : 'ws';
+          const qs = token ? ('?token='+encodeURIComponent(token)) : '';
+          try {
+            const hws = new WebSocket(`${wsScheme}://${location.host}/ws/health${qs}`);
+            hws.onopen = () => { console.log('[ws-health-open]'); append('[ws-health-open]\n'); };
+            hws.onmessage = (e) => { console.log('[ws-health]', e.data); append('[ws-health] '+e.data+'\n'); };
+            hws.onerror = (e) => { console.error('[ws-health-error]', e); append('[ws-health-error]\n'); };
+            hws.onclose = (e) => { console.log('[ws-health-close]', e?.code); append('[ws-health-close '+(e?.code||'')+']\n'); };
+          } catch (e) {
+            console.error('[ws-health-exc]', e);
+            append('[ws-health-exc] '+e+'\n');
+          }
+        })();
+
+        runBtn.addEventListener('click', async () => {
           output.textContent = '';
           console.log('[ui] run clicked');
           append('[ui] run clicked\n');
@@ -1132,7 +1149,7 @@ runBtn.addEventListener('click', async () => {
                 try { ws && ws.close(); } catch {}
                 ws = null;
               } else {
-                append(line); // server includes newlines as emitted
+                append(line);
               }
             };
             ws.onerror = (e) => {
@@ -1294,6 +1311,54 @@ async def ws_shell(websocket: WebSocket, job_id: str):
             print(f"[ws] closed job_id={job_id} status={job.status}")
         except Exception:
             pass
+
+# WebSocket health/handshake endpoint
+@app.websocket("/ws/health")
+async def ws_health(websocket: WebSocket):
+    token_q = websocket.query_params.get("token") if hasattr(websocket, "query_params") else None
+    if not SHELL_API_ENABLED:
+        try:
+            print("[ws-health] reject disabled")
+        except Exception:
+            pass
+        await websocket.close(code=4403)
+        return
+    if SHELL_API_TOKEN:
+        cookie_tok = websocket.cookies.get("Cedar-Shell-Token") if hasattr(websocket, "cookies") else None
+        tok = token_q or cookie_tok
+        if tok != SHELL_API_TOKEN:
+            try:
+                print("[ws-health] reject auth")
+            except Exception:
+                pass
+            await websocket.close(code=4401)
+            return
+    else:
+        try:
+            client_host = (websocket.client.host if websocket.client else "")
+        except Exception:
+            client_host = ""
+        if client_host not in {"127.0.0.1", "::1", "localhost"}:
+            try:
+                print(f"[ws-health] reject non-local from={client_host}")
+            except Exception:
+                pass
+            await websocket.close(code=4401)
+            return
+    try:
+        ch = (websocket.client.host if websocket.client else "?")
+        print(f"[ws-health] accept from={ch}")
+    except Exception:
+        pass
+    await websocket.accept()
+    try:
+        await websocket.send_text("WS-OK")
+    except Exception:
+        pass
+    try:
+        await websocket.close()
+    except Exception:
+        pass
 
 
 @app.post("/api/shell/stop/{job_id}")
