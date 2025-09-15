@@ -5,19 +5,35 @@ from PyInstaller.utils.hooks import collect_all
 
 block_cipher = None
 
-# Collect Qt (PySide6) resources so QtWebEngine works inside the bundle
-qt_datas, qt_bins, qt_hidden = collect_all('PySide6')
-shib_datas, shib_bins, shib_hidden = collect_all('shiboken6')
+# Collect only the PySide6 components we actually use to avoid framework duplication issues
+modules = [
+    'PySide6.QtCore',
+    'PySide6.QtGui',
+    'PySide6.QtWidgets',
+    'PySide6.QtWebEngineCore',
+    'PySide6.QtWebEngineWidgets',
+    'PySide6.QtWebChannel',
+]
 
-datas = qt_datas + shib_datas
-binaries = qt_bins + shib_bins
-hiddenimports = list(set(qt_hidden + shib_hidden + [
-    'PySide6.QtCore', 'PySide6.QtGui', 'PySide6.QtWidgets',
-    'PySide6.QtWebEngineCore', 'PySide6.QtWebEngineWidgets', 'PySide6.QtWebChannel',
-]))
+datas = []
+binaries = []
+hiddenimports = []
+for m in modules:
+    d, b, h = collect_all(m)
+    datas += d
+    binaries += b
+    hiddenimports += h
 
-project_dir = os.path.abspath(os.path.dirname(__file__))
-repo_root = os.path.abspath(os.path.join(project_dir, '..'))
+# Also collect shiboken6 support libs
+shib_d, shib_b, shib_h = collect_all('shiboken6')
+datas += shib_d
+binaries += shib_b
+hiddenimports += shib_h
+
+hiddenimports = list(set(hiddenimports))
+
+# Resolve repo root relative to current working directory when PyInstaller runs
+repo_root = os.path.abspath(os.getcwd())
 
 a = Analysis([
     os.path.join(repo_root, 'cedarqt.py'),
@@ -32,12 +48,21 @@ pyz = PYZ(a.pure, a.zipped_data,
              cipher=block_cipher)
 exe = EXE(pyz,
           a.scripts,
-          a.binaries,
-          a.zipfiles,
-          a.datas,
+          exclude_binaries=True,
           name='CedarPy',
           debug=False,
           bootloader_ignore_signals=False,
           strip=False,
           upx=False,
-          console=False )
+          console=False)
+coll = COLLECT(exe,
+               a.binaries,
+               a.zipfiles,
+               a.datas,
+               strip=False,
+               upx=False,
+               name='CedarPy')
+app = BUNDLE(coll,
+             name='CedarPy.app',
+             icon=None,
+             bundle_identifier='is.grue.cedarpy')

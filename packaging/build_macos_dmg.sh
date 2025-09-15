@@ -13,9 +13,9 @@ rm -rf build dist
 # Build the app bundle
 python3 -m PyInstaller --clean packaging/cedarpy.spec
 
-# Create a DMG
+# Create a DMG with the .app bundle at root
 mkdir -p dist
 DMG_PATH="dist/CedarPy.dmg"
-hdiutil create -volname "CedarPy" -srcfolder dist/CedarPy -ov -format UDZO "$DMG_PATH"
+hdiutil create -volname "CedarPy" -srcfolder dist/CedarPy.app -ov -format UDZO "$DMG_PATH"
 
 echo "DMG created: $DMG_PATH"
