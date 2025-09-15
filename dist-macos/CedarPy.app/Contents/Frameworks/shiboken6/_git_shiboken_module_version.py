@@ -1,0 +1,1 @@
+../../Resources/shiboken6/_git_shiboken_module_version.py

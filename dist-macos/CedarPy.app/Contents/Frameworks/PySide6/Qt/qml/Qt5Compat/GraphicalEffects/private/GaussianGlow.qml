@@ -1,0 +1,1 @@
+../../../../../../../Resources/PySide6/Qt/qml/Qt5Compat/GraphicalEffects/private/GaussianGlow.qml

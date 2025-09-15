@@ -1,0 +1,1 @@
+../../Resources/shiboken6/Shiboken.pyi

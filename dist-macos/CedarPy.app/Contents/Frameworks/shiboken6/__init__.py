@@ -1,0 +1,1 @@
+../../Resources/shiboken6/__init__.py

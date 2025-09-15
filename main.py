@@ -892,11 +892,12 @@ SELECT * FROM demo LIMIT 10;""")
 # ----------------------------------------------------------------------------------
 
 class ShellJob:
-    def __init__(self, script: str, shell_path: Optional[str] = None):
+    def __init__(self, script: str, shell_path: Optional[str] = None, trace_x: bool = False):
         self.id = uuid.uuid4().hex
         self.script = script
         # Preserve requested shell_path if provided; resolution and fallbacks happen at run-time
         self.shell_path = shell_path or os.environ.get("SHELL")
+        self.trace_x = bool(trace_x)
         self.start_time = datetime.utcnow()
         self.end_time: Optional[datetime] = None
         self.status = "starting"  # starting|running|finished|error|killed
@@ -980,13 +981,27 @@ def _run_job(job: ShellJob):
             pass
         return
 
-    args = _args_for(resolved, job.script)
+    # Optionally enable shell xtrace to echo commands as they are executed
+    effective_script = job.script
+    try:
+        base_shell = os.path.basename(resolved)
+    except Exception:
+        base_shell = ''
+    if job.trace_x:
+        if base_shell in {"bash", "zsh", "ksh", "sh"}:
+            effective_script = "set -x; " + effective_script
+        else:
+            # Non-POSIX shells may not support set -x; we note this and continue without it
+            job.append_line(f"[trace] requested but not supported for shell={base_shell}\n")
+    args = _args_for(resolved, effective_script)
 
     # Start process group so Stop can kill descendants
     job.status = "running"
     # Emit startup context to both UI and log file
     job.append_line(f"[start] job_id={job.id} at={datetime.utcnow().isoformat()}Z\n")
     job.append_line(f"[using-shell] path={resolved} args={' '.join(args[:-1])} (script length={len(job.script)} chars)\n")
+    if job.trace_x:
+        job.append_line("[trace] set -x enabled\n")
     job.append_line(f"[cwd] {os.getcwd()}\n")
     job.append_line(f"[log] {job.log_path}\n")
 
@@ -1036,8 +1051,8 @@ _shell_jobs: Dict[str, ShellJob] = {}
 _shell_jobs_lock = threading.Lock()
 
 
-def start_shell_job(script: str, shell_path: Optional[str] = None) -> ShellJob:
-    job = ShellJob(script=script, shell_path=shell_path)
+def start_shell_job(script: str, shell_path: Optional[str] = None, trace_x: bool = False) -> ShellJob:
+    job = ShellJob(script=script, shell_path=shell_path, trace_x=trace_x)
     with _shell_jobs_lock:
         _shell_jobs[job.id] = job
     t = threading.Thread(target=_run_job, args=(job,), daemon=True)
@@ -1082,6 +1097,7 @@ def require_shell_enabled_and_auth(request: Request, x_api_token: Optional[str] 
 class ShellRunRequest(BaseModel):
     script: str
     shell_path: Optional[str] = None
+    trace_x: Optional[bool] = None
 
 @app.get("/shell", response_class=HTMLResponse)
 def shell_ui(request: Request):
@@ -1112,8 +1128,10 @@ def shell_ui(request: Request):
           </div>
         </div>
         <div style='height:10px'></div>
+        <label class='small'><input id='traceX' type='checkbox' checked /> Trace commands (-x)</label>
+        <div style='height:10px'></div>
         <button id='runBtn' type='button'>Run</button>
-        <button id='openWorldBtn' type='button' class='secondary' onclick='(function(){try{var o=document.getElementById("output"); if(o){o.textContent=""; o.textContent+="[ui] open world clicked";} var t=document.getElementById("script"); if(t){t.value="echo hello world";} var rb=document.getElementById("runBtn"); if(rb){rb.click();}}catch(e){console.error("[openworld-error]", e);}})()'>Open World</button>
+        <button id='openWorldBtn' type='button' class='secondary'>Open World</button>
         <button id='stopBtn' type='button' class='secondary' disabled>Stop</button>
       </div>
 
@@ -1126,13 +1144,21 @@ def shell_ui(request: Request):
         <pre id='output' style='min-height:220px; max-height:520px; overflow:auto; background:#0b1021; color:#e6e6e6; padding:12px; border-radius:6px;'></pre>
       </div>
 
+      <div style='height:16px'></div>
+      <div class='card'>
+        <h3 style='margin:0 0 8px 0'>Submitted Commands</h3>
+        <ul id='historyList' class='small' style='margin:0; padding-left:18px; max-height:240px; overflow:auto;'></ul>
+      </div>
+
       <script>
         const runBtn = document.getElementById('runBtn');
         const stopBtn = document.getElementById('stopBtn');
         const openWorldBtn = document.getElementById('openWorldBtn');
         const output = document.getElementById('output');
         const statusEl = document.getElementById('status');
+        const historyList = document.getElementById('historyList');
         let currentJob = null;
+        let lastHistoryItem = null;
         let ws = null;
 
         function setStatus(s) { statusEl.textContent = s; }
@@ -1141,6 +1167,18 @@ def shell_ui(request: Request):
           output.scrollTop = output.scrollHeight;
         }
         function disableRun(disabled) { runBtn.disabled = disabled; stopBtn.disabled = !disabled; }
+        function addHistory(script, shellPath) {
+          if (!historyList) return;
+          const li = document.createElement('li');
+          const ts = new Date().toISOString();
+          li.textContent = '[' + ts + '] ' + (shellPath ? ('(' + shellPath + ') ') : '') + script + ' — queued';
+          historyList.prepend(li);
+          lastHistoryItem = li;
+        }
+        function updateHistoryStatus(status) {
+          if (!lastHistoryItem) return;
+          lastHistoryItem.textContent = lastHistoryItem.textContent.replace(/ — .+$/, '') + ' — ' + status;
+        }
 
         // Prove WS handshake at page load via /ws/health
         (function healthWS(){
@@ -1156,7 +1194,7 @@ def shell_ui(request: Request):
             hws.onclose = function (e) { var code=(e && e.code) ? e.code : ''; console.log('[ws-health-close]', code); append('[ws-health-close ' + code + ']'); };
           } catch (e) {
             console.error('[ws-health-exc]', e);
-            append('[ws-health-exc] '+e+'\n');
+            append('[ws-health-exc] ' + String(e));
           }
         })();
 
@@ -1167,16 +1205,22 @@ def shell_ui(request: Request):
           const script = document.getElementById('script').value;
           const shellPathRaw = document.getElementById('shellPath').value;
           const shellPath = (shellPathRaw && shellPathRaw.trim()) ? shellPathRaw.trim() : null;
+          const traceEl = document.getElementById('traceX');
+          const trace_x = !!(traceEl && traceEl.checked);
           var tokenEl = document.getElementById('apiToken');
           const token = tokenEl ? tokenEl.value : null;
           setStatus('starting...');
           disableRun(true);
+          // Echo the submitted script into the output and history
+          append('>>> ' + script);
+          append(String.fromCharCode(10));
+          addHistory(script, shellPath);
           try {
             append('[ui] POST /api/shell/run');
             const resp = await fetch('/api/shell/run', {
               method: 'POST',
               headers: Object.assign({'Content-Type': 'application/json'}, token ? {'X-API-Token': token} : {}),
-              body: JSON.stringify({ script, shell_path: shellPath }),
+              body: JSON.stringify({ script, shell_path: shellPath, trace_x }),
             });
             if (!resp.ok) { const t = await resp.text(); throw new Error(t || ('HTTP '+resp.status)); }
             const data = await resp.json();
@@ -1187,11 +1231,12 @@ def shell_ui(request: Request):
             const wsScheme = (location.protocol === 'https:') ? 'wss' : 'ws';
             const qs = token ? ('?token='+encodeURIComponent(token)) : '';
             ws = new WebSocket(wsScheme + '://' + location.host + '/ws/shell/' + data.job_id + qs);
-            ws.onopen = function () { console.log('[ws-open]'); append('[ws-open]'); };
+            ws.onopen = function () { console.log('[ws-open]'); append('[ws-open]'); updateHistoryStatus('running'); };
             ws.onmessage = function (e) {
               const line = e.data;
               if (line === '__CEDARPY_EOF__') {
                 setStatus('finished');
+                updateHistoryStatus('finished');
                 disableRun(false);
                 try { ws && ws.close(); } catch (e) {}
                 ws = null;
@@ -1203,6 +1248,7 @@ def shell_ui(request: Request):
               console.error('[ws-error]', e);
               append('[ws-error]');
               setStatus('error');
+              updateHistoryStatus('error');
               disableRun(false);
               try { ws && ws.close(); } catch (e2) {}
               ws = null;
@@ -1212,6 +1258,7 @@ def shell_ui(request: Request):
               console.log('[ws-close]', code);
               if (statusEl.textContent === 'starting...' || statusEl.textContent.indexOf('running') === 0) {
                 setStatus('closed');
+                updateHistoryStatus('closed');
                 disableRun(false);
               }
             };
@@ -1228,6 +1275,7 @@ def shell_ui(request: Request):
           const token = document.getElementById('apiToken').value || null;
           console.log('[ui] stop clicked for job', currentJob);
           append('[ui] stop clicked');
+          updateHistoryStatus('stopping');
           try {
             const resp = await fetch(`/api/shell/stop/${currentJob}`, { method: 'POST', headers: token ? {'X-API-Token': token} : {} });
             if (!resp.ok) { append('[stop-error] ' + (await resp.text())); return; }
@@ -1239,13 +1287,41 @@ def shell_ui(request: Request):
 
         // Quick action: Open World — one click to run a simple script and stream output
         if (openWorldBtn) {
-          openWorldBtn.addEventListener('click', () => {
+          openWorldBtn.addEventListener('click', async () => {
             try {
               output.textContent = '';
               append('[ui] open world clicked');
-              const textarea = document.getElementById('script');
-              if (textarea) { textarea.value = 'echo hello world'; }
-              runBtn && runBtn.click();
+              const tokenEl = document.getElementById('apiToken');
+              const token = tokenEl ? tokenEl.value : null;
+              const traceEl = document.getElementById('traceX');
+              const trace_x = !!(traceEl && traceEl.checked);
+              addHistory('echo hello world', null);
+              append('>>> echo hello world');
+              append(String.fromCharCode(10));
+              const resp = await fetch('/api/shell/run', {
+                method: 'POST',
+                headers: Object.assign({'Content-Type': 'application/json'}, token ? {'X-API-Token': token} : {}),
+                body: JSON.stringify({ script: 'echo hello world', trace_x }),
+              });
+              if (!resp.ok) { append('[error] ' + (await resp.text())); return; }
+              const data = await resp.json();
+              setStatus('running (pid '+(data.pid || '?')+')');
+              const wsScheme = (location.protocol === 'https:') ? 'wss' : 'ws';
+              const qs = token ? ('?token='+encodeURIComponent(token)) : '';
+              // Reuse outer ws so Stop can close it
+              ws = new WebSocket(wsScheme + '://' + location.host + '/ws/shell/' + data.job_id + qs);
+              ws.onopen = function () { console.log('[ws-open]'); append('[ws-open]'); updateHistoryStatus('running'); };
+              ws.onmessage = function (e) {
+                const line = e.data;
+                if (line === '__CEDARPY_EOF__') {
+                  setStatus('finished');
+                  updateHistoryStatus('finished');
+                  try { ws.close(); } catch (e) {}
+                } else {
+                  append(line);
+                }
+              };
+              ws.onerror = function () { append('[ws-error]'); setStatus('error'); updateHistoryStatus('error'); try { ws.close(); } catch (e) {} };
             } catch (e) {
               console.error('[openworld-error]', e);
               append('[openworld-error] ' + e);
@@ -1263,17 +1339,18 @@ def api_shell_run(request: Request, body: ShellRunRequest, x_api_token: Optional
     require_shell_enabled_and_auth(request, x_api_token)
     script = body.script
     shell_path = body.shell_path
+    trace_x = bool(body.trace_x) if body.trace_x is not None else False
     # Server-side trace for UI clicks
     try:
         host = request.client.host if request and request.client else "?"
         cookie_tok = request.cookies.get("Cedar-Shell-Token") if hasattr(request, "cookies") else None
         tok_src = "hdr" if x_api_token else ("cookie" if cookie_tok else "no")
-        print(f"[shell-api] RUN click from={host} token={tok_src} shell_path={(shell_path or os.environ.get('SHELL') or '')} script_len={len(script or '')}")
+        print(f"[shell-api] RUN click from={host} token={tok_src} shell_path={(shell_path or os.environ.get('SHELL') or '')} script_len={len(script or '')} trace_x={trace_x}")
     except Exception:
         pass
     if not script or not isinstance(script, str):
         raise HTTPException(status_code=400, detail="script is required")
-    job = start_shell_job(script=script, shell_path=shell_path)
+    job = start_shell_job(script=script, shell_path=shell_path, trace_x=trace_x)
     pid = job.proc.pid if job.proc else None
     try:
         print(f"[shell-api] job started id={job.id} pid={pid}")
@@ -1492,6 +1569,174 @@ async def ws_sql(websocket: WebSocket, project_id: int):
             await websocket.send_text(json.dumps(out))
         except Exception:
             break
+    try:
+        await websocket.close()
+    except Exception:
+        pass
+
+# WebSocket SQL with undo and branch context
+# Message format:
+#  - { "action": "exec", "sql": "...", "branch_id": 2 | null, "branch_name": "Main" | null, "max_rows": 200 }
+#  - { "action": "undo_last", "branch_id": 2 | null, "branch_name": "Main" | null }
+@app.websocket("/ws/sqlx/{project_id}")
+async def ws_sqlx(websocket: WebSocket, project_id: int):
+    token_q = websocket.query_params.get("token") if hasattr(websocket, "query_params") else None
+    if not SHELL_API_ENABLED:
+        await websocket.close(code=4403); return
+    if SHELL_API_TOKEN:
+        cookie_tok = websocket.cookies.get("Cedar-Shell-Token") if hasattr(websocket, "cookies") else None
+        if (token_q or cookie_tok) != SHELL_API_TOKEN:
+            await websocket.close(code=4401); return
+    else:
+        try:
+            client_host = (websocket.client.host if websocket.client else "")
+        except Exception:
+            client_host = ""
+        if client_host not in {"127.0.0.1", "::1", "localhost"}:
+            await websocket.close(code=4401); return
+
+    await websocket.accept()
+
+    # Ensure per-project database schema and storage are initialized
+    try:
+        ensure_project_initialized(project_id)
+    except Exception:
+        pass
+
+    # Per-project session
+    SessionLocal = sessionmaker(bind=_get_project_engine(project_id), autoflush=False, autocommit=False, future=True)
+
+    def _resolve_branch_id(db: Session, branch_id: Optional[int], branch_name: Optional[str]) -> int:
+        if branch_id:
+            b = db.query(Branch).filter(Branch.id == branch_id, Branch.project_id == project_id).first()
+            if b: return b.id
+        if branch_name:
+            b = db.query(Branch).filter(Branch.project_id == project_id, Branch.name == branch_name).first()
+            if b: return b.id
+        # default to Main
+        main_b = db.query(Branch).filter(Branch.project_id == project_id, Branch.name == "Main").first()
+        if not main_b:
+            main_b = ensure_main_branch(db, project_id)
+        return main_b.id
+
+    while True:
+        try:
+            raw = await websocket.receive_text()
+        except WebSocketDisconnect:
+            break
+        except Exception:
+            break
+        if not raw:
+            continue
+        try:
+            msg = json.loads(raw)
+        except Exception:
+            msg = {"action": "exec", "sql": raw}
+
+        action = (msg.get("action") or "exec").lower()
+        sql_text = msg.get("sql") or ""
+        br_id = msg.get("branch_id")
+        br_name = msg.get("branch_name")
+        try:
+            max_rows = int(msg.get("max_rows", int(os.getenv("CEDARPY_SQL_MAX_ROWS", "200"))))
+        except Exception:
+            max_rows = 200
+
+        db = SessionLocal()
+        try:
+            branch_id_eff = _resolve_branch_id(db, br_id, br_name)
+            if action == "undo_last":
+                # Deterministic undo: allow specifying an explicit log_id
+                log = None
+                req_log_id = msg.get("log_id")
+                if req_log_id:
+                    try:
+                        req_log_id = int(req_log_id)
+                        log = db.query(SQLUndoLog).filter(SQLUndoLog.id==req_log_id, SQLUndoLog.project_id==project_id).first()
+                    except Exception:
+                        log = None
+                if not log:
+                    # Fallback: find last log for this project+branch
+                    log = db.query(SQLUndoLog).filter(SQLUndoLog.project_id==project_id, SQLUndoLog.branch_id==branch_id_eff).order_by(SQLUndoLog.created_at.desc(), SQLUndoLog.id.desc()).first()
+                if not log:
+                    # Fallback: find the latest log for this project whose rows_after indicate the target branch
+                    cand = db.query(SQLUndoLog).filter(SQLUndoLog.project_id==project_id).order_by(SQLUndoLog.created_at.desc(), SQLUndoLog.id.desc()).limit(50).all()
+                    for lg in cand:
+                        try:
+                            ra = lg.rows_after or []
+                            if any((isinstance(r, dict) and int(r.get("branch_id", -1)) == int(branch_id_eff)) for r in ra):
+                                log = lg; break
+                        except Exception:
+                            pass
+                if not log:
+                    await websocket.send_text(json.dumps({"ok": False, "error": "Nothing to undo"}))
+                    db.close(); continue
+                table = _safe_identifier(log.table_name)
+                pk_cols = log.pk_columns or []
+                with _get_project_engine(project_id).begin() as conn:
+                    if log.op == "insert":
+                        for row in (log.rows_after or []):
+                            conds = [f"{pc} = {_sql_quote(row.get(pc))}" for pc in pk_cols if pc in row]
+                            conds.append(f"project_id = {project_id}")
+                            conds.append(f"branch_id = {branch_id_eff}")
+                            if conds:
+                                conn.exec_driver_sql(f"DELETE FROM {table} WHERE " + " AND ".join(conds))
+                    elif log.op == "delete":
+                        for row in (log.rows_before or []):
+                            cols = list(row.keys())
+                            vals = ", ".join(_sql_quote(row[c]) for c in cols)
+                            conn.exec_driver_sql(f"INSERT INTO {table} (" + ", ".join(cols) + ") VALUES (" + vals + ")")
+                    elif log.op == "update":
+                        for row in (log.rows_before or []):
+                            sets = []
+                            conds = []
+                            for k, v in row.items():
+                                if k in pk_cols or k in ("project_id","branch_id"):
+                                    conds.append(f"{k} = {_sql_quote(v)}")
+                                else:
+                                    sets.append(f"{k} = {_sql_quote(v)}")
+                            if sets and conds:
+                                conn.exec_driver_sql(f"UPDATE {table} SET " + ", ".join(sets) + " WHERE " + " AND ".join(conds))
+                try:
+                    db.delete(log); db.commit()
+                except Exception:
+                    db.rollback()
+                await websocket.send_text(json.dumps({"ok": True, "undone": True}))
+                db.close(); continue
+            else:
+                # Execute with undo capture (SELECT/PRAGMA will be routed internally to _execute_sql)
+                res = _execute_sql_with_undo(db, sql_text, project_id, branch_id_eff, max_rows=max_rows)
+                # Use exact undo id from execution result when available; fall back to latest log for this branch
+                last_log_id = res.get("undo_log_id")
+                if last_log_id is None:
+                    try:
+                        _last = db.query(SQLUndoLog).filter(SQLUndoLog.project_id==project_id, SQLUndoLog.branch_id==branch_id_eff).order_by(SQLUndoLog.created_at.desc(), SQLUndoLog.id.desc()).first()
+                        if _last:
+                            last_log_id = _last.id
+                    except Exception:
+                        pass
+                out = {
+                    "ok": bool(res.get("success")),
+                    "statement_type": res.get("statement_type"),
+                    "columns": res.get("columns"),
+                    "rows": res.get("rows"),
+                    "rowcount": res.get("rowcount"),
+                    "truncated": res.get("truncated"),
+                    "error": None if res.get("success") else res.get("error"),
+                    "last_log_id": last_log_id,
+                }
+                await websocket.send_text(json.dumps(out))
+        except Exception as e:
+            try:
+                await websocket.send_text(json.dumps({"ok": False, "error": str(e)}))
+            except Exception:
+                pass
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
+
     try:
         await websocket.close()
     except Exception:
@@ -2115,6 +2360,7 @@ def _execute_sql_with_undo(db: Session, sql_text: str, project_id: int, branch_i
         pk_cols = _get_pk_columns(conn, table)
         rows_before = []
         rows_after = []
+        created_log_id = None
 
         if op in ("update", "delete"):
             w = _extract_where_clause(s)
@@ -2182,16 +2428,29 @@ def _execute_sql_with_undo(db: Session, sql_text: str, project_id: int, branch_i
                 rows_after=rows_after,
             )
             db.add(log)
+            # Ensure PK is assigned before commit even if expire_on_commit=True
+            db.flush()
+            try:
+                created_log_id = log.id
+            except Exception:
+                created_log_id = None
             db.commit()
         except Exception:
             db.rollback()
 
     # Return a generic result (we can run a SELECT for UPDATE/DELETE to show rowcount)
-    return _execute_sql(
+    _res = _execute_sql(
         f"SELECT changes() as affected" if _dialect(_get_project_engine(project_id)) == "sqlite" else s,
         project_id,
         max_rows=max_rows,
     )
+    # Include undo_log_id when we created one
+    if created_log_id is not None:
+        try:
+            _res["undo_log_id"] = created_log_id
+        except Exception:
+            pass
+    return _res
 
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request, db: Session = Depends(get_registry_db)):

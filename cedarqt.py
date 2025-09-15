@@ -110,6 +110,7 @@ from PySide6.QtCore import Qt, QUrl, QObject
 from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox
 from PySide6.QtWebEngineCore import QWebEngineUrlRequestInterceptor, QWebEnginePage, QWebEngineProfile
 from PySide6.QtWebEngineWidgets import QWebEngineView
+from PySide6.QtGui import QDesktopServices
 
 class RequestLogger(QWebEngineUrlRequestInterceptor):
     def interceptRequest(self, info):  # type: ignore[override]
@@ -177,6 +178,55 @@ def _launch_server_inprocess(host: str, port: int):
     return server, t
 
 
+def _open_full_disk_access_settings():
+    try:
+        url = QUrl("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
+        if not QDesktopServices.openUrl(url):
+            # Fallback to shell 'open'
+            try:
+                subprocess.Popen(["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"])  # nosec - opens System Settings
+            except Exception:
+                pass
+    except Exception:
+        try:
+            subprocess.Popen(["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"])  # nosec
+        except Exception:
+            pass
+
+
+def _maybe_prompt_full_disk_access_once():
+    try:
+        show = os.getenv("CEDARPY_SHOW_FDA_PROMPT", "1").strip().lower() not in {"0", "false", "no", "off"}
+        if not show:
+            return
+        stamp_dir = os.getenv("CEDARPY_LOG_DIR", LOG_DIR_DEFAULT)
+        os.makedirs(stamp_dir, exist_ok=True)
+        stamp = os.path.join(stamp_dir, "fda_prompt_seen")
+        if os.path.exists(stamp):
+            return
+        msg = (
+            "To let CedarPy search across your files without interruptions, please grant Full Disk Access.\n\n"
+            "Steps: System Settings → Privacy & Security → Full Disk Access → add CedarPy and toggle it on.\n\n"
+            "After enabling, quit and reopen CedarPy to ensure permissions take effect."
+        )
+        box = QMessageBox()
+        box.setWindowTitle("CedarPy – Permissions")
+        box.setText(msg)
+        open_btn = box.addButton("Open Settings", QMessageBox.AcceptRole)
+        skip_btn = box.addButton("Skip", QMessageBox.RejectRole)
+        box.setDefaultButton(open_btn)
+        box.exec()
+        if box.clickedButton() == open_btn:
+            _open_full_disk_access_settings()
+        try:
+            with open(stamp, "w") as f:
+                f.write("seen\n")
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
 def main():
     host = os.getenv("CEDARPY_HOST", "127.0.0.1")
     port = int(os.getenv("CEDARPY_PORT", "8000"))
@@ -224,6 +274,12 @@ def main():
         win.raise_()
         win.activateWindow()
         app.setActiveWindow(win)
+    except Exception:
+        pass
+
+    # Prompt for Full Disk Access on first launch to reduce later interruptions
+    try:
+        _maybe_prompt_full_disk_access_once()
     except Exception:
         pass
 

@@ -17,7 +17,7 @@ pip install -q pyinstaller
 
 # Build using the spec file
 cd packaging
-pyinstaller --clean cedarpy_macos.spec
+pyinstaller --clean --noconfirm cedarpy_macos.spec
 
 # Check if the app was created successfully
 if [ ! -d "dist/CedarPy.app" ]; then
