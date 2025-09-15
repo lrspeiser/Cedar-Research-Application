@@ -16,7 +16,7 @@ import platform
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Tuple
 
-from fastapi import FastAPI, Request, UploadFile, File, Form, Depends, Header, HTTPException, Body
+from fastapi import FastAPI, Request, UploadFile, File, Form, Depends, Header, HTTPException, Body, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -1021,8 +1021,11 @@ def require_shell_enabled_and_auth(request: Request, x_api_token: Optional[str] 
         raise HTTPException(status_code=403, detail="Shell API is disabled. Set CEDARPY_SHELL_API_ENABLED=1 to enable.")
     # If a token is configured, require it
     if SHELL_API_TOKEN:
-        if not x_api_token or x_api_token != SHELL_API_TOKEN:
-            raise HTTPException(status_code=401, detail="Unauthorized (invalid or missing X-API-Token)")
+        # Allow header or cookie
+        cookie_tok = request.cookies.get("Cedar-Shell-Token") if hasattr(request, "cookies") else None
+        token = x_api_token or cookie_tok
+        if token != SHELL_API_TOKEN:
+            raise HTTPException(status_code=401, detail="Unauthorized (invalid or missing token)")
     else:
         # No token set: only allow local requests
         if not _is_local_request(request):
@@ -1085,7 +1088,7 @@ def shell_ui(request: Request):
         const output = document.getElementById('output');
         const statusEl = document.getElementById('status');
         let currentJob = null;
-        let evtSource = null;
+        let ws = null;
 
         function setStatus(s) { statusEl.textContent = s; }
         function append(text) {
@@ -1112,25 +1115,33 @@ def shell_ui(request: Request):
             const data = await resp.json();
             currentJob = data.job_id;
             setStatus('running (pid '+(data.pid || '?')+')');
-            // Stream (token via query param if present)
+            // WebSocket stream (token via query string if present)
+            const wsScheme = (location.protocol === 'https:') ? 'wss' : 'ws';
             const qs = token ? ('?token='+encodeURIComponent(token)) : '';
-            evtSource = new EventSource(`/api/shell/stream/${data.job_id}${qs}`);
-            evtSource.onmessage = (e) => {
-              if (e.data === '__CEDARPY_EOF__') {
+            ws = new WebSocket(`${wsScheme}://${location.host}/ws/shell/${data.job_id}${qs}`);
+            ws.onmessage = (e) => {
+              const line = e.data;
+              if (line === '__CEDARPY_EOF__') {
                 setStatus('finished');
                 disableRun(false);
-                evtSource && evtSource.close();
-                evtSource = null;
+                try { ws && ws.close(); } catch {}
+                ws = null;
               } else {
-                append(e.data + "\n");
+                append(line); // server includes newlines as emitted
               }
             };
-            evtSource.onerror = (e) => {
-              append('\n[stream-error]');
+            ws.onerror = () => {
+              append('\n[ws-error]');
               setStatus('error');
               disableRun(false);
-              evtSource && evtSource.close();
-              evtSource = null;
+              try { ws && ws.close(); } catch {}
+              ws = null;
+            };
+            ws.onclose = () => {
+              if (statusEl.textContent === 'starting…' || statusEl.textContent.startsWith('running')) {
+                setStatus('closed');
+                disableRun(false);
+              }
             };
           } catch (err) {
             append('[error] '+err+'\n');
@@ -1146,6 +1157,8 @@ def shell_ui(request: Request):
             const resp = await fetch(`/api/shell/stop/${currentJob}`, { method: 'POST', headers: token ? {'X-API-Token': token} : {} });
             if (!resp.ok) { append('[stop-error] '+(await resp.text())+'\n'); return; }
             append('[killing]\n');
+            try { ws && ws.close(); } catch {}
+            ws = null;
           } catch (e) { append('[stop-error] '+e+'\n'); }
         });
       </script>
@@ -1166,43 +1179,66 @@ def api_shell_run(request: Request, body: ShellRunRequest, x_api_token: Optional
     return {"job_id": job.id, "pid": pid, "started_at": job.start_time.isoformat() + "Z"}
 
 
-@app.get("/api/shell/stream/{job_id}")
-def api_shell_stream(job_id: str, request: Request, token: Optional[str] = None):
-    # Enforce same auth policy: if token is configured, allow token via query param for EventSource; otherwise local-only
+# WebSocket streaming endpoint
+@app.websocket("/ws/shell/{job_id}")
+async def ws_shell(websocket: WebSocket, job_id: str):
+    # Auth: token via query or cookie; else local-only when no token configured
+    token_q = websocket.query_params.get("token") if hasattr(websocket, "query_params") else None
     if not SHELL_API_ENABLED:
-        raise HTTPException(status_code=403, detail="Shell API is disabled")
+        await websocket.close(code=4403)
+        return
     if SHELL_API_TOKEN:
-        if token != SHELL_API_TOKEN:
-            raise HTTPException(status_code=401, detail="Unauthorized (token query param required for stream)")
+        cookie_tok = websocket.cookies.get("Cedar-Shell-Token") if hasattr(websocket, "cookies") else None
+        tok = token_q or cookie_tok
+        if tok != SHELL_API_TOKEN:
+            await websocket.close(code=4401)
+            return
     else:
-        if not _is_local_request(request):
-            raise HTTPException(status_code=401, detail="Unauthorized (local only)")
+        # local-only
+        try:
+            client_host = (websocket.client.host if websocket.client else "")
+        except Exception:
+            client_host = ""
+        if client_host not in {"127.0.0.1", "::1", "localhost"}:
+            await websocket.close(code=4401)
+            return
 
     job = get_shell_job(job_id)
     if not job:
-        raise HTTPException(status_code=404, detail="job not found")
+        await websocket.close(code=4404)
+        return
 
-    def event_gen():
-        # Flush any existing buffered lines first
+    await websocket.accept()
+    # Send backlog
+    try:
         for line in job.output_lines:
-            yield f"data: {line.rstrip()}\n\n"
-        # Then stream live from queue
+            await websocket.send_text(line)
+    except Exception:
+        # Ignore send errors on backlog
+        pass
+
+    # Live stream
+    try:
         while True:
             try:
                 line = job.queue.get(timeout=1.0)
             except Exception:
-                # Heartbeat to keep connection alive
                 if job.status in ("finished", "error", "killed"):
-                    yield "data: __CEDARPY_EOF__\n\n"
+                    await websocket.send_text("__CEDARPY_EOF__")
                     break
-                else:
-                    continue
+                continue
             if line == "__CEDARPY_EOF__\n":
-                yield "data: __CEDARPY_EOF__\n\n"
+                await websocket.send_text("__CEDARPY_EOF__")
                 break
-            yield f"data: {line.rstrip()}\n\n"
-
-    return StreamingResponse(event_gen(), media_type="text/event-stream")
+            await websocket.send_text(line)
+    except WebSocketDisconnect:
+        # Client disconnected; nothing else to do
+        pass
+    except Exception:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
 
 
 @app.post("/api/shell/stop/{job_id}")
