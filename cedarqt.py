@@ -220,6 +220,12 @@ def main():
         sys.exit(1)
 
     win.show()
+    try:
+        win.raise_()
+        win.activateWindow()
+        app.setActiveWindow(win)
+    except Exception:
+        pass
 
     # Ensure child server is terminated on exit
     def _shutdown():

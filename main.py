@@ -787,7 +787,7 @@ SELECT * FROM demo LIMIT 10;""")
         <script>
         function cedarSqlConfirm(f) {{
           var t = (f.querySelector('[name=sql]')||{{}}).value || '';
-          var re = /^\s*(drop|delete|truncate|update|alter)\b/i;
+          var re = /^\\s*(drop|delete|truncate|update|alter)\\b/i;
           if (re.test(t)) {{
             return confirm('This SQL looks destructive. Proceed?');
           }}
