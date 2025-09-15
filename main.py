@@ -1097,8 +1097,10 @@ def shell_ui(request: Request):
         }
         function disableRun(disabled) { runBtn.disabled = disabled; stopBtn.disabled = !disabled; }
 
-        runBtn.addEventListener('click', async () => {
+runBtn.addEventListener('click', async () => {
           output.textContent = '';
+          console.log('[ui] run clicked');
+          append('[ui] run clicked\n');
           const script = document.getElementById('script').value;
           const shellPathRaw = document.getElementById('shellPath').value;
           const shellPath = (shellPathRaw && shellPathRaw.trim()) ? shellPathRaw.trim() : null;
@@ -1106,6 +1108,7 @@ def shell_ui(request: Request):
           setStatus('starting…');
           disableRun(true);
           try {
+            append('[ui] POST /api/shell/run\n');
             const resp = await fetch('/api/shell/run', {
               method: 'POST',
               headers: Object.assign({'Content-Type': 'application/json'}, token ? {'X-API-Token': token} : {}),
@@ -1114,11 +1117,13 @@ def shell_ui(request: Request):
             if (!resp.ok) { const t = await resp.text(); throw new Error(t || ('HTTP '+resp.status)); }
             const data = await resp.json();
             currentJob = data.job_id;
+            append('[ui] job '+currentJob+' started\n');
             setStatus('running (pid '+(data.pid || '?')+')');
             // WebSocket stream (token via query string if present)
             const wsScheme = (location.protocol === 'https:') ? 'wss' : 'ws';
             const qs = token ? ('?token='+encodeURIComponent(token)) : '';
             ws = new WebSocket(`${wsScheme}://${location.host}/ws/shell/${data.job_id}${qs}`);
+            ws.onopen = () => { console.log('[ws-open]'); append('[ws-open]\n'); };
             ws.onmessage = (e) => {
               const line = e.data;
               if (line === '__CEDARPY_EOF__') {
@@ -1130,20 +1135,23 @@ def shell_ui(request: Request):
                 append(line); // server includes newlines as emitted
               }
             };
-            ws.onerror = () => {
+            ws.onerror = (e) => {
+              console.error('[ws-error]', e);
               append('\n[ws-error]');
               setStatus('error');
               disableRun(false);
               try { ws && ws.close(); } catch {}
               ws = null;
             };
-            ws.onclose = () => {
+            ws.onclose = (e) => {
+              console.log('[ws-close]', e?.code);
               if (statusEl.textContent === 'starting…' || statusEl.textContent.startsWith('running')) {
                 setStatus('closed');
                 disableRun(false);
               }
             };
           } catch (err) {
+            console.error('[ui] run error', err);
             append('[error] '+err+'\n');
             setStatus('error');
             disableRun(false);
@@ -1153,13 +1161,15 @@ def shell_ui(request: Request):
         stopBtn.addEventListener('click', async () => {
           if (!currentJob) return;
           const token = document.getElementById('apiToken').value || null;
+          console.log('[ui] stop clicked for job', currentJob);
+          append('[ui] stop clicked\n');
           try {
             const resp = await fetch(`/api/shell/stop/${currentJob}`, { method: 'POST', headers: token ? {'X-API-Token': token} : {} });
             if (!resp.ok) { append('[stop-error] '+(await resp.text())+'\n'); return; }
             append('[killing]\n');
             try { ws && ws.close(); } catch {}
             ws = null;
-          } catch (e) { append('[stop-error] '+e+'\n'); }
+          } catch (e) { console.error('[stop-error]', e); append('[stop-error] '+e+'\n'); }
         });
       </script>
     """
@@ -1172,10 +1182,22 @@ def api_shell_run(request: Request, body: ShellRunRequest, x_api_token: Optional
     require_shell_enabled_and_auth(request, x_api_token)
     script = body.script
     shell_path = body.shell_path
+    # Server-side trace for UI clicks
+    try:
+        host = request.client.host if request and request.client else "?"
+        cookie_tok = request.cookies.get("Cedar-Shell-Token") if hasattr(request, "cookies") else None
+        tok_src = "hdr" if x_api_token else ("cookie" if cookie_tok else "no")
+        print(f"[shell-api] RUN click from={host} token={tok_src} shell_path={(shell_path or os.environ.get('SHELL') or '')} script_len={len(script or '')}")
+    except Exception:
+        pass
     if not script or not isinstance(script, str):
         raise HTTPException(status_code=400, detail="script is required")
     job = start_shell_job(script=script, shell_path=shell_path)
     pid = job.proc.pid if job.proc else None
+    try:
+        print(f"[shell-api] job started id={job.id} pid={pid}")
+    except Exception:
+        pass
     return {"job_id": job.id, "pid": pid, "started_at": job.start_time.isoformat() + "Z"}
 
 
@@ -1185,12 +1207,20 @@ async def ws_shell(websocket: WebSocket, job_id: str):
     # Auth: token via query or cookie; else local-only when no token configured
     token_q = websocket.query_params.get("token") if hasattr(websocket, "query_params") else None
     if not SHELL_API_ENABLED:
+        try:
+            print(f"[ws] reject disabled job_id={job_id}")
+        except Exception:
+            pass
         await websocket.close(code=4403)
         return
     if SHELL_API_TOKEN:
         cookie_tok = websocket.cookies.get("Cedar-Shell-Token") if hasattr(websocket, "cookies") else None
         tok = token_q or cookie_tok
         if tok != SHELL_API_TOKEN:
+            try:
+                print(f"[ws] reject auth job_id={job_id}")
+            except Exception:
+                pass
             await websocket.close(code=4401)
             return
     else:
@@ -1200,14 +1230,27 @@ async def ws_shell(websocket: WebSocket, job_id: str):
         except Exception:
             client_host = ""
         if client_host not in {"127.0.0.1", "::1", "localhost"}:
+            try:
+                print(f"[ws] reject non-local job_id={job_id} from={client_host}")
+            except Exception:
+                pass
             await websocket.close(code=4401)
             return
 
     job = get_shell_job(job_id)
     if not job:
+        try:
+            print(f"[ws] reject not-found job_id={job_id}")
+        except Exception:
+            pass
         await websocket.close(code=4404)
         return
 
+    try:
+        ch = (websocket.client.host if websocket.client else "?")
+        print(f"[ws] accept job_id={job_id} from={ch}")
+    except Exception:
+        pass
     await websocket.accept()
     # Send backlog
     try:
@@ -1233,10 +1276,22 @@ async def ws_shell(websocket: WebSocket, job_id: str):
             await websocket.send_text(line)
     except WebSocketDisconnect:
         # Client disconnected; nothing else to do
-        pass
-    except Exception:
+        try:
+            print(f"[ws] disconnect job_id={job_id}")
+        except Exception:
+            pass
+    except Exception as e:
+        try:
+            print(f"[ws] error job_id={job_id} err={type(e).__name__}: {e}")
+        except Exception:
+            pass
         try:
             await websocket.close()
+        except Exception:
+            pass
+    finally:
+        try:
+            print(f"[ws] closed job_id={job_id} status={job.status}")
         except Exception:
             pass
 
