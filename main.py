@@ -1244,7 +1244,7 @@ def shell_ui(request: Request):
               output.textContent = '';
               append('[ui] open world clicked');
               const textarea = document.getElementById('script');
-              if (textarea) { textarea.value = 'echo open world'; }
+              if (textarea) { textarea.value = 'echo hello world'; }
               runBtn && runBtn.click();
             } catch (e) {
               console.error('[openworld-error]', e);
