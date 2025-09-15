@@ -559,6 +559,48 @@ def serve_project_upload(project_id: int, path: str):
 # ----------------------------------------------------------------------------------
 
 def layout(title: str, body: str) -> HTMLResponse:
+    # Inject a lightweight client logging hook so console messages and JS errors are POSTed to the server.
+    # See README.md (section "Client-side logging") for details and troubleshooting.
+    client_log_js = """
+<script>
+(function(){
+  if (window.__cedarpyClientLogInitialized) return; window.__cedarpyClientLogInitialized = true;
+  const endpoint = '/api/client-log';
+  function post(payload){
+    try {
+      const body = JSON.stringify(payload);
+      if (navigator.sendBeacon) {
+        const blob = new Blob([body], {type: 'application/json'});
+        navigator.sendBeacon(endpoint, blob);
+        return;
+      }
+      fetch(endpoint, {method: 'POST', headers: {'Content-Type': 'application/json'}, body, keepalive: true}).catch(function(){});
+    } catch(e) {}
+  }
+  function base(level, message, origin, extra){
+    post(Object.assign({
+      when: new Date().toISOString(),
+      level: String(level||'info'),
+      message: String(message||''),
+      url: String(location.href||''),
+      userAgent: navigator.userAgent || '',
+      origin: origin || 'console'
+    }, extra||{}));
+  }
+  var orig = { log: console.log, info: console.info, warn: console.warn, error: console.error };
+  console.log = function(){ try { base('info', Array.from(arguments).join(' '), 'console.log'); } catch(e){}; return orig.log.apply(console, arguments); };
+  console.info = function(){ try { base('info', Array.from(arguments).join(' '), 'console.info'); } catch(e){}; return orig.info.apply(console, arguments); };
+  console.warn = function(){ try { base('warn', Array.from(arguments).join(' '), 'console.warn'); } catch(e){}; return orig.warn.apply(console, arguments); };
+  console.error = function(){ try { base('error', Array.from(arguments).join(' '), 'console.error'); } catch(e){}; return orig.error.apply(console, arguments); };
+  window.addEventListener('error', function(ev){
+    try { base('error', ev.message || 'window.onerror', 'window.onerror', { line: ev.lineno||null, column: ev.colno||null, stack: ev.error && ev.error.stack ? String(ev.error.stack) : null }); } catch(e){}
+  }, true);
+  window.addEventListener('unhandledrejection', function(ev){
+    try { var r = ev && ev.reason; base('error', (r && (r.message || r.toString())) || 'unhandledrejection', 'unhandledrejection', { stack: r && r.stack ? String(r.stack) : null }); } catch(e){}
+  });
+})();
+</script>
+"""
     html_doc = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -568,7 +610,7 @@ def layout(title: str, body: str) -> HTMLResponse:
   <style>
     :root {{ --fg: #111; --bg: #fff; --accent: #2563eb; --muted: #6b7280; --border: #e5e7eb; }}
     * {{ box-sizing: border-box; }}
-    body {{ margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Helvetica Neue", Arial, "Apple Color Emoji", "Segoe UI Emoji"; color: var(--fg); background: var(--bg); }}
+    body {{ margin: 0; font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Oxygen, Ubuntu, Cantarell, \"Helvetica Neue\", Arial, \"Apple Color Emoji\", \"Segoe UI Emoji\"; color: var(--fg); background: var(--bg); }}
     header {{ padding: 16px 20px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg); }}
     main {{ padding: 20px; max-width: 1100px; margin: 0 auto; }}
     h1, h2, h3 {{ margin: 0 0 12px; }}
@@ -581,13 +623,14 @@ def layout(title: str, body: str) -> HTMLResponse:
     .table th, .table td {{ border-bottom: 1px solid var(--border); padding: 8px 6px; text-align: left; vertical-align: top; }}
     .pill {{ display: inline-block; padding: 2px 8px; border-radius: 999px; background: #eef2ff; color: #3730a3; font-size: 12px; }}
     form.inline * {{ vertical-align: middle; }}
-    input[type="text"], select {{ padding: 8px; border: 1px solid var(--border); border-radius: 6px; width: 100%; }}
-    input[type="file"] {{ padding: 6px; border: 1px dashed var(--border); border-radius: 6px; width: 100%; }}
+    input[type=\"text\"], select {{ padding: 8px; border: 1px solid var(--border); border-radius: 6px; width: 100%; }}
+    input[type=\"file\"] {{ padding: 6px; border: 1px dashed var(--border); border-radius: 6px; width: 100%; }}
     button {{ padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--accent); color: white; cursor: pointer; }}
     button.secondary {{ background: #f3f4f6; color: #111; }}
     .small {{ font-size: 12px; }}
     .topbar {{ display:flex; align-items:center; gap:12px; }}
   </style>
+  {client_log_js}
 </head>
 <body>
   <header>
@@ -1393,6 +1436,37 @@ def api_shell_status(job_id: str, request: Request, x_api_token: Optional[str] =
 # ----------------------------------------------------------------------------------
 # Routes
 # ----------------------------------------------------------------------------------
+
+# Client log ingestion API
+# This endpoint receives client-side console/error logs sent by the injected script in layout().
+# See README.md (section "Client-side logging") for details and troubleshooting.
+class ClientLogEntry(BaseModel):
+    when: Optional[str] = None
+    level: str
+    message: str
+    url: Optional[str] = None
+    line: Optional[int] = None
+    column: Optional[int] = None
+    stack: Optional[str] = None
+    userAgent: Optional[str] = None
+    origin: Optional[str] = None
+
+@app.post("/api/client-log")
+def api_client_log(entry: ClientLogEntry, request: Request):
+    host = (request.client.host if request and request.client else "?")
+    ts = entry.when or datetime.utcnow().isoformat() + "Z"
+    lvl = (entry.level or "info").upper()
+    url = entry.url or ""
+    lc = f"{entry.line or ''}:{entry.column or ''}" if (entry.line or entry.column) else ""
+    ua = entry.userAgent or ""
+    origin = entry.origin or ""
+    try:
+        print(f"[client-log] ts={ts} level={lvl} host={host} origin={origin} url={url} loc={lc} ua={ua} msg={entry.message}")
+        if entry.stack:
+            print("[client-log-stack] " + str(entry.stack))
+    except Exception:
+        pass
+    return {"ok": True}
 
 # -------------------- Merge to Main (SQLite-first implementation) --------------------
 

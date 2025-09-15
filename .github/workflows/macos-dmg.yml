@@ -1,0 +1,53 @@
+name: macOS DMG
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '**/*.py'
+      - 'requirements.txt'
+      - 'packaging/**'
+      - '.github/workflows/macos-dmg.yml'
+  workflow_dispatch: {}
+  tags:
+    - 'v*'
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install deps
+        run: |
+          python -m pip install -U pip
+          python -m pip install -r requirements.txt
+          python -m pip install -r packaging/requirements-macos.txt
+      - name: Build DMG
+        run: |
+          bash packaging/build_macos_dmg.sh
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CedarPy.dmg
+          path: dist/CedarPy.dmg
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: macos-latest
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: CedarPy.dmg
+          path: dist
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/CedarPy.dmg
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

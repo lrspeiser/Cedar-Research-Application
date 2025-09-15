@@ -17,6 +17,17 @@ simple roll-up behavior between Main and branches. Everything is in `main.py` as
 
 ## Quickstart
 
+### Run as a desktop app (Qt + QtWebEngine)
+
+- Install deps (includes PySide6):
+  - pip install -r requirements.txt
+- Launch the embedded-browser desktop shell:
+  - python cedarqt.py
+
+This starts the FastAPI server and opens the UI inside a QtWebEngine window. JavaScript console output and in-page errors are captured and forwarded to your app logs under ~/Library/Logs/CedarPy.
+
+### Run the server in a normal browser
+
 1. **Provision MySQL** (example uses a DB named `cedarpython`):
    ```sql
    CREATE DATABASE cedarpython CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
@@ -62,6 +73,22 @@ This matches: *"I should be able to see that file in the branch and in main, but
 
 Uploaded files are saved under `user_uploads/project_{id}/branch_{branchName}/...` (relative to the app working directory by default).  
 Override with `CEDARPY_UPLOAD_DIR` if desired.
+
+## Client-side logging
+
+The app injects a small script into every HTML page that:
+- Proxies console.log/info/warn/error
+- Captures window.onerror and unhandledrejection
+- POSTs logs to /api/client-log with details (level, message, URL, line/column, stack, userAgent)
+
+Server route: POST /api/client-log
+- Local-only by default (since the app binds to 127.0.0.1).
+- Code comments point back to this README. No API keys are required for this feature.
+
+Log locations (macOS):
+- ~/Library/Logs/CedarPy/cedarqt_*.log — desktop shell
+- ~/Library/Logs/CedarPy/uvicorn_from_qt.log — server started by the shell
+- main server logs also print [client-log], [qt-console], and [qt-request] prefixes
 
 ## Shell window and API
 
@@ -114,6 +141,16 @@ curl -sS -H "Content-Type: application/json" \
 ```
 
 Note on API keys: This feature uses environment variables for configuration. See above for how to set them securely. Code comments reference this README for usage and pitfalls.
+
+## Packaging (macOS DMG)
+
+- Build locally:
+  - python -m pip install -r requirements.txt
+  - python -m pip install -r packaging/requirements-macos.txt
+  - bash packaging/build_macos_dmg.sh
+  - Open dist/CedarPy.dmg
+
+- CI builds on every push to main and on tags (v*). On tags, the DMG is attached to the GitHub Release automatically.
 
 ## Next steps (future stages)
 
