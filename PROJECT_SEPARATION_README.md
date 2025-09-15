@@ -60,9 +60,9 @@ cp -r ~/CedarPyData ~/CedarPyData.backup
 ```
 
 ## SQL Console Changes
-- No more branch_id/project_id columns needed in user tables
-- Each project has completely separate tables
-- Simpler SQL - no automatic WHERE clauses added
+- No more cross-project data: each project has its own DB
+- Strict explicit-only branch policy for branch-aware tables:
+  - The server does not rewrite SQL. For tables that include project_id and branch_id, mutating statements must explicitly reference both (see BRANCH_SQL_POLICY.md).
 - Branch merging only affects app-managed tables (files, threads, datasets)
 
 ## Environment Variables

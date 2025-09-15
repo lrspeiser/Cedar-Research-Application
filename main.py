@@ -1563,92 +1563,14 @@ def _safe_identifier(name: str) -> str:
 
 
 def _preprocess_sql_branch_aware(conn, sql_text: str, project_id: int, branch_id: int, main_id: int) -> Tuple[str, bool]:
-    # In per-project DB mode, we no longer inject project_id/branch_id. Keep minimal compatibility for legacy tables.
     """
-    Returns (possibly transformed_sql, transformed_flag).
-    Best-effort handling for simple single-table queries.
+    STRICT EXPLICIT-ONLY MODE:
+    - No automatic SQL rewriting or injection is performed.
+    - SELECT/INSERT/UPDATE/DELETE/CREATE are executed exactly as provided.
+    - See BRANCH_SQL_POLICY.md for required patterns when operating on branch-aware tables.
+    Returns (sql_as_is, False)
     """
-    s = sql_text.strip()
-    # Normalize whitespace
-    s_norm = re.sub(r"\s+", " ", s)
-    lower = s_norm.lower()
-
-    # Simple SELECT ... FROM table [WHERE ...]
-    m = re.match(r"select\s+(.+?)\s+from\s+([a-zA-Z0-9_]+)(\s+where\s+(.+))?", lower, flags=re.IGNORECASE)
-    if m:
-        table = _safe_identifier(m.group(2))
-        if _table_has_branch_columns(conn, table):
-            # Build roll-up select using window function
-            select_cols = s[s.lower().find("select") + 6 : s.lower().find(" from ")]  # keep original projection
-            where_clause = m.group(4)
-            where_sql = f" AND {where_clause}" if where_clause else ""
-            if _dialect() in ("sqlite", "mysql"):
-                sql = f"""
-                WITH __src AS (
-                  SELECT *,
-                         CASE WHEN branch_id = {branch_id} THEN 2 WHEN branch_id = {main_id} THEN 1 ELSE 0 END AS __rank
-                  FROM {table}
-                  WHERE project_id = {project_id} AND branch_id IN ({main_id}, {branch_id}){where_sql}
-                ), __pick AS (
-                  SELECT *, ROW_NUMBER() OVER (PARTITION BY id ORDER BY __rank DESC) AS rn FROM __src
-                )
-                SELECT {select_cols} FROM __pick WHERE rn = 1
-                """
-                return (sql.strip(), True)
-    # INSERT INTO table [(cols...)] VALUES (...)
-    m = re.match(r"insert\s+into\s+([a-zA-Z0-9_]+)\s*\(([^\)]+)\)\s*values\s*\((.+)\)", lower, flags=re.IGNORECASE)
-    if m:
-        table = _safe_identifier(m.group(1))
-        if _table_has_branch_columns(conn, table):
-            cols_part = s[s.lower().find("(")+1 : s.lower().find(")", s.lower().find("("))]
-            vals_start = s.lower().find("values") + len("values")
-            vals_part = s[vals_start:].strip()
-            # Expect single VALUES (...) form
-            mv = re.match(r"\((.*)\)", vals_part, flags=re.IGNORECASE | re.DOTALL)
-            if mv:
-                cols_list = [c.strip() for c in cols_part.split(",")]
-                vals_list = [v.strip() for v in mv.group(1).split(",")]
-                if "project_id" not in [c.lower() for c in cols_list]:
-                    cols_list.append("project_id")
-                    vals_list.append(str(project_id))
-                if "branch_id" not in [c.lower() for c in cols_list]:
-                    cols_list.append("branch_id")
-                    vals_list.append(str(branch_id))
-                sql = f"INSERT INTO {table} (" + ", ".join(cols_list) + ") VALUES (" + ", ".join(vals_list) + ")"
-                return (sql, True)
-    # UPDATE table SET ... [WHERE ...]
-    m = re.match(r"update\s+([a-zA-Z0-9_]+)\s+set\s+", lower, flags=re.IGNORECASE)
-    if m:
-        table = _safe_identifier(m.group(1))
-        if _table_has_branch_columns(conn, table):
-            if " where " in lower:
-                sql = s + f" AND project_id = {project_id} AND branch_id = {branch_id}"
-            else:
-                sql = s + f" WHERE project_id = {project_id} AND branch_id = {branch_id}"
-            return (sql, True)
-    # DELETE FROM table [WHERE ...]
-    m = re.match(r"delete\s+from\s+([a-zA-Z0-9_]+)", lower, flags=re.IGNORECASE)
-    if m:
-        table = _safe_identifier(m.group(1))
-        if _table_has_branch_columns(conn, table):
-            if " where " in lower:
-                sql = s + f" AND project_id = {project_id} AND branch_id = {branch_id}"
-            else:
-                sql = s + f" WHERE project_id = {project_id} AND branch_id = {branch_id}"
-            return (sql, True)
-    # CREATE TABLE injection: add project_id/branch_id if missing and simple form
-    m = re.match(r"create\s+table\s+([a-zA-Z0-9_]+)\s*\((.*)\)\s*;?$", s, flags=re.IGNORECASE | re.DOTALL)
-    if m:
-        table = _safe_identifier(m.group(1))
-        cols_def = m.group(2)
-        lower_cols = cols_def.lower()
-        if "project_id" not in lower_cols and "branch_id" not in lower_cols:
-            new_cols = cols_def.strip()
-            if new_cols and not new_cols.endswith(","):
-                new_cols += ", "
-            new_cols += "project_id INTEGER NOT NULL, branch_id INTEGER NOT NULL"
-            sql = f"CREATE TABLE {table} ({new_cols})"
-            return (sql, True)
+    s = (sql_text or "").strip()
     return (s, False)
 
 
@@ -1797,7 +1719,9 @@ def _execute_sql(sql_text: str, project_id: int, max_rows: int = 200) -> dict:
 
 
 def _execute_sql_with_undo(db: Session, sql_text: str, project_id: int, branch_id: int, max_rows: int = 200) -> dict:
-    s = sql_text.strip()
+    # Enforce strict explicit-branch policy for mutations; no auto-rewrites.
+    # See BRANCH_SQL_POLICY.md
+    s = (sql_text or "").strip()
     if not s:
         return {"success": False, "error": "Empty SQL"}
     first = s.split()[0].lower() if s.split() else ""
@@ -1837,6 +1761,32 @@ def _execute_sql_with_undo(db: Session, sql_text: str, project_id: int, branch_i
         undo_cap = 1000
 
     with _get_project_engine(project_id).begin() as conn:
+        # Strict explicit-only enforcement for branch-aware tables
+        try:
+            table_for_check = None
+            if m_ins:
+                table_for_check = _safe_identifier(m_ins.group(1))
+            elif m_upd:
+                table_for_check = _safe_identifier(m_upd.group(1))
+            elif m_del:
+                table_for_check = _safe_identifier(m_del.group(1))
+            if table_for_check:
+                if _table_has_branch_columns(conn, table_for_check):
+                    # INSERT must list both project_id and branch_id columns explicitly
+                    if m_ins:
+                        cols_ci = [c.strip().lower() for c in cols_list]
+                        missing = [c for c in ("project_id","branch_id") if c not in cols_ci]
+                        if missing:
+                            return {"success": False, "error": f"Strict branch policy: INSERT into '{table_for_check}' must explicitly include columns: {', '.join(missing)}. See BRANCH_SQL_POLICY.md"}
+                    # UPDATE/DELETE must have WHERE that references both project_id and branch_id
+                    if m_upd or m_del:
+                        where_lc = (where_sql or "").lower()
+                        if ("project_id" not in where_lc) or ("branch_id" not in where_lc):
+                            return {"success": False, "error": f"Strict branch policy: {op.upper()} on '{table_for_check}' must include WHERE with both project_id and branch_id. See BRANCH_SQL_POLICY.md"}
+        except Exception as _enf_err:
+            # Be safe: if enforcement itself errors, block the write
+            return {"success": False, "error": f"Strict branch policy check failed: {_enf_err}"}
+
         # Determine PK columns if any
         pk_cols = _get_pk_columns(conn, table)
         rows_before = []
