@@ -5,8 +5,10 @@ import socket
 import threading
 import importlib
 from pathlib import Path
+from urllib.parse import urlparse, parse_qs
 
 import pytest
+import httpx
 from playwright.sync_api import Page
 
 
@@ -88,9 +90,53 @@ def test_project_upload_flow(page: Page, path: str):
         # The Files card heading should be present (avoid strict mode violation)
         assert page.get_by_role("heading", name="Files").is_visible()
         assert page.get_by_text(".pw_tmp_upload.txt").first.is_visible()
+    except Exception as ui_err:
+        # Backend fallback: run the same flow via HTTP to distinguish FE vs BE failure
+        backend_ok = False
+        backend_err = None
+        try:
+            base = f"http://127.0.0.1:{port}"
+            with httpx.Client(base_url=base, follow_redirects=False, timeout=10) as hc:
+                # Create a unique project via backend
+                b_title = f"UI Upload Test (backend) {int(time.time()*1000000)}"
+                r = hc.post("/projects/create", data={"title": b_title})
+                assert r.status_code in (200, 303)
+                # Resolve project page
+                loc = r.headers.get("location")
+                if not loc:
+                    # Fallback: fetch home and find a project link
+                    home = hc.get("/").text
+                    import re as _re
+                    m = _re.search(r"/project/(\\d+)", home)
+                    assert m, "backend: could not find project link"
+                    pid = int(m.group(1))
+                    proj_url = f"/project/{pid}?branch_id=1"
+                else:
+                    proj_url = loc
+                # Extract branch_id for upload
+                q = parse_qs(urlparse(proj_url).query)
+                branch_id = int((q.get("branch_id") or ["1"])[0])
+                # Upload a file
+                with (Path.cwd() / ".pw_tmp_upload_backend.txt").open("wb") as f:
+                    f.write(b"hello,backend\n")
+                with (Path.cwd() / ".pw_tmp_upload_backend.txt").open("rb") as f:
+                    files = {"file": (".pw_tmp_upload_backend.txt", f, "text/plain")}
+                    ur = hc.post(f"/project/{int(urlparse(proj_url).path.split('/')[-1])}/files/upload?branch_id={branch_id}", files=files)
+                    assert ur.status_code in (200, 303)
+                backend_ok = True
+        except Exception as be:
+            backend_err = be
+        # Fail the test but annotate whether backend succeeded
+        if backend_ok:
+            raise AssertionError(f"Playwright UI failed, but backend succeeded. UI error: {ui_err}") from ui_err
+        raise AssertionError(f"Both UI and backend failed. UI error: {ui_err}; Backend error: {backend_err}") from ui_err
     finally:
         _stop_server(server, thread)
         try:
             tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        try:
+            (Path.cwd() / ".pw_tmp_upload_backend.txt").unlink(missing_ok=True)
         except Exception:
             pass
