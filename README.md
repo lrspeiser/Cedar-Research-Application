@@ -76,6 +76,24 @@ Override with `CEDARPY_UPLOAD_DIR` if desired.
 
 ## Client-side logging
 
+## LLM classification on file upload
+
+When a file is uploaded, CedarPy can call an LLM to classify and annotate it. The model returns:
+- structure: one of [images | sources | code | tabular]
+- ai_title: friendly title (<= 100 chars)
+- ai_description: friendly description (<= 350 chars)
+- ai_category: category (<= 100 chars)
+
+Configuration
+- CEDARPY_FILE_LLM: Defaults to 1 (enabled). Set to 0/false to disable the classification step.
+- CEDARPY_OPENAI_API_KEY or OPENAI_API_KEY: API key for the OpenAI API.
+- CEDARPY_OPENAI_MODEL: model name (default: gpt-5).
+
+Security and troubleshooting
+- Do not hardcode API keys. Use environment variables only.
+- If the key is missing or the API fails, the upload still succeeds; verbose logs show [llm-*] lines describing the cause. We do not fallback or fabricate values.
+- Code comments in main.py (search for "LLM classification") point back to this section.
+
 The app injects a small script into every HTML page that:
 - Proxies console.log/info/warn/error
 - Captures window.onerror and unhandledrejection

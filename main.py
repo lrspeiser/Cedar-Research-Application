@@ -141,6 +141,26 @@ def get_project_db(project_id: int) -> Session:
         db.close()
 
 
+def _migrate_project_files_ai_columns(engine_obj):
+    try:
+        with engine_obj.begin() as conn:
+            if engine_obj.dialect.name == "sqlite":
+                res = conn.exec_driver_sql("PRAGMA table_info(files)")
+                cols = [row[1] for row in res.fetchall()]
+                if "ai_title" not in cols:
+                    conn.exec_driver_sql("ALTER TABLE files ADD COLUMN ai_title TEXT")
+                if "ai_description" not in cols:
+                    conn.exec_driver_sql("ALTER TABLE files ADD COLUMN ai_description TEXT")
+                if "ai_category" not in cols:
+                    conn.exec_driver_sql("ALTER TABLE files ADD COLUMN ai_category TEXT")
+            elif engine_obj.dialect.name == "mysql":
+                conn.exec_driver_sql("ALTER TABLE files ADD COLUMN IF NOT EXISTS ai_title VARCHAR(255)")
+                conn.exec_driver_sql("ALTER TABLE files ADD COLUMN IF NOT EXISTS ai_description TEXT")
+                conn.exec_driver_sql("ALTER TABLE files ADD COLUMN IF NOT EXISTS ai_category VARCHAR(255)")
+    except Exception:
+        pass
+
+
 def ensure_project_initialized(project_id: int) -> None:
     """Ensure the per-project database and storage exist and are seeded.
     See PROJECT_SEPARATION_README.md
@@ -170,6 +190,7 @@ def ensure_project_initialized(project_id: int) -> None:
         finally:
             pdb.close()
         _ensure_project_storage(project_id)
+        _migrate_project_files_ai_columns(eng)
     except Exception:
         pass
 
@@ -221,12 +242,16 @@ class FileEntry(Base):
     filename = Column(String(512), nullable=False)  # storage name on disk
     display_name = Column(String(255), nullable=False)  # original filename
     file_type = Column(String(50))  # e.g., jpg, pdf, json (derived)
-    structure = Column(String(50))  # notes, writeup, images, sources, code
+    structure = Column(String(50))  # images, sources, code, tabular (LLM-chosen)
     mime_type = Column(String(100))
     size_bytes = Column(Integer)
     storage_path = Column(String(1024))  # absolute/relative path on disk
     created_at = Column(DateTime, default=datetime.utcnow)
     metadata_json = Column(JSON)  # extracted metadata from interpreter
+    # AI classification outputs
+    ai_title = Column(String(255))
+    ai_description = Column(Text)
+    ai_category = Column(String(255))
 
     project = relationship("Project")
     branch = relationship("Branch")
@@ -293,6 +318,7 @@ class SQLUndoLog(Base):
 Base.metadata.create_all(registry_engine)
 
 # Attempt a lightweight migration for existing DBs: add metadata_json if missing (registry only)
+# Also add AI columns for LLM classification (ai_title, ai_description, ai_category) on the registry DB.
 try:
     with registry_engine.begin() as conn:
         dialect = registry_engine.dialect.name
@@ -311,6 +337,27 @@ try:
         else:
             # best effort: try adding a JSON column with generic SQL
             conn.exec_driver_sql("ALTER TABLE files ADD COLUMN metadata_json JSON")
+        # Add AI columns if missing
+        try:
+            if dialect == "sqlite":
+                res2 = conn.exec_driver_sql("PRAGMA table_info(files)")
+                cols2 = [row[1] for row in res2.fetchall()]
+                if "ai_title" not in cols2:
+                    conn.exec_driver_sql("ALTER TABLE files ADD COLUMN ai_title TEXT")
+                if "ai_description" not in cols2:
+                    conn.exec_driver_sql("ALTER TABLE files ADD COLUMN ai_description TEXT")
+                if "ai_category" not in cols2:
+                    conn.exec_driver_sql("ALTER TABLE files ADD COLUMN ai_category TEXT")
+            elif dialect == "mysql":
+                conn.exec_driver_sql("ALTER TABLE files ADD COLUMN IF NOT EXISTS ai_title VARCHAR(255)")
+                conn.exec_driver_sql("ALTER TABLE files ADD COLUMN IF NOT EXISTS ai_description TEXT")
+                conn.exec_driver_sql("ALTER TABLE files ADD COLUMN IF NOT EXISTS ai_category VARCHAR(255)")
+            else:
+                conn.exec_driver_sql("ALTER TABLE files ADD COLUMN ai_title TEXT")
+                conn.exec_driver_sql("ALTER TABLE files ADD COLUMN ai_description TEXT")
+                conn.exec_driver_sql("ALTER TABLE files ADD COLUMN ai_category TEXT")
+        except Exception:
+            pass
 except Exception:
     # Ignore migration issues in prototype mode
     pass
@@ -318,6 +365,103 @@ except Exception:
 # ----------------------------------------------------------------------------------
 # Utilities
 # ----------------------------------------------------------------------------------
+
+# LLM classification utilities (See README: "LLM classification on file upload")
+# When calling web services, configure keys via env. Do not hardcode secrets.
+# See README for setup and troubleshooting; verbose logs are emitted on error.
+
+def _llm_client_config():
+    try:
+        from openai import OpenAI  # type: ignore
+    except Exception:
+        return None, None
+    api_key = os.getenv("CEDARPY_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return None, None
+    model = os.getenv("CEDARPY_OPENAI_MODEL", "gpt-5")
+    try:
+        client = OpenAI(api_key=api_key)
+        return client, model
+    except Exception:
+        return None, None
+
+
+def _llm_classify_file(meta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    Calls GPT model to classify a file into one of: images | sources | code | tabular
+    and produce ai_title (<=100), ai_description (<=350), ai_category (<=100).
+
+    Input: metadata produced by interpret_file(), including:
+    - extension, mime_guess, format, language, is_text, size_bytes, line_count, sample_text
+
+    Returns dict or None on error. Errors are logged verbosely.
+    """
+    if str(os.getenv("CEDARPY_FILE_LLM", "1")).strip().lower() in {"0","false","no","off"}:
+        try:
+            print("[llm-skip] CEDARPY_FILE_LLM=0")
+        except Exception:
+            pass
+        return None
+    client, model = _llm_client_config()
+    if not client:
+        try:
+            print("[llm-skip] missing OpenAI API key; set CEDARPY_OPENAI_API_KEY or OPENAI_API_KEY")
+        except Exception:
+            pass
+        return None
+    # Prepare a bounded sample
+    sample_text = (meta.get("sample_text") or "")
+    if len(sample_text) > 8000:
+        sample_text = sample_text[:8000]
+    info = {
+        k: meta.get(k) for k in [
+            "extension","mime_guess","format","language","is_text","size_bytes","line_count","json_valid","json_top_level_keys","csv_dialect"
+        ] if k in meta
+    }
+    sys_prompt = (
+        "You are an expert data librarian. Classify incoming files and produce short, friendly labels.\n"
+        "Output strict JSON with keys: structure, ai_title, ai_description, ai_category.\n"
+        "Rules: structure must be one of: images | sources | code | tabular.\n"
+        "ai_title <= 100 chars. ai_description <= 350 chars. ai_category <= 100 chars.\n"
+        "Do not include newlines in values. If in doubt, choose the best fit."
+    )
+    user_payload = {
+        "metadata": info,
+        "display_name": meta.get("display_name"),
+        "snippet_utf8": sample_text,
+    }
+    import json as _json
+    messages = [
+        {"role": "system", "content": sys_prompt},
+        {"role": "user", "content": "Classify this file and produce JSON as specified. Input:"},
+        {"role": "user", "content": _json.dumps(user_payload, ensure_ascii=False)},
+    ]
+    try:
+        resp = client.chat.completions.create(model=model, messages=messages, temperature=0)
+        content = (resp.choices[0].message.content or "").strip()
+        result = _json.loads(content)
+        # Normalize and enforce limits
+        struct = str(result.get("structure"," ")).strip().lower()
+        if struct not in {"images","sources","code","tabular"}:
+            struct = None
+        def _clip(s, n):
+            s = '' if s is None else str(s)
+            return s[:n]
+        title = _clip(result.get("ai_title"), 100)
+        desc = _clip(result.get("ai_description"), 350)
+        cat = _clip(result.get("ai_category"), 100)
+        out = {"structure": struct, "ai_title": title, "ai_description": desc, "ai_category": cat}
+        try:
+            print(f"[llm] model={model} structure={struct} title={len(title)} chars cat={cat}")
+        except Exception:
+            pass
+        return out
+    except Exception as e:
+        try:
+            print(f"[llm-error] {type(e).__name__}: {e}")
+        except Exception:
+            pass
+        return None
 
 def _is_probably_text(path: str, sample_bytes: int = 4096) -> bool:
     try:
@@ -826,14 +970,7 @@ SELECT * FROM demo LIMIT 10;""")
           <form method=\"post\" action=\"/project/{project.id}/files/upload?branch_id={current.id}\" enctype=\"multipart/form-data\">
             <input type=\"file\" name=\"file\" required />
             <div style=\"height:8px\"></div>
-            <label>Structure</label>
-            <select name=\"structure\" required>
-              <option value=\"notes\">notes</option>
-              <option value=\"writeup\">writeup</option>
-              <option value=\"images\">images</option>
-              <option value=\"sources\">sources</option>
-              <option value=\"code\">code</option>
-            </select>
+            <div class=\"small muted\">GPT will set structure (images | sources | code | tabular), title, description, and category. See README (LLM classification on file upload).</div>
             <div style=\"height:8px\"></div>
             <button type=\"submit\">Upload</button>
           </form>
@@ -2629,7 +2766,9 @@ def create_thread(project_id: int, request: Request, title: str = Form(...), db:
 
 
 @app.post("/project/{project_id}/files/upload")
-def upload_file(project_id: int, request: Request, file: UploadFile = File(...), structure: str = Form(...), db: Session = Depends(get_project_db)):
+# LLM classification runs after file is saved. See README for API key setup.
+# If LLM fails or is disabled, the file is kept and structure fields remain unset.
+def upload_file(project_id: int, request: Request, file: UploadFile = File(...), db: Session = Depends(get_project_db)):
     ensure_project_initialized(project_id)
     branch_id = request.query_params.get("branch_id")
     try:
@@ -2670,7 +2809,7 @@ def upload_file(project_id: int, request: Request, file: UploadFile = File(...),
         filename=storage_name,
         display_name=original_name,
         file_type=ftype,
-        structure=structure.strip(),
+        structure=None,
         mime_type=mime or file.content_type or "",
         size_bytes=size,
         storage_path=os.path.abspath(disk_path),
@@ -2679,6 +2818,25 @@ def upload_file(project_id: int, request: Request, file: UploadFile = File(...),
     db.add(record)
     db.commit()
     db.refresh(record)
+
+    # LLM classification (best-effort, no fallbacks). See README for details.
+    try:
+        meta_for_llm = dict(meta)
+        meta_for_llm["display_name"] = original_name
+        ai = _llm_classify_file(meta_for_llm)
+        if ai:
+            struct = ai.get("structure") if isinstance(ai, dict) else None
+            record.structure = struct
+            record.ai_title = ai.get("ai_title")
+            record.ai_description = ai.get("ai_description")
+            record.ai_category = ai.get("ai_category")
+            db.commit(); db.refresh(record)
+    except Exception as e:
+        try:
+            print(f"[llm-exec-error] {type(e).__name__}: {e}")
+        except Exception:
+            pass
+
     add_version(db, "file", record.id, {
         "project_id": project.id, "branch_id": branch.id,
         "filename": record.filename, "display_name": record.display_name,
