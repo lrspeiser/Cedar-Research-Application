@@ -256,9 +256,40 @@ def _maybe_prompt_full_disk_access_once():
         pass
 
 
+def _choose_listen_port(host: str, desired: int) -> int:
+    try:
+        import socket as _s
+        # Try desired
+        s = _s.socket(_s.AF_INET, _s.SOCK_STREAM)
+        try:
+            s.bind((host, desired))
+            s.close()
+            return desired
+        except Exception:
+            try:
+                s.close()
+            except Exception:
+                pass
+        # Find free
+        s2 = _s.socket(_s.AF_INET, _s.SOCK_STREAM)
+        s2.bind((host, 0))
+        port = s2.getsockname()[1]
+        s2.close()
+        return int(port)
+    except Exception:
+        return desired
+
+
 def main():
     host = os.getenv("CEDARPY_HOST", "127.0.0.1")
-    port = int(os.getenv("CEDARPY_PORT", "8000"))
+    port_env = os.getenv("CEDARPY_PORT", "8000")
+    try:
+        desired = int(port_env)
+    except Exception:
+        desired = 8000
+    port = _choose_listen_port(host, desired)
+    # Propagate the effective port to child pieces that might read env again
+    os.environ["CEDARPY_PORT"] = str(port)
     url = f"http://{host}:{port}/"
 
     # Start server (in-process)

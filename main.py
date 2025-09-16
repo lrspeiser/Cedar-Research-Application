@@ -1011,8 +1011,8 @@ def layout(title: str, body: str) -> HTMLResponse:
     .pill {{ display: inline-block; padding: 2px 8px; border-radius: 999px; background: #eef2ff; color: #3730a3; font-size: 12px; }}
     form.inline * {{ vertical-align: middle; }}
     input[type=\"text\"], select {{ padding: 8px; border: 1px solid var(--border); border-radius: 6px; width: 100%; }}
-    input[type=\"file\"] {{ padding: 6px; border: 1px dashed var(--border); border-radius: 6px; width: 100%; }}
-    button {{ padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--accent); color: white; cursor: pointer; }}
+    input[type=\"file\"] {{ padding: 6px; border: 1px dashed var(--border); border-radius: 6px; width: 100%; position: relative; z-index: 1; display: block; }}
+    button {{ padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--accent); color: white; cursor: pointer; position: relative; z-index: 2; pointer-events: auto; }}
     button.secondary {{ background: #f3f4f6; color: #111; }}
     .small {{ font-size: 12px; }}
     .topbar {{ display:flex; align-items:center; gap:12px; }}
@@ -1085,6 +1085,10 @@ def projects_list_html(projects: List[Project]) -> str:
               <input type=\"text\" name=\"title\" placeholder=\"Project title\" required />
               <div style=\"height:10px\"></div>
               <button type=\"submit\">Create</button>
+            </form>
+          </div>
+        </div>
+    """
 
 
 def project_page_html(

@@ -107,12 +107,39 @@ def _kill_other_instances():
         pass
 
 
+def _choose_listen_port(host: str, desired: int) -> int:
+    try:
+        import socket as _s
+        s = _s.socket(_s.AF_INET, _s.SOCK_STREAM)
+        try:
+            s.bind((host, desired))
+            s.close()
+            return desired
+        except Exception:
+            try:
+                s.close()
+            except Exception:
+                pass
+        s2 = _s.socket(_s.AF_INET, _s.SOCK_STREAM)
+        s2.bind((host, 0))
+        port = s2.getsockname()[1]
+        s2.close()
+        return int(port)
+    except Exception:
+        return desired
+
+
 def main():
     log_path = _init_logging()
     print("[cedarpy] starting CedarPy ...")
 
     host = os.getenv("CEDARPY_HOST", "127.0.0.1")
-    port = int(os.getenv("CEDARPY_PORT", "8000"))
+    try:
+        desired = int(os.getenv("CEDARPY_PORT", "8000"))
+    except Exception:
+        desired = 8000
+    port = _choose_listen_port(host, desired)
+    os.environ["CEDARPY_PORT"] = str(port)
 
     # Ensure single instance
     _kill_other_instances()
@@ -129,8 +156,9 @@ def main():
         time.sleep(1.5)
         try:
             browse_host = "127.0.0.1" if host in ("0.0.0.0", "::") else host
-            print(f"[cedarpy] opening browser at http://{browse_host}:{port} (bound on {host})")
-            webbrowser.open(f"http://{browse_host}:{port}")
+            eff_port = os.getenv("CEDARPY_PORT", str(port))
+            print(f"[cedarpy] opening browser at http://{browse_host}:{eff_port} (bound on {host})")
+            webbrowser.open(f"http://{browse_host}:{eff_port}")
         except Exception:
             pass
 
