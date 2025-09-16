@@ -214,10 +214,18 @@ def _migrate_project_files_ai_columns(engine_obj):
                     conn.exec_driver_sql("ALTER TABLE files ADD COLUMN ai_description TEXT")
                 if "ai_category" not in cols:
                     conn.exec_driver_sql("ALTER TABLE files ADD COLUMN ai_category TEXT")
+                if "ai_processing" not in cols:
+                    conn.exec_driver_sql("ALTER TABLE files ADD COLUMN ai_processing INTEGER DEFAULT 0")
             elif engine_obj.dialect.name == "mysql":
                 conn.exec_driver_sql("ALTER TABLE files ADD COLUMN IF NOT EXISTS ai_title VARCHAR(255)")
                 conn.exec_driver_sql("ALTER TABLE files ADD COLUMN IF NOT EXISTS ai_description TEXT")
                 conn.exec_driver_sql("ALTER TABLE files ADD COLUMN IF NOT EXISTS ai_category VARCHAR(255)")
+                conn.exec_driver_sql("ALTER TABLE files ADD COLUMN IF NOT EXISTS ai_processing TINYINT(1) DEFAULT 0")
+            else:
+                try:
+                    conn.exec_driver_sql("ALTER TABLE files ADD COLUMN ai_processing BOOLEAN DEFAULT 0")
+                except Exception:
+                    pass
     except Exception:
         pass
 
@@ -350,6 +358,8 @@ class FileEntry(Base):
     ai_title = Column(String(255))
     ai_description = Column(Text)
     ai_category = Column(String(255))
+    # Processing flag for UI spinner
+    ai_processing = Column(Boolean, default=False)
 
     project = relationship("Project")
     branch = relationship("Branch")
@@ -446,14 +456,21 @@ try:
                     conn.exec_driver_sql("ALTER TABLE files ADD COLUMN ai_description TEXT")
                 if "ai_category" not in cols2:
                     conn.exec_driver_sql("ALTER TABLE files ADD COLUMN ai_category TEXT")
+                if "ai_processing" not in cols2:
+                    conn.exec_driver_sql("ALTER TABLE files ADD COLUMN ai_processing INTEGER DEFAULT 0")
             elif dialect == "mysql":
                 conn.exec_driver_sql("ALTER TABLE files ADD COLUMN IF NOT EXISTS ai_title VARCHAR(255)")
                 conn.exec_driver_sql("ALTER TABLE files ADD COLUMN IF NOT EXISTS ai_description TEXT")
                 conn.exec_driver_sql("ALTER TABLE files ADD COLUMN IF NOT EXISTS ai_category VARCHAR(255)")
+                conn.exec_driver_sql("ALTER TABLE files ADD COLUMN IF NOT EXISTS ai_processing TINYINT(1) DEFAULT 0")
             else:
                 conn.exec_driver_sql("ALTER TABLE files ADD COLUMN ai_title TEXT")
                 conn.exec_driver_sql("ALTER TABLE files ADD COLUMN ai_description TEXT")
                 conn.exec_driver_sql("ALTER TABLE files ADD COLUMN ai_category TEXT")
+                try:
+                    conn.exec_driver_sql("ALTER TABLE files ADD COLUMN ai_processing BOOLEAN DEFAULT 0")
+                except Exception:
+                    pass
         except Exception:
             pass
 except Exception:
@@ -934,6 +951,11 @@ def layout(title: str, body: str) -> HTMLResponse:
 </body>
 </html>
 """
+    # Render header status
+    try:
+        html_doc = html_doc.format(llm_status=llm_status)
+    except Exception:
+        pass
     return HTMLResponse(html_doc)
 
 
@@ -1134,8 +1156,13 @@ SELECT * FROM demo LIMIT 10;""")
         sub = escape(((getattr(f, 'ai_category', None) or f.structure or f.file_type or '') or ''))
         active = (selected_file and f.id == selected_file.id)
         li_style = "font-weight:600" if active else ""
-        # Spinner when classification pending (no structure yet), checkmark when done
-        status_icon = "<span class='spinner' title='processing'></span>" if not getattr(f, 'structure', None) else "<span title='classified'>✓</span>"
+        # Show spinner only while LLM classification is actively running; checkmark when classified
+        if getattr(f, 'ai_processing', False):
+            status_icon = "<span class='spinner' title='processing'></span>"
+        elif getattr(f, 'structure', None):
+            status_icon = "<span title='classified'>✓</span>"
+        else:
+            status_icon = ""
         file_list_items.append(f"<li style='margin:6px 0; {li_style}'>{status_icon}<a href='{href}' style='text-decoration:none; color:inherit; margin-left:6px'>{label_text}</a><div class='small muted'>{sub}</div></li>")
     file_list_html = "<ul style='list-style:none; padding-left:0; margin:0'>" + ("".join(file_list_items) or "<li class='muted'>No files yet.</li>") + "</ul>"
 
@@ -3248,6 +3275,7 @@ def upload_file(project_id: int, request: Request, file: UploadFile = File(...),
         size_bytes=size,
         storage_path=os.path.abspath(disk_path),
         metadata_json=meta,
+        ai_processing=True,
     )
     db.add(record)
     db.commit()
@@ -3283,11 +3311,14 @@ def upload_file(project_id: int, request: Request, file: UploadFile = File(...),
             record.ai_title = ai.get("ai_title")
             record.ai_description = ai.get("ai_description")
             record.ai_category = ai.get("ai_category")
+            record.ai_processing = False
             db.commit(); db.refresh(record)
             # Persist assistant message with result
             tm2 = ThreadMessage(project_id=project.id, branch_id=branch.id, thread_id=thr.id, role="assistant", display_title="File analyzed", content=json.dumps(ai), payload_json=ai)
             db.add(tm2); db.commit()
         else:
+            record.ai_processing = False
+            db.commit()
             tm2 = ThreadMessage(project_id=project.id, branch_id=branch.id, thread_id=thr.id, role="assistant", display_title="File analysis skipped", content="LLM classification disabled or missing key")
             db.add(tm2); db.commit()
     except Exception as e:
@@ -3295,6 +3326,11 @@ def upload_file(project_id: int, request: Request, file: UploadFile = File(...),
             print(f"[llm-exec-error] {type(e).__name__}: {e}")
         except Exception:
             pass
+        try:
+            record.ai_processing = False
+            db.commit()
+        except Exception:
+            db.rollback()
 
     add_version(db, "file", record.id, {
         "project_id": project.id, "branch_id": branch.id,
