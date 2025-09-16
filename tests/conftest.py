@@ -46,3 +46,21 @@ def pytest_sessionstart(session):
             os.environ["CEDARPY_OPENAI_API_KEY"] = key
         if os.getenv("OPENAI_API_KEY") is None:
             os.environ["OPENAI_API_KEY"] = key
+
+    # Determine whether LLM tests can run by verifying access to the configured model.
+    # We do a cheap retrieve call rather than a completion to avoid extra cost.
+    ready = False
+    try:
+        from openai import OpenAI  # type: ignore
+        model = os.getenv("CEDARPY_OPENAI_MODEL") or "gpt-5"
+        api_key = os.getenv("CEDARPY_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
+        if api_key:
+            client = OpenAI(api_key=api_key)
+            try:
+                client.models.retrieve(model)
+                ready = True
+            except Exception:
+                ready = False
+    except Exception:
+        ready = False
+    os.environ["CEDARPY_TEST_LLM_READY"] = "1" if ready else "0"

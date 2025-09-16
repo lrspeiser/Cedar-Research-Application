@@ -4,6 +4,7 @@ import json
 import re
 import tempfile
 import importlib
+import pytest
 
 from starlette.testclient import TestClient
 
@@ -90,9 +91,11 @@ def test_upload_emits_processing_and_updates_metadata_json():
             pass
 
 
-def test_upload_sets_ai_fields_when_key_present_or_skips():
-    # Only run this part if a key is present; otherwise assert the 'skipped' path
-    has_key = bool(os.getenv("CEDARPY_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY"))
+def test_upload_sets_ai_fields_via_llm():
+    # Require a working key; otherwise skip with a clear message (no fallback tests)
+    if os.getenv("CEDARPY_TEST_LLM_READY") != "1":
+        pytest.skip("OpenAI key not working or missing; LLM tests were not run.")
+
     main, tmp = _reload_app_with_temp_env_llm()
     try:
         with TestClient(main.app) as client:
@@ -105,27 +108,24 @@ def test_upload_sets_ai_fields_when_key_present_or_skips():
 
             token_q = "?token=testtoken"
             with client.websocket_connect(f"/ws/sql/{pid}{token_q}") as ws:
+                # Verify AI fields were populated
                 ws.send_text(json.dumps({"sql": "SELECT id, ai_title, ai_category, structure FROM files ORDER BY id DESC LIMIT 1"}))
                 out = json.loads(ws.receive_text()); assert out.get("ok") is True
                 cols = out.get("columns"); row = out.get("rows")[0]
                 rowd = {cols[i]: row[i] for i in range(len(cols))}
-                if has_key:
-                    # Expect some AI fields to be filled
-                    assert (rowd.get("ai_title") or "").strip() != ""
-                else:
-                    # No key: classification may be skipped; structure might remain None
-                    pass
+                assert (rowd.get("structure") or "").strip() != ""
+                assert (rowd.get("ai_title") or "").strip() != ""
 
-                # Check thread messages reflect analysis result
+                # Check thread messages indicate analysis performed (not skipped)
                 ws.send_text(json.dumps({"sql": "SELECT id FROM threads ORDER BY id DESC LIMIT 1"}))
                 thr_out = json.loads(ws.receive_text()); assert thr_out.get("ok") is True
                 thr_id = thr_out.get("rows")[0][0]
                 ws.send_text(json.dumps({"sql": f"SELECT role, display_title FROM thread_messages WHERE thread_id = {thr_id} ORDER BY id DESC LIMIT 2"}))
                 msg_out = json.loads(ws.receive_text()); assert msg_out.get("ok") is True
                 msgs = msg_out.get("rows") or []
-                # On success expect an assistant message; on no-key path, we still add a message indicating skipped
-                assert any(m[0] == "assistant" for m in msgs)
+                assert any((m[0] == "assistant" and (m[1] or "").lower().startswith("file analyzed")) for m in msgs)
     finally:
+        # Best-effort cleanup
         try:
             import shutil
             shutil.rmtree(tmp, ignore_errors=True)
