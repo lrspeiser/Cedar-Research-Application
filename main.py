@@ -234,6 +234,23 @@ class Thread(Base):
     branch = relationship("Branch")
 
 
+class ThreadMessage(Base):
+    __tablename__ = "thread_messages"
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, nullable=False, index=True)
+    branch_id = Column(Integer, nullable=False, index=True)
+    thread_id = Column(Integer, ForeignKey("threads.id"), nullable=False, index=True)
+    role = Column(String(20), nullable=False)  # 'user' | 'assistant'
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    thread = relationship("Thread")
+
+    __table_args__ = (
+        Index("ix_thread_messages_project_thread", "project_id", "thread_id", "created_at"),
+    )
+
+
 class FileEntry(Base):
     __tablename__ = "files"
     id = Column(Integer, primary_key=True)
@@ -780,6 +797,8 @@ def layout(title: str, body: str) -> HTMLResponse:
     button.secondary {{ background: #f3f4f6; color: #111; }}
     .small {{ font-size: 12px; }}
     .topbar {{ display:flex; align-items:center; gap:12px; }}
+    .spinner {{ display:inline-block; width:12px; height:12px; border:2px solid #cbd5e1; border-top-color:#334155; border-radius:50%; animation: spin 1s linear infinite; }}
+    @keyframes spin {{ from {{ transform: rotate(0deg);}} to {{ transform: rotate(360deg);}} }}
   </style>
   {client_log_js}
 </head>
@@ -851,6 +870,8 @@ def project_page_html(
     threads: List[Thread],
     datasets: List[Dataset],
     selected_file: Optional[FileEntry] = None,
+    selected_thread: Optional[Thread] = None,
+    thread_messages: Optional[List[ThreadMessage]] = None,
     msg: Optional[str] = None,
     sql_result_block: Optional[str] = None,
 ) -> str:
@@ -860,7 +881,15 @@ def project_page_html(
     for b in branches:
         selected = "style='font-weight:600'" if b.id == current.id else ""
         tabs.append(f"<a {selected} href='/project/{project.id}?branch_id={b.id}' class='pill'>{escape(b.name)}</a>")
-    tabs_html = " ".join(tabs)
+    # Inline new-branch form toggle
+    new_branch_form = f"""
+      <form id='branchCreateForm' method='post' action='/project/{project.id}/branches/create' class='inline' style='display:none; margin-left:8px'>
+        <input type='text' name='name' placeholder='experiment-1' required style='width:160px; padding:6px; border:1px solid var(--border); border-radius:6px' />
+        <button type='submit' class='secondary'>Create</button>
+      </form>
+      <a href='#' class='pill' title='New branch' onclick="var f=document.getElementById('branchCreateForm'); if(f){{f.style.display=(f.style.display==='none'?'inline-block':'none'); var i=f.querySelector('input[name=name]'); if(i){{i.focus();}}}} return false;">+</a>
+    """
+    tabs_html = (" ".join(tabs)) + new_branch_form
 
     # files table
     file_rows = []
@@ -927,7 +956,7 @@ INSERT INTO demo (name) VALUES ('Alice');
 SELECT * FROM demo LIMIT 10;""")
 
     sql_card = f"""
-      <div class=\"card\">
+      <div class=\"card\" style=\"padding:12px\">
         <h3>SQL Console</h3>
         <div class=\"small muted\">Run SQL against the current database (SQLite by default, or your configured MySQL). Max rows is controlled by CEDARPY_SQL_MAX_ROWS.</div>
         <pre class=\"small\" style=\"white-space:pre-wrap; background:#f9fafb; padding:8px; border-radius:6px;\">{examples}</pre>
@@ -956,7 +985,7 @@ SELECT * FROM demo LIMIT 10;""")
     # Thread select + create controls at the top
     threads_options = ''.join([f"<option value='{escape(t.title)}'>{escape(t.title)}</option>" for t in threads])
     thread_top = f"""
-      <div class='card' style='margin-top:12px'>
+      <div class='card' style='margin-top:8px; padding:12px'>
         <div class='row' style='align-items:center; gap:12px'>
           <div>
             <label class='small muted'>Select Thread</label>
@@ -981,12 +1010,14 @@ SELECT * FROM demo LIMIT 10;""")
     files_sorted = sorted(files, key=lambda ff: (_file_label(ff).lower(), ff.created_at))
     file_list_items = []
     for f in files_sorted:
-        href = f"/project/{project.id}?branch_id={current.id}&file_id={f.id}"
-        label = escape(_file_label(f) or f.display_name)
+        href = f"/project/{project.id}?branch_id={current.id}&file_id={f.id}" + (f"&thread_id={selected_thread.id}" if selected_thread else "")
+        label_text = escape(_file_label(f) or f.display_name)
         sub = escape(((getattr(f, 'ai_category', None) or f.structure or f.file_type or '') or ''))
         active = (selected_file and f.id == selected_file.id)
         li_style = "font-weight:600" if active else ""
-        file_list_items.append(f"<li style='margin:6px 0; {li_style}'><a href='{href}' style='text-decoration:none; color:inherit'>{label}</a><div class='small muted'>{sub}</div></li>")
+        # Spinner when classification pending (no structure yet), checkmark when done
+        status_icon = "<span class='spinner' title='processing'></span>" if not getattr(f, 'structure', None) else "<span title='classified'>✓</span>"
+        file_list_items.append(f"<li style='margin:6px 0; {li_style}'>{status_icon}<a href='{href}' style='text-decoration:none; color:inherit; margin-left:6px'>{label_text}</a><div class='small muted'>{sub}</div></li>")
     file_list_html = "<ul style='list-style:none; padding-left:0; margin:0'>" + ("".join(file_list_items) or "<li class='muted'>No files yet.</li>") + "</ul>"
 
     # Left details panel for selected file
@@ -1030,15 +1061,56 @@ SELECT * FROM demo LIMIT 10;""")
 
     left_details = _file_detail_panel(selected_file)
 
+    # Thread tabs (above left panel)
+    thr_tabs = []
+    for t in threads:
+        sel = "style='font-weight:600'" if (selected_thread and t.id == selected_thread.id) else ""
+        thr_tabs.append(f"<a {sel} href='/project/{project.id}?branch_id={current.id}" + (f"&file_id={selected_file.id}" if selected_file else "") + f"&thread_id={t.id}' class='pill'>{escape(t.title)}</a>")
+    thr_tabs_html = " ".join(thr_tabs) + f" <a href='/project/{project.id}/threads/new?branch_id={current.id}" + (f"&file_id={selected_file.id}" if selected_file else "") + "' class='pill' title='New thread'>+</a>"
+
+    # Render thread messages
+    msgs = thread_messages or []
+    msg_rows = []
+    if msgs:
+        for m in msgs:
+            role = escape(m.role)
+            body = escape(m.content)
+            msg_rows.append(f"<div class='small' style='margin:6px 0'><span class='pill'>{role}</span> <span>{body}</span></div>")
+    else:
+        msg_rows.append("<div class='muted small'>(No messages yet)</div>")
+    msgs_html = "".join(msg_rows)
+
+    # Chat form (LLM keys required; see README)
+    chat_form = f"""
+      <form method='post' action='/project/{project.id}/threads/chat?branch_id={current.id}' style='margin-top:8px'>
+        <input type='hidden' name='thread_id' value='{(selected_thread.id if selected_thread else '')}' />
+        <input type='hidden' name='file_id' value='{(selected_file.id if selected_file else '')}' />
+        <textarea name='content' rows='3' placeholder='Ask a question about this file/context...' style='width:100%; font-family: ui-monospace, Menlo, monospace;'></textarea>
+        <div style='height:6px'></div>
+        <button type='submit'>Submit</button>
+        <span class='small muted'>LLM API key required; see README for setup.</span>
+      </form>
+    """
+
     return f"""
       <h1>{escape(project.title)}</h1>
       <div class=\"muted small\">Project ID: {project.id}</div>
       <div style=\"height:10px\"></div>
       <div>Branches: {tabs_html}</div>
 
-      {thread_top}
+      <div class='row' style='margin-top:8px'>
+        <div class='card' style='flex:2'>
+          <div style='margin-bottom:8px'>{thr_tabs_html}</div>
+          <h3>File Details</h3>
+          {flash_html}
+          {left_details}
+          <div style='height:8px'></div>
+          <h3>Thread</h3>
+          <div>{msgs_html}</div>
+          {chat_form}
+        </div>
 
-      <div class=\"row\" style=\"margin-top:16px\">
+        <div style=\"flex:1; display:flex; flex-direction:column; gap:8px\">\n          <div class=\"card\" style=\"max-height:220px; overflow:auto; padding:12px\">\n            <h3 style='margin-bottom:6px'>Files</h3>\n            {file_list_html}\n          </div>\n          <div class=\"card\" style='padding:12px'>\n            <h3 style='margin-bottom:6px'>Upload a file</h3>\n            <form method=\"post\" action=\"/project/{project.id}/files/upload?branch_id={current.id}\" enctype=\"multipart/form-data\">\n              <input type=\"file\" name=\"file\" required />\n              <div style=\"height:6px\"></div>\n              <div class=\"small muted\">LLM classification runs automatically on upload. See README for API key setup.</div>\n              <div style=\"height:6px\"></div>\n              <button type=\"submit\">Upload</button>\n            </form>\n          </div>\n          {sql_card}\n        </div>
         <div class="card" style="flex:2">
           <h3>File Details</h3>
           {flash_html}
@@ -2782,7 +2854,7 @@ def create_project(title: str = Form(...), db: Session = Depends(get_registry_db
 
 
 @app.get("/project/{project_id}", response_class=HTMLResponse)
-def view_project(project_id: int, branch_id: Optional[int] = None, msg: Optional[str] = None, file_id: Optional[int] = None, db: Session = Depends(get_project_db)):
+def view_project(project_id: int, branch_id: Optional[int] = None, msg: Optional[str] = None, file_id: Optional[int] = None, thread_id: Optional[int] = None, db: Session = Depends(get_project_db)):
     ensure_project_initialized(project_id)
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
@@ -2825,7 +2897,18 @@ def view_project(project_id: int, branch_id: Optional[int] = None, msg: Optional
     except Exception:
         selected_file = None
 
-    return layout(project.title, project_page_html(project, branches, current, files, threads, datasets, selected_file=selected_file, msg=msg))
+    # resolve selected thread and messages
+    selected_thread = None
+    thread_messages: List[ThreadMessage] = []
+    try:
+        if thread_id is not None:
+            selected_thread = db.query(Thread).filter(Thread.id == int(thread_id), Thread.project_id == project.id, Thread.branch_id.in_(show_branch_ids)).first()
+            if selected_thread:
+                thread_messages = db.query(ThreadMessage).filter(ThreadMessage.project_id==project.id, ThreadMessage.thread_id==selected_thread.id).order_by(ThreadMessage.created_at.asc()).all()
+    except Exception:
+        selected_thread = None
+
+    return layout(project.title, project_page_html(project, branches, current, files, threads, datasets, selected_file=selected_file, selected_thread=selected_thread, thread_messages=thread_messages, msg=msg))
 
 
 @app.post("/project/{project_id}/branches/create")
@@ -2854,7 +2937,10 @@ def create_branch(project_id: int, name: str = Form(...), db: Session = Depends(
 
 
 @app.post("/project/{project_id}/threads/create")
-def create_thread(project_id: int, request: Request, title: str = Form(...), db: Session = Depends(get_project_db)):
+@app.get("/project/{project_id}/threads/new")
+# LLM chat uses threads. If using the GET '/threads/new', a default title 'New Thread' is created
+# and the user is redirected to the project page focusing the new tab. See README for LLM setup.
+def create_thread(project_id: int, request: Request, title: Optional[str] = Form(None), db: Session = Depends(get_project_db)):
     ensure_project_initialized(project_id)
     # branch selected via query parameter
     branch_id = request.query_params.get("branch_id")
@@ -2868,12 +2954,101 @@ def create_thread(project_id: int, request: Request, title: str = Form(...), db:
         return RedirectResponse("/", status_code=303)
 
     branch = current_branch(db, project.id, branch_id)
-    t = Thread(project_id=project.id, branch_id=branch.id, title=title.strip())
+    # Title handling: for GET /threads/new, title may be None -> default
+    if request.method.upper() == 'GET' and (title is None or not str(title).strip()):
+        title = "New Thread"
+    title = (title or "New Thread").strip()
+    t = Thread(project_id=project.id, branch_id=branch.id, title=title)
     db.add(t)
     db.commit()
     db.refresh(t)
     add_version(db, "thread", t.id, {"project_id": project.id, "branch_id": branch.id, "title": t.title})
-    return RedirectResponse(f"/project/{project.id}?branch_id={branch.id}&msg=Thread+created", status_code=303)
+    # Redirect to focus the newly created thread
+    return RedirectResponse(f"/project/{project.id}?branch_id={branch.id}&thread_id={t.id}&msg=Thread+created", status_code=303)
+
+
+@app.post("/project/{project_id}/threads/chat")
+# Submit a chat message in the selected thread; includes file metadata context to LLM.
+# Requires OpenAI API key; see README for setup. Verbose errors are surfaced to the UI/log.
+def thread_chat(project_id: int, request: Request, content: str = Form(...), thread_id: Optional[int] = Form(None), file_id: Optional[int] = Form(None), db: Session = Depends(get_project_db)):
+    ensure_project_initialized(project_id)
+    # derive branch context
+    branch_q = request.query_params.get("branch_id")
+    try:
+        branch_q = int(branch_q) if branch_q is not None else None
+    except Exception:
+        branch_q = None
+
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        return RedirectResponse("/", status_code=303)
+
+    branch = current_branch(db, project.id, branch_q)
+
+    # Resolve thread; if missing, auto-create a default one
+    thr = None
+    if thread_id:
+        try:
+            thr = db.query(Thread).filter(Thread.id == int(thread_id), Thread.project_id == project.id).first()
+        except Exception:
+            thr = None
+    if not thr:
+        thr = Thread(project_id=project.id, branch_id=branch.id, title="New Thread")
+        db.add(thr)
+        db.commit(); db.refresh(thr)
+
+    # Persist user message
+    um = ThreadMessage(project_id=project.id, branch_id=branch.id, thread_id=thr.id, role="user", content=content)
+    db.add(um); db.commit()
+
+    # Build file metadata context if provided
+    fctx = None
+    if file_id:
+        try:
+            fctx = db.query(FileEntry).filter(FileEntry.id == int(file_id), FileEntry.project_id == project.id).first()
+        except Exception:
+            fctx = None
+
+    # LLM call (OpenAI). See README for keys setup. No fallbacks; verbose errors.
+    reply_text = None
+    client, model = _llm_client_config()
+    if not client:
+        reply_text = "[llm-missing-key] Set CEDARPY_OPENAI_API_KEY or OPENAI_API_KEY."
+    else:
+        try:
+            sys_prompt = "You are Cedar's assistant. Answer succinctly using provided file context when relevant."
+            ctx = {}
+            if fctx:
+                ctx = {
+                    "file": {
+                        "display_name": fctx.display_name,
+                        "file_type": fctx.file_type,
+                        "structure": fctx.structure,
+                        "ai_title": fctx.ai_title,
+                        "ai_category": fctx.ai_category,
+                        "ai_description": (fctx.ai_description or "")[:350],
+                    }
+                }
+            import json as _json
+            messages = [
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": "Context:"},
+                {"role": "user", "content": _json.dumps(ctx, ensure_ascii=False)},
+                {"role": "user", "content": content},
+            ]
+            resp = client.chat.completions.create(model=model, messages=messages, temperature=0)
+            reply_text = (resp.choices[0].message.content or "").strip()
+        except Exception as e:
+            reply_text = f"[llm-error] {type(e).__name__}: {e}"
+    # Persist assistant message
+    am = ThreadMessage(project_id=project.id, branch_id=branch.id, thread_id=thr.id, role="assistant", content=reply_text or "")
+    try:
+        db.add(am); db.commit()
+    except Exception:
+        db.rollback()
+
+    # Redirect back focusing this thread
+    return RedirectResponse(f"/project/{project.id}?branch_id={branch.id}&thread_id={thr.id}" + (f"&file_id={file_id}" if file_id else ""), status_code=303)
 
 
 @app.post("/project/{project_id}/files/upload")
