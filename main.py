@@ -535,7 +535,7 @@ def _llm_classify_file(meta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         {"role": "user", "content": _json.dumps(user_payload, ensure_ascii=False)},
     ]
     try:
-        resp = client.chat.completions.create(model=model, messages=messages, temperature=0)
+        resp = client.chat.completions.create(model=model, messages=messages)
         content = (resp.choices[0].message.content or "").strip()
         result = _json.loads(content)
         # Normalize and enforce limits
@@ -3160,7 +3160,7 @@ def thread_chat(project_id: int, request: Request, content: str = Form(...), thr
                 {"role": "user", "content": _json.dumps(example, ensure_ascii=False)},
                 {"role": "user", "content": content},
             ]
-            resp = client.chat.completions.create(model=model, messages=messages, temperature=0)
+            resp = client.chat.completions.create(model=model, messages=messages)
             raw = (resp.choices[0].message.content or "").strip()
             try:
                 parsed = _json.loads(raw)
