@@ -31,7 +31,8 @@ def test_embedded_qt_upload_flow(tmp_path: Path):
     env["CEDARPY_PORT"] = str(app_port)
     env["CEDARPY_OPEN_BROWSER"] = "0"
     env["CEDARPY_QT_DEVTOOLS_PORT"] = str(devtools_port)
-    env["CEDARPY_QT_HEADLESS"] = "1"  # offscreen for automation
+    # Honor an existing CEDARPY_QT_HEADLESS to allow headful runs when requested
+    env["CEDARPY_QT_HEADLESS"] = os.getenv("CEDARPY_QT_HEADLESS", "1")
     env["CEDARPY_ALLOW_MULTI"] = "1"   # disable single-instance lock for tests
     env["CEDARPY_QT_HARNESS"] = "1"    # enable in-process UI harness
 
