@@ -415,7 +415,7 @@ def main():
                                         pass
                                     QTimer.singleShot(300, wait_uploaded)
                                 QTimer.singleShot(500, wait_uploaded)
-                            QTimer.singleShot(500, click_submit)
+                            QTimer.singleShot(900, click_submit)
                             return
                     except Exception:
                         pass
