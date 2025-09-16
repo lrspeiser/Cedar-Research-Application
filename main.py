@@ -1211,29 +1211,6 @@ SELECT * FROM demo LIMIT 10;""")
         </div>
 
         <div style=\"flex:1; display:flex; flex-direction:column; gap:8px\">\n          <div class=\"card\" style=\"max-height:220px; overflow:auto; padding:12px\">\n            <h3 style='margin-bottom:6px'>Files</h3>\n            {file_list_html}\n          </div>\n          <div class=\"card\" style='padding:12px'>\n            <h3 style='margin-bottom:6px'>Upload a file</h3>\n            <form method=\"post\" action=\"/project/{project.id}/files/upload?branch_id={current.id}\" enctype=\"multipart/form-data\">\n              <input type=\"file\" name=\"file\" required />\n              <div style=\"height:6px\"></div>\n              <div class=\"small muted\">LLM classification runs automatically on upload. See README for API key setup.</div>\n              <div style=\"height:6px\"></div>\n              <button type=\"submit\">Upload</button>\n            </form>\n          </div>\n          {sql_card}\n        </div>
-        <div class="card" style="flex:2">
-          <h3>File Details</h3>
-          {flash_html}
-          {left_details}
-        </div>
-
-        <div style="flex:1; display:flex; flex-direction:column; gap:12px">
-          <div class="card" style="max-height:300px; overflow:auto">
-            <h3>Files</h3>
-            {file_list_html}
-          </div>
-          <div class="card">
-            <h3>Upload a file</h3>
-            <form method="post" action="/project/{project.id}/files/upload?branch_id={current.id}" enctype="multipart/form-data">
-              <input type="file" name="file" required />
-              <div style="height:8px"></div>
-              <div class="small muted">GPT will set structure (images | sources | code | tabular), title, description, and category. See README (LLM classification on file upload).</div>
-              <div style="height:8px"></div>
-              <button type="submit">Upload</button>
-            </form>
-          </div>
-          {sql_card}
-        </div>
       </div>
 
       <div class=\"row\">
