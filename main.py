@@ -1060,7 +1060,7 @@ def projects_list_html(projects: List[Project]) -> str:
         rows.append(f"""
             <tr>
               <td><a href=\"/project/{p.id}\">{escape(p.title)}</a></td>
-              <td class=\"small muted\">{p.created_at.strftime(\"%Y-%m-%d %H:%M:%S\")} UTC</td>
+              <td class=\"small muted\">{p.created_at:%Y-%m-%d %H:%M:%S} UTC</td>
               <td>
                 <form method=\"post\" action=\"/project/{p.id}/delete\" class=\"inline\" onsubmit=\"return confirm('Delete project {escape(p.title)} and all its data?');\">
                   <button type=\"submit\" class=\"secondary\">Delete</button>
@@ -1142,7 +1142,7 @@ def project_page_html(
               <td>{escape(f.structure or '')}</td>
               <td>{escape(f.branch.name if f.branch else '')}</td>
               <td class="small muted">{f.size_bytes or 0}</td>
-              <td class="small muted">{f.created_at.strftime("%Y-%m-%d %H:%M:%S")} UTC</td>
+              <td class=\"small muted\">{f.created_at:%Y-%m-%d %H:%M:%S} UTC</td>
             </tr>
         """)
     files_tbody = ''.join(file_rows) if file_rows else '<tr><td colspan="6" class="muted">No files yet.</td></tr>'
@@ -1154,7 +1154,7 @@ def project_page_html(
            <tr>
              <td>{escape(t.title)}</td>
              <td>{escape(t.branch.name if t.branch else '')}</td>
-             <td class="small muted">{t.created_at.strftime("%Y-%m-%d %H:%M:%S")} UTC</td>
+             <td class=\"small muted\">{t.created_at:%Y-%m-%d %H:%M:%S} UTC</td>
            </tr>
         """)
     thread_tbody = ''.join(thread_rows) if thread_rows else '<tr><td colspan="3" class="muted">No threads yet.</td></tr>'
@@ -1166,7 +1166,7 @@ def project_page_html(
            <tr>
              <td>{escape(d.name)}</td>
              <td>{escape(d.branch.name if d.branch else '')}</td>
-             <td class="small muted">{d.created_at.strftime("%Y-%m-%d %H:%M:%S")} UTC</td>
+             <td class=\"small muted\">{d.created_at:%Y-%m-%d %H:%M:%S} UTC</td>
            </tr>
         """)
     dataset_tbody = ''.join(dataset_rows) if dataset_rows else '<tr><td colspan="3" class="muted">No databases yet.</td></tr>'
@@ -1286,7 +1286,7 @@ SELECT * FROM demo LIMIT 10;""")
               <tr><th>Structure</th><td>{escape(f.structure or '')}</td></tr>
               <tr><th>Branch</th><td>{escape(f.branch.name if f.branch else '')}</td></tr>
               <tr><th>Size</th><td class='small muted'>{f.size_bytes or 0}</td></tr>
-              <tr><th>Created</th><td class='small muted'>{f.created_at.strftime("%Y-%m-%d %H:%M:%S")} UTC</td></tr>
+              <tr><th>Created</th><td class='small muted'>{f.created_at:%Y-%m-%d %H:%M:%S} UTC</td></tr>
               <tr><th>Metadata keys</th><td class='small muted'>{meta_keys or '(none)'}</td></tr>
             </tbody>
           </table>

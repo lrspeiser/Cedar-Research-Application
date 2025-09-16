@@ -189,12 +189,44 @@ def _wait_for_server(url: str, timeout_sec: float = 20.0) -> bool:
 def _launch_server_inprocess(host: str, port: int):
     # Run uvicorn in-process so PyInstaller bundles work without relying on -m
     os.environ.setdefault("CEDARPY_OPEN_BROWSER", "0")
+    fastapi_app = None
     try:
-        from main import app as fastapi_app
-        from uvicorn import Config, Server
-    except Exception as e:
-        print(f"[cedarqt] failed to import server app: {e}")
-        return None, None
+        from main import app as fastapi_app  # type: ignore
+        print("[cedarqt] imported main.app via normal import")
+    except Exception as e1:
+        print(f"[cedarqt] import main failed: {e1}; trying fallback loader")
+        try:
+            import importlib.util as _util, sys as _sys, os as _os
+            base_dir = _os.path.dirname(_sys.executable) if getattr(_sys, 'frozen', False) else _os.path.dirname(__file__)
+            resources_dir = _os.path.abspath(_os.path.join(base_dir, '..', 'Resources'))
+            candidates = [
+                _os.path.join(base_dir, 'main.py'),
+                _os.path.join(resources_dir, 'main.py'),
+                _os.path.abspath(_os.path.join(_os.path.dirname(__file__), 'main.py')),
+            ]
+            loaded = False
+            for cand in candidates:
+                try:
+                    if _os.path.isfile(cand):
+                        spec = _util.spec_from_file_location('main', cand)
+                        if spec and spec.loader:
+                            mod = _util.module_from_spec(spec)  # type: ignore
+                            spec.loader.exec_module(mod)  # type: ignore
+                            fastapi_app = getattr(mod, 'app', None)
+                            if fastapi_app is not None:
+                                print(f"[cedarqt] loaded main.app from {cand}")
+                                loaded = True
+                                break
+                except Exception as e2:
+                    print(f"[cedarqt] fallback load error from {cand}: {e2}")
+            if not loaded:
+                print("[cedarqt] failed to locate main.py in fallback paths")
+                return None, None
+            from uvicorn import Config, Server  # type: ignore
+        except Exception as e3:
+            print(f"[cedarqt] failed to import server app via fallback: {e3}")
+            return None, None
+    from uvicorn import Config, Server
     log_dir = os.getenv("CEDARPY_LOG_DIR", LOG_DIR_DEFAULT)
     os.makedirs(log_dir, exist_ok=True)
     server_log_path = os.path.join(log_dir, "uvicorn_from_qt.log")

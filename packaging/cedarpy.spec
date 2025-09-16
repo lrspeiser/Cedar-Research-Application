@@ -30,10 +30,16 @@ datas += shib_d
 binaries += shib_b
 hiddenimports += shib_h
 
-hiddenimports = list(set(hiddenimports))
+hiddenimports = list(set(hiddenimports + ['main']))
 
 # Resolve repo root relative to current working directory when PyInstaller runs
 repo_root = os.path.abspath(os.getcwd())
+
+# Ensure main.py is present as a data file so cedarqt fallback can load it even if hiddenimport resolution fails
+try:
+    datas.append((os.path.join(repo_root, 'main.py'), '.'))
+except Exception:
+    pass
 
 a = Analysis([
     os.path.join(repo_root, 'cedarqt.py'),

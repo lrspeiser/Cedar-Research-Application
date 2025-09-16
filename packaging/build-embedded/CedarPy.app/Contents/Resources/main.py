@@ -13,8 +13,10 @@ import queue
 import signal
 import time
 import platform
-from datetime import datetime
+import sys
+from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any, Tuple
+from collections import deque
 
 from fastapi import FastAPI, Request, UploadFile, File, Form, Depends, Header, HTTPException, Body, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse, FileResponse
@@ -31,6 +33,46 @@ import re
 # ----------------------------------------------------------------------------------
 # Configuration
 # ----------------------------------------------------------------------------------
+
+# Lightweight .env loader (no external deps). This is intentionally minimal and does not print values.
+# It loads KEY=VALUE pairs, ignoring lines starting with # and blank lines. Quotes around values are trimmed.
+# See README for more details about secret handling.
+
+def _load_dotenv_files(paths: List[str]) -> None:
+    def _parse_line(line: str) -> Optional[tuple]:
+        s = line.strip()
+        if not s or s.startswith('#'):
+            return None
+        if '=' not in s:
+            return None
+        k, v = s.split('=', 1)
+        k = k.strip()
+        v = v.strip().strip('"').strip("'")
+        if not k:
+            return None
+        return (k, v)
+    for p in paths:
+        try:
+            if not p or not os.path.isfile(p):
+                continue
+            with open(p, 'r', encoding='utf-8', errors='ignore') as f:
+                for line in f:
+                    kv = _parse_line(line)
+                    if not kv:
+                        continue
+                    k, v = kv
+                    # Do not override if already set in the environment
+                    if os.getenv(k) is None:
+                        os.environ[k] = v
+        except Exception:
+            # Best-effort; ignore parse errors
+            pass
+
+# First pass: load from current working directory (.env) so early config can pick it up
+try:
+    _load_dotenv_files([os.path.join(os.getcwd(), '.env')])
+except Exception:
+    pass
 
 # Prefer a generic CEDARPY_DATABASE_URL for the central registry only; otherwise use SQLite in ~/CedarPyData/cedarpy.db
 # See PROJECT_SEPARATION_README.md for architecture details.
@@ -61,10 +103,37 @@ SHELL_API_TOKEN = os.getenv("CEDARPY_SHELL_API_TOKEN")
 LOGS_DIR = os.path.join(DATA_DIR, "logs", "shell")
 os.makedirs(LOGS_DIR, exist_ok=True)
 
+# Default working directory for shell jobs (scoped, safe by default)
+SHELL_DEFAULT_WORKDIR = os.getenv("CEDARPY_SHELL_WORKDIR") or DATA_DIR
+try:
+    os.makedirs(SHELL_DEFAULT_WORKDIR, exist_ok=True)
+except Exception:
+    pass
+
 # Ensure writable dirs exist (important when running from a read-only DMG)
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(PROJECTS_ROOT, exist_ok=True)
 os.makedirs(os.path.dirname(DEFAULT_SQLITE_PATH), exist_ok=True)
+
+# Second pass: load .env from DATA_DIR and from app Resources (for packaged app)
+try:
+    candidates: List[str] = [os.path.join(DATA_DIR, '.env')]
+    # If running from an app bundle or PyInstaller, try Resources or _MEIPASS
+    try:
+        if getattr(sys, 'frozen', False):
+            app_dir = os.path.dirname(sys.executable)
+            res_dir = os.path.abspath(os.path.join(app_dir, '..', 'Resources'))
+            candidates.append(os.path.join(res_dir, '.env'))
+        else:
+            # PyInstaller one-file (_MEIPASS)
+            meipass = getattr(sys, '_MEIPASS', None)
+            if meipass:
+                candidates.append(os.path.join(meipass, '.env'))
+    except Exception:
+        pass
+    _load_dotenv_files(candidates)
+except Exception:
+    pass
 
 # ----------------------------------------------------------------------------------
 # Database setup
@@ -134,6 +203,51 @@ def get_project_db(project_id: int) -> Session:
         db.close()
 
 
+def _migrate_project_files_ai_columns(engine_obj):
+    try:
+        with engine_obj.begin() as conn:
+            if engine_obj.dialect.name == "sqlite":
+                res = conn.exec_driver_sql("PRAGMA table_info(files)")
+                cols = [row[1] for row in res.fetchall()]
+                if "ai_title" not in cols:
+                    conn.exec_driver_sql("ALTER TABLE files ADD COLUMN ai_title TEXT")
+                if "ai_description" not in cols:
+                    conn.exec_driver_sql("ALTER TABLE files ADD COLUMN ai_description TEXT")
+                if "ai_category" not in cols:
+                    conn.exec_driver_sql("ALTER TABLE files ADD COLUMN ai_category TEXT")
+                if "ai_processing" not in cols:
+                    conn.exec_driver_sql("ALTER TABLE files ADD COLUMN ai_processing INTEGER DEFAULT 0")
+            elif engine_obj.dialect.name == "mysql":
+                conn.exec_driver_sql("ALTER TABLE files ADD COLUMN IF NOT EXISTS ai_title VARCHAR(255)")
+                conn.exec_driver_sql("ALTER TABLE files ADD COLUMN IF NOT EXISTS ai_description TEXT")
+                conn.exec_driver_sql("ALTER TABLE files ADD COLUMN IF NOT EXISTS ai_category VARCHAR(255)")
+                conn.exec_driver_sql("ALTER TABLE files ADD COLUMN IF NOT EXISTS ai_processing TINYINT(1) DEFAULT 0")
+            else:
+                try:
+                    conn.exec_driver_sql("ALTER TABLE files ADD COLUMN ai_processing BOOLEAN DEFAULT 0")
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
+def _migrate_thread_messages_columns(engine_obj):
+    try:
+        with engine_obj.begin() as conn:
+            if engine_obj.dialect.name == "sqlite":
+                res = conn.exec_driver_sql("PRAGMA table_info(thread_messages)")
+                cols = [row[1] for row in res.fetchall()]
+                if "display_title" not in cols:
+                    conn.exec_driver_sql("ALTER TABLE thread_messages ADD COLUMN display_title TEXT")
+                if "payload_json" not in cols:
+                    conn.exec_driver_sql("ALTER TABLE thread_messages ADD COLUMN payload_json JSON")
+            elif engine_obj.dialect.name == "mysql":
+                conn.exec_driver_sql("ALTER TABLE thread_messages ADD COLUMN IF NOT EXISTS display_title VARCHAR(255)")
+                conn.exec_driver_sql("ALTER TABLE thread_messages ADD COLUMN IF NOT EXISTS payload_json JSON")
+    except Exception:
+        pass
+
+
 def ensure_project_initialized(project_id: int) -> None:
     """Ensure the per-project database and storage exist and are seeded.
     See PROJECT_SEPARATION_README.md
@@ -142,6 +256,9 @@ def ensure_project_initialized(project_id: int) -> None:
         eng = _get_project_engine(project_id)
         # Create all tables for this project DB
         Base.metadata.create_all(eng)
+        # Lightweight migrations for this project DB
+        _migrate_project_files_ai_columns(eng)
+        _migrate_thread_messages_columns(eng)
         # Seed project row and Main branch if missing
         SessionLocal = sessionmaker(bind=eng, autoflush=False, autocommit=False, future=True)
         pdb = SessionLocal()
@@ -163,6 +280,8 @@ def ensure_project_initialized(project_id: int) -> None:
         finally:
             pdb.close()
         _ensure_project_storage(project_id)
+        _migrate_project_files_ai_columns(eng)
+        _migrate_thread_messages_columns(eng)
     except Exception:
         pass
 
@@ -174,7 +293,7 @@ class Project(Base):
     __tablename__ = "projects"  # Central registry only
     id = Column(Integer, primary_key=True)
     title = Column(String(255), nullable=False, unique=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     branches = relationship("Branch", back_populates="project", cascade="all, delete-orphan")
 
@@ -185,7 +304,7 @@ class Branch(Base):
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
     name = Column(String(100), nullable=False)
     is_default = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     project = relationship("Project", back_populates="branches")
 
@@ -200,10 +319,29 @@ class Thread(Base):
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
     branch_id = Column(Integer, ForeignKey("branches.id"), nullable=False, index=True)
     title = Column(String(255), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     project = relationship("Project")
     branch = relationship("Branch")
+
+
+class ThreadMessage(Base):
+    __tablename__ = "thread_messages"
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, nullable=False, index=True)
+    branch_id = Column(Integer, nullable=False, index=True)
+    thread_id = Column(Integer, ForeignKey("threads.id"), nullable=False, index=True)
+    role = Column(String(20), nullable=False)  # 'user' | 'assistant' | 'system'
+    content = Column(Text, nullable=False)
+    display_title = Column(String(255))  # short title for the bubble
+    payload_json = Column(JSON)          # structured prompt/result payload
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    thread = relationship("Thread")
+
+    __table_args__ = (
+        Index("ix_thread_messages_project_thread", "project_id", "thread_id", "created_at"),
+    )
 
 
 class FileEntry(Base):
@@ -214,12 +352,18 @@ class FileEntry(Base):
     filename = Column(String(512), nullable=False)  # storage name on disk
     display_name = Column(String(255), nullable=False)  # original filename
     file_type = Column(String(50))  # e.g., jpg, pdf, json (derived)
-    structure = Column(String(50))  # notes, writeup, images, sources, code
+    structure = Column(String(50))  # images, sources, code, tabular (LLM-chosen)
     mime_type = Column(String(100))
     size_bytes = Column(Integer)
     storage_path = Column(String(1024))  # absolute/relative path on disk
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     metadata_json = Column(JSON)  # extracted metadata from interpreter
+    # AI classification outputs
+    ai_title = Column(String(255))
+    ai_description = Column(Text)
+    ai_category = Column(String(255))
+    # Processing flag for UI spinner
+    ai_processing = Column(Boolean, default=False)
 
     project = relationship("Project")
     branch = relationship("Branch")
@@ -236,7 +380,7 @@ class Dataset(Base):
     branch_id = Column(Integer, ForeignKey("branches.id"), nullable=False, index=True)
     name = Column(String(255), nullable=False)
     description = Column(Text)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     project = relationship("Project")
     branch = relationship("Branch")
@@ -246,7 +390,7 @@ class Setting(Base):
     __tablename__ = "settings"
     key = Column(String(255), primary_key=True)
     value = Column(Text, nullable=True)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class Version(Base):
@@ -256,11 +400,27 @@ class Version(Base):
     entity_id = Column(Integer, nullable=False)
     version_num = Column(Integer, nullable=False)
     data = Column(JSON)  # snapshot of entity data (lightweight for now)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (
         UniqueConstraint("entity_type", "entity_id", "version_num", name="uq_version_key"),
         Index("ix_versions_entity", "entity_type", "entity_id"),
+    )
+
+
+class ChangelogEntry(Base):
+    __tablename__ = "changelog_entries"
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, nullable=False, index=True)
+    branch_id = Column(Integer, nullable=False, index=True)
+    action = Column(String(255), nullable=False)
+    input_json = Column(JSON)    # what we submitted (prompts, commands, SQL, etc.)
+    output_json = Column(JSON)   # results (success payloads or errors)
+    summary_text = Column(Text)  # LLM-produced human summary (gpt-5-nano)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        Index("ix_changelog_project_branch", "project_id", "branch_id", "created_at"),
     )
 
 
@@ -275,7 +435,7 @@ class SQLUndoLog(Base):
     pk_columns = Column(JSON)  # list of PK column names
     rows_before = Column(JSON)  # list of row dicts
     rows_after = Column(JSON)   # list of row dicts
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (
         Index("ix_undo_project_branch", "project_id", "branch_id", "created_at"),
@@ -286,6 +446,7 @@ class SQLUndoLog(Base):
 Base.metadata.create_all(registry_engine)
 
 # Attempt a lightweight migration for existing DBs: add metadata_json if missing (registry only)
+# Also add AI columns for LLM classification (ai_title, ai_description, ai_category) on the registry DB.
 try:
     with registry_engine.begin() as conn:
         dialect = registry_engine.dialect.name
@@ -304,6 +465,34 @@ try:
         else:
             # best effort: try adding a JSON column with generic SQL
             conn.exec_driver_sql("ALTER TABLE files ADD COLUMN metadata_json JSON")
+        # Add AI columns if missing
+        try:
+            if dialect == "sqlite":
+                res2 = conn.exec_driver_sql("PRAGMA table_info(files)")
+                cols2 = [row[1] for row in res2.fetchall()]
+                if "ai_title" not in cols2:
+                    conn.exec_driver_sql("ALTER TABLE files ADD COLUMN ai_title TEXT")
+                if "ai_description" not in cols2:
+                    conn.exec_driver_sql("ALTER TABLE files ADD COLUMN ai_description TEXT")
+                if "ai_category" not in cols2:
+                    conn.exec_driver_sql("ALTER TABLE files ADD COLUMN ai_category TEXT")
+                if "ai_processing" not in cols2:
+                    conn.exec_driver_sql("ALTER TABLE files ADD COLUMN ai_processing INTEGER DEFAULT 0")
+            elif dialect == "mysql":
+                conn.exec_driver_sql("ALTER TABLE files ADD COLUMN IF NOT EXISTS ai_title VARCHAR(255)")
+                conn.exec_driver_sql("ALTER TABLE files ADD COLUMN IF NOT EXISTS ai_description TEXT")
+                conn.exec_driver_sql("ALTER TABLE files ADD COLUMN IF NOT EXISTS ai_category VARCHAR(255)")
+                conn.exec_driver_sql("ALTER TABLE files ADD COLUMN IF NOT EXISTS ai_processing TINYINT(1) DEFAULT 0")
+            else:
+                conn.exec_driver_sql("ALTER TABLE files ADD COLUMN ai_title TEXT")
+                conn.exec_driver_sql("ALTER TABLE files ADD COLUMN ai_description TEXT")
+                conn.exec_driver_sql("ALTER TABLE files ADD COLUMN ai_category TEXT")
+                try:
+                    conn.exec_driver_sql("ALTER TABLE files ADD COLUMN ai_processing BOOLEAN DEFAULT 0")
+                except Exception:
+                    pass
+        except Exception:
+            pass
 except Exception:
     # Ignore migration issues in prototype mode
     pass
@@ -311,6 +500,143 @@ except Exception:
 # ----------------------------------------------------------------------------------
 # Utilities
 # ----------------------------------------------------------------------------------
+
+# LLM classification utilities (See README: "LLM classification on file upload")
+# When calling web services, configure keys via env. Do not hardcode secrets.
+# See README for setup and troubleshooting; verbose logs are emitted on error.
+
+def _llm_client_config():
+    try:
+        from openai import OpenAI  # type: ignore
+    except Exception:
+        return None, None
+    api_key = os.getenv("CEDARPY_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return None, None
+    model = os.getenv("CEDARPY_OPENAI_MODEL", "gpt-5")
+    try:
+        client = OpenAI(api_key=api_key)
+        return client, model
+    except Exception:
+        return None, None
+
+
+def _llm_classify_file(meta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    Calls GPT model to classify a file into one of: images | sources | code | tabular
+    and produce ai_title (<=100), ai_description (<=350), ai_category (<=100).
+
+    Input: metadata produced by interpret_file(), including:
+    - extension, mime_guess, format, language, is_text, size_bytes, line_count, sample_text
+
+    Returns dict or None on error. Errors are logged verbosely.
+    """
+    if str(os.getenv("CEDARPY_FILE_LLM", "1")).strip().lower() in {"0","false","no","off"}:
+        try:
+            print("[llm-skip] CEDARPY_FILE_LLM=0")
+        except Exception:
+            pass
+        return None
+    client, model = _llm_client_config()
+    if not client:
+        try:
+            print("[llm-skip] missing OpenAI API key; set CEDARPY_OPENAI_API_KEY or OPENAI_API_KEY")
+        except Exception:
+            pass
+        return None
+    # Prepare a bounded sample
+    sample_text = (meta.get("sample_text") or "")
+    if len(sample_text) > 8000:
+        sample_text = sample_text[:8000]
+    info = {
+        k: meta.get(k) for k in [
+            "extension","mime_guess","format","language","is_text","size_bytes","line_count","json_valid","json_top_level_keys","csv_dialect"
+        ] if k in meta
+    }
+    sys_prompt = (
+        "You are an expert data librarian. Classify incoming files and produce short, friendly labels.\n"
+        "Output strict JSON with keys: structure, ai_title, ai_description, ai_category.\n"
+        "Rules: structure must be one of: images | sources | code | tabular.\n"
+        "ai_title <= 100 chars. ai_description <= 350 chars. ai_category <= 100 chars.\n"
+        "Do not include newlines in values. If in doubt, choose the best fit."
+    )
+    user_payload = {
+        "metadata": info,
+        "display_name": meta.get("display_name"),
+        "snippet_utf8": sample_text,
+    }
+    import json as _json
+    messages = [
+        {"role": "system", "content": sys_prompt},
+        {"role": "user", "content": "Classify this file and produce JSON as specified. Input:"},
+        {"role": "user", "content": _json.dumps(user_payload, ensure_ascii=False)},
+    ]
+    try:
+        resp = client.chat.completions.create(model=model, messages=messages)
+        content = (resp.choices[0].message.content or "").strip()
+        result = _json.loads(content)
+        # Normalize and enforce limits
+        struct = str(result.get("structure"," ")).strip().lower()
+        if struct not in {"images","sources","code","tabular"}:
+            struct = None
+        def _clip(s, n):
+            s = '' if s is None else str(s)
+            return s[:n]
+        title = _clip(result.get("ai_title"), 100)
+        desc = _clip(result.get("ai_description"), 350)
+        cat = _clip(result.get("ai_category"), 100)
+        out = {"structure": struct, "ai_title": title, "ai_description": desc, "ai_category": cat}
+        try:
+            print(f"[llm] model={model} structure={struct} title={len(title)} chars cat={cat}")
+        except Exception:
+            pass
+        return out
+    except Exception as e:
+        try:
+            print(f"[llm-error] {type(e).__name__}: {e}")
+        except Exception:
+            pass
+        return None
+
+
+def _llm_summarize_action(action: str, input_payload: Dict[str, Any], output_payload: Dict[str, Any]) -> Optional[str]:
+    """Summarize an action for the changelog using a small, fast model.
+    Default model: gpt-5-nano (override via CEDARPY_SUMMARY_MODEL).
+    Returns summary text or None on error/missing key.
+    """
+    try:
+        from openai import OpenAI  # type: ignore
+    except Exception:
+        return None
+    api_key = os.getenv("CEDARPY_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return None
+    model = os.getenv("CEDARPY_SUMMARY_MODEL", "gpt-5-nano")
+    try:
+        client = OpenAI(api_key=api_key)
+        import json as _json
+        sys_prompt = (
+            "You are Cedar's changelog assistant. Summarize the action in 1-3 concise sentences. "
+            "Focus on what changed, why, and outcomes (including errors). Avoid secrets and long dumps."
+        )
+        messages = [
+            {"role": "system", "content": sys_prompt},
+            {"role": "user", "content": f"Action: {action}"},
+            {"role": "user", "content": "Input payload:"},
+            {"role": "user", "content": _json.dumps(input_payload, ensure_ascii=False)},
+            {"role": "user", "content": "Output payload:"},
+            {"role": "user", "content": _json.dumps(output_payload, ensure_ascii=False)},
+        ]
+        resp = client.chat.completions.create(model=model, messages=messages)
+        text = (resp.choices[0].message.content or "").strip()
+        return text
+    except Exception as e:
+        try:
+            print(f"[llm-summary-error] {type(e).__name__}: {e}")
+        except Exception:
+            pass
+        return None
+
 
 def _is_probably_text(path: str, sample_bytes: int = 4096) -> bool:
     try:
@@ -335,8 +661,8 @@ def interpret_file(path: str, original_name: str) -> Dict[str, Any]:
     try:
         stat = os.stat(path)
         meta["size_bytes"] = stat.st_size
-        meta["mtime"] = datetime.utcfromtimestamp(stat.st_mtime).isoformat() + "Z"
-        meta["ctime"] = datetime.utcfromtimestamp(stat.st_ctime).isoformat() + "Z"
+        meta["mtime"] = datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat()
+        meta["ctime"] = datetime.fromtimestamp(stat.st_ctime, timezone.utc).isoformat()
     except Exception:
         pass
 
@@ -453,6 +779,29 @@ def add_version(db: Session, entity_type: str, entity_id: int, data: dict):
     db.commit()
 
 
+def record_changelog(db: Session, project_id: int, branch_id: int, action: str, input_payload: Dict[str, Any], output_payload: Dict[str, Any]):
+    """Persist a changelog entry and try to LLM-summarize it. Best-effort; stores even if summary fails.
+    """
+    summary = _llm_summarize_action(action, input_payload, output_payload)
+    try:
+        entry = ChangelogEntry(
+            project_id=project_id,
+            branch_id=branch_id,
+            action=action,
+            input_json=input_payload,
+            output_json=output_payload,
+            summary_text=summary,
+        )
+        db.add(entry)
+        db.commit()
+    except Exception as e:
+        try:
+            print(f"[changelog-error] {type(e).__name__}: {e}")
+        except Exception:
+            pass
+        db.rollback()
+
+
 def escape(s: str) -> str:
     return html.escape(s, quote=True)
 
@@ -558,7 +907,87 @@ def serve_project_upload(project_id: int, path: str):
 # HTML helpers (all inline; no external templates)
 # ----------------------------------------------------------------------------------
 
+# Cached LLM reachability indicator for UI (TTL seconds)
+_LLM_READY_CACHE = {"ts": 0.0, "ready": False, "reason": "init", "model": None}
+
+
+def _llm_reachability(ttl_seconds: int = 300) -> tuple[bool, str, str]:
+    """Best-effort reachability check for UI. Returns (ready, reason, model).
+    Cached to avoid per-request network calls.
+    """
+    now = time.time()
+    try:
+        if (now - float(_LLM_READY_CACHE.get("ts") or 0)) <= max(5, ttl_seconds):
+            return bool(_LLM_READY_CACHE.get("ready")), str(_LLM_READY_CACHE.get("reason") or ""), str(_LLM_READY_CACHE.get("model") or "")
+    except Exception:
+        pass
+    client, model = _llm_client_config()
+    if not client:
+        _LLM_READY_CACHE.update({"ts": now, "ready": False, "reason": "missing key", "model": model or ""})
+        return False, "missing key", model or ""
+    try:
+        # Cheap probe: retrieve the model
+        client.models.retrieve(model)
+        _LLM_READY_CACHE.update({"ts": now, "ready": True, "reason": "ok", "model": model})
+        return True, "ok", model
+    except Exception as e:
+        _LLM_READY_CACHE.update({"ts": now, "ready": False, "reason": f"{type(e).__name__}", "model": model or ""})
+        return False, f"{type(e).__name__}", model or ""
+
+
 def layout(title: str, body: str) -> HTMLResponse:
+    # LLM status for header (best-effort; cached)
+    try:
+        ready, reason, model = _llm_reachability()
+        if ready:
+            llm_status = f" <span class='pill' title='LLM connected'>LLM: {escape(model)}</span>"
+        else:
+            llm_status = f" <span class='pill' style='background:#fef2f2; color:#991b1b' title='LLM unavailable'>LLM unavailable ({escape(reason)})</span>"
+    except Exception:
+        llm_status = ""
+
+    # Inject a lightweight client logging hook so console messages and JS errors are POSTed to the server.
+    # See README.md (section "Client-side logging") for details and troubleshooting.
+    client_log_js = """
+<script>
+(function(){
+  if (window.__cedarpyClientLogInitialized) return; window.__cedarpyClientLogInitialized = true;
+  const endpoint = '/api/client-log';
+  function post(payload){
+    try {
+      const body = JSON.stringify(payload);
+      if (navigator.sendBeacon) {
+        const blob = new Blob([body], {type: 'application/json'});
+        navigator.sendBeacon(endpoint, blob);
+        return;
+      }
+      fetch(endpoint, {method: 'POST', headers: {'Content-Type': 'application/json'}, body, keepalive: true}).catch(function(){});
+    } catch(e) {}
+  }
+  function base(level, message, origin, extra){
+    post(Object.assign({
+      when: new Date().toISOString(),
+      level: String(level||'info'),
+      message: String(message||''),
+      url: String(location.href||''),
+      userAgent: navigator.userAgent || '',
+      origin: origin || 'console'
+    }, extra||{}));
+  }
+  var orig = { log: console.log, info: console.info, warn: console.warn, error: console.error };
+  console.log = function(){ try { base('info', Array.from(arguments).join(' '), 'console.log'); } catch(e){}; return orig.log.apply(console, arguments); };
+  console.info = function(){ try { base('info', Array.from(arguments).join(' '), 'console.info'); } catch(e){}; return orig.info.apply(console, arguments); };
+  console.warn = function(){ try { base('warn', Array.from(arguments).join(' '), 'console.warn'); } catch(e){}; return orig.warn.apply(console, arguments); };
+  console.error = function(){ try { base('error', Array.from(arguments).join(' '), 'console.error'); } catch(e){}; return orig.error.apply(console, arguments); };
+  window.addEventListener('error', function(ev){
+    try { base('error', ev.message || 'window.onerror', 'window.onerror', { line: ev.lineno||null, column: ev.colno||null, stack: ev.error && ev.error.stack ? String(ev.error.stack) : null }); } catch(e){}
+  }, true);
+  window.addEventListener('unhandledrejection', function(ev){
+    try { var r = ev && ev.reason; base('error', (r && (r.message || r.toString())) || 'unhandledrejection', 'unhandledrejection', { stack: r && r.stack ? String(r.stack) : null }); } catch(e){}
+  });
+})();
+</script>
+"""
     html_doc = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -568,7 +997,7 @@ def layout(title: str, body: str) -> HTMLResponse:
   <style>
     :root {{ --fg: #111; --bg: #fff; --accent: #2563eb; --muted: #6b7280; --border: #e5e7eb; }}
     * {{ box-sizing: border-box; }}
-    body {{ margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Helvetica Neue", Arial, "Apple Color Emoji", "Segoe UI Emoji"; color: var(--fg); background: var(--bg); }}
+    body {{ margin: 0; font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Oxygen, Ubuntu, Cantarell, \"Helvetica Neue\", Arial, \"Apple Color Emoji\", \"Segoe UI Emoji\"; color: var(--fg); background: var(--bg); }}
     header {{ padding: 16px 20px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg); }}
     main {{ padding: 20px; max-width: 1100px; margin: 0 auto; }}
     h1, h2, h3 {{ margin: 0 0 12px; }}
@@ -581,19 +1010,22 @@ def layout(title: str, body: str) -> HTMLResponse:
     .table th, .table td {{ border-bottom: 1px solid var(--border); padding: 8px 6px; text-align: left; vertical-align: top; }}
     .pill {{ display: inline-block; padding: 2px 8px; border-radius: 999px; background: #eef2ff; color: #3730a3; font-size: 12px; }}
     form.inline * {{ vertical-align: middle; }}
-    input[type="text"], select {{ padding: 8px; border: 1px solid var(--border); border-radius: 6px; width: 100%; }}
-    input[type="file"] {{ padding: 6px; border: 1px dashed var(--border); border-radius: 6px; width: 100%; }}
+    input[type=\"text\"], select {{ padding: 8px; border: 1px solid var(--border); border-radius: 6px; width: 100%; }}
+    input[type=\"file\"] {{ padding: 6px; border: 1px dashed var(--border); border-radius: 6px; width: 100%; }}
     button {{ padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--accent); color: white; cursor: pointer; }}
     button.secondary {{ background: #f3f4f6; color: #111; }}
     .small {{ font-size: 12px; }}
     .topbar {{ display:flex; align-items:center; gap:12px; }}
+    .spinner {{ display:inline-block; width:12px; height:12px; border:2px solid #cbd5e1; border-top-color:#334155; border-radius:50%; animation: spin 1s linear infinite; }}
+    @keyframes spin {{ from {{ transform: rotate(0deg);}} to {{ transform: rotate(360deg);}} }}
   </style>
+  {client_log_js}
 </head>
 <body>
   <header>
     <div class="topbar">
       <div><strong>Cedar</strong></div>
-      <div style=\"margin-left:auto\"><a href=\"/\">Projects</a> | <a href=\"/shell\">Shell</a></div>
+      <div style=\"margin-left:auto\"><a href=\"/\">Projects</a> | <a href=\"/shell\">Shell</a> | <a href=\"/merge\">Merge</a> | <a href=\"/log\">Log</a>{llm_status}</div>
     </div>
   </header>
   <main>
@@ -602,6 +1034,11 @@ def layout(title: str, body: str) -> HTMLResponse:
 </body>
 </html>
 """
+    # Render header status
+    try:
+        html_doc = html_doc.format(llm_status=llm_status)
+    except Exception:
+        pass
     return HTMLResponse(html_doc)
 
 
@@ -610,39 +1047,44 @@ def projects_list_html(projects: List[Project]) -> str:
     if not projects:
         return f"""
         <h1>Projects</h1>
-        <p class="muted">No projects yet. Create one:</p>
-        <form method="post" action="/projects/create" class="card" style="max-width:520px">
+        <p class=\"muted\">No projects yet. Create one:</p>
+        <form method=\"post\" action=\"/projects/create\" class=\"card\" style=\"max-width:520px\">
             <label>Project title</label>
-            <input type="text" name="title" placeholder="My First Project" required />
-            <div style="height:10px"></div>
-            <button type="submit">Create Project</button>
+            <input type=\"text\" name=\"title\" placeholder=\"My First Project\" required />
+            <div style=\"height:10px\"></div>
+            <button type=\"submit\">Create Project</button>
         </form>
         """
     rows = []
     for p in projects:
         rows.append(f"""
             <tr>
-              <td><a href="/project/{p.id}">{escape(p.title)}</a></td>
-              <td class="small muted">{p.created_at.strftime("%Y-%m-%d %H:%M:%S")} UTC</td>
+              <td><a href=\"/project/{p.id}\">{escape(p.title)}</a></td>
+              <td class=\"small muted\">{p.created_at.strftime(\"%Y-%m-%d %H:%M:%S\")} UTC</td>
+              <td>
+                <form method=\"post\" action=\"/project/{p.id}/delete\" class=\"inline\" onsubmit=\"return confirm('Delete project {escape(p.title)} and all its data?');\">
+                  <button type=\"submit\" class=\"secondary\">Delete</button>
+                </form>
+              </td>
             </tr>
         """)
     return f"""
         <h1>Projects</h1>
-        <div class="row">
-          <div class="card" style="flex:2">
-            <table class="table">
-              <thead><tr><th>Title</th><th>Created</th></tr></thead>
+        <div class=\"row\">
+          <div class=\"card\" style=\"flex:2\">
+            <table class=\"table\">
+              <thead><tr><th>Title</th><th>Created</th><th>Actions</th></tr></thead>
               <tbody>
                 {''.join(rows)}
               </tbody>
             </table>
           </div>
-          <div class="card" style="flex:1">
+          <div class=\"card\" style=\"flex:1\">
             <h3>Create a new project</h3>
-            <form method="post" action="/projects/create">
-              <input type="text" name="title" placeholder="Project title" required />
-              <div style="height:10px"></div>
-              <button type="submit">Create</button>
+            <form method=\"post\" action=\"/projects/create\">
+              <input type=\"text\" name=\"title\" placeholder=\"Project title\" required />
+              <div style=\"height:10px\"></div>
+              <button type=\"submit\">Create</button>
             </form>
           </div>
         </div>
@@ -656,6 +1098,9 @@ def project_page_html(
     files: List[FileEntry],
     threads: List[Thread],
     datasets: List[Dataset],
+    selected_file: Optional[FileEntry] = None,
+    selected_thread: Optional[Thread] = None,
+    thread_messages: Optional[List[ThreadMessage]] = None,
     msg: Optional[str] = None,
     sql_result_block: Optional[str] = None,
 ) -> str:
@@ -665,7 +1110,15 @@ def project_page_html(
     for b in branches:
         selected = "style='font-weight:600'" if b.id == current.id else ""
         tabs.append(f"<a {selected} href='/project/{project.id}?branch_id={b.id}' class='pill'>{escape(b.name)}</a>")
-    tabs_html = " ".join(tabs)
+    # Inline new-branch form toggle
+    new_branch_form = f"""
+      <form id='branchCreateForm' method='post' action='/project/{project.id}/branches/create' class='inline' style='display:none; margin-left:8px'>
+        <input type='text' name='name' placeholder='experiment-1' required style='width:160px; padding:6px; border:1px solid var(--border); border-radius:6px' />
+        <button type='submit' class='secondary'>Create</button>
+      </form>
+      <a href='#' class='pill' title='New branch' onclick="var f=document.getElementById('branchCreateForm'); if(f){{f.style.display=(f.style.display==='none'?'inline-block':'none'); var i=f.querySelector('input[name=name]'); if(i){{i.focus();}}}} return false;">+</a>
+    """
+    tabs_html = (" ".join(tabs)) + new_branch_form
 
     # files table
     file_rows = []
@@ -732,7 +1185,7 @@ INSERT INTO demo (name) VALUES ('Alice');
 SELECT * FROM demo LIMIT 10;""")
 
     sql_card = f"""
-      <div class=\"card\" style=\"flex:1\">
+      <div class=\"card\" style=\"padding:12px\">
         <h3>SQL Console</h3>
         <div class=\"small muted\">Run SQL against the current database (SQLite by default, or your configured MySQL). Max rows is controlled by CEDARPY_SQL_MAX_ROWS.</div>
         <pre class=\"small\" style=\"white-space:pre-wrap; background:#f9fafb; padding:8px; border-radius:6px;\">{examples}</pre>
@@ -744,7 +1197,7 @@ SELECT * FROM demo LIMIT 10;""")
         <script>
         function cedarSqlConfirm(f) {{
           var t = (f.querySelector('[name=sql]')||{{}}).value || '';
-          var re = /^\s*(drop|delete|truncate|update|alter)\b/i;
+          var re = /^\\s*(drop|delete|truncate|update|alter)\\b/i;
           if (re.test(t)) {{
             return confirm('This SQL looks destructive. Proceed?');
           }}
@@ -758,57 +1211,161 @@ SELECT * FROM demo LIMIT 10;""")
       </div>
     """
 
+    # Thread select + create controls at the top
+    threads_options = ''.join([f"<option value='{escape(t.title)}'>{escape(t.title)}</option>" for t in threads])
+    thread_top = f"""
+      <div class='card' style='margin-top:8px; padding:12px'>
+        <div class='row' style='align-items:center; gap:12px'>
+          <div>
+            <label class='small muted'>Select Thread</label>
+            <select style='padding:6px; border:1px solid var(--border); border-radius:6px; min-width:220px'>
+              {threads_options or '<option>(none)</option>'}
+            </select>
+          </div>
+          <div>
+            <form method='post' action='/project/{project.id}/threads/create?branch_id={current.id}' class='inline'>
+              <label class='small muted'>Create Thread</label>
+              <input type='text' name='title' placeholder='New exploration...' required style='padding:6px; border:1px solid var(--border); border-radius:6px;' />
+              <button type='submit' class='secondary' style='margin-left:6px'>Create</button>
+            </form>
+          </div>
+        </div>
+      </div>
+    """
+
+    # Build right-side file list (AI title if present, else display name)
+    def _file_label(ff: FileEntry) -> str:
+        return (getattr(ff, 'ai_title', None) or ff.display_name or '').strip()
+    files_sorted = sorted(files, key=lambda ff: (_file_label(ff).lower(), ff.created_at))
+    file_list_items = []
+    for f in files_sorted:
+        href = f"/project/{project.id}?branch_id={current.id}&file_id={f.id}" + (f"&thread_id={selected_thread.id}" if selected_thread else "")
+        label_text = escape(_file_label(f) or f.display_name)
+        sub = escape(((getattr(f, 'ai_category', None) or f.structure or f.file_type or '') or ''))
+        active = (selected_file and f.id == selected_file.id)
+        li_style = "font-weight:600" if active else ""
+        # Show spinner only while LLM classification is actively running; checkmark when classified
+        if getattr(f, 'ai_processing', False):
+            status_icon = "<span class='spinner' title='processing'></span>"
+        elif getattr(f, 'structure', None):
+            status_icon = "<span title='classified'>✓</span>"
+        else:
+            status_icon = ""
+        file_list_items.append(f"<li style='margin:6px 0; {li_style}'>{status_icon}<a href='{href}' style='text-decoration:none; color:inherit; margin-left:6px'>{label_text}</a><div class='small muted'>{sub}</div></li>")
+    file_list_html = "<ul style='list-style:none; padding-left:0; margin:0'>" + ("".join(file_list_items) or "<li class='muted'>No files yet.</li>") + "</ul>"
+
+    # Left details panel for selected file
+    def _file_detail_panel(f: Optional[FileEntry]) -> str:
+        if not f:
+            return "<div class='muted'>Select a file from the list to view details.</div>"
+        storage_path = f.storage_path or ""
+        url = None
+        try:
+            abs_path = os.path.abspath(storage_path)
+            base_root = _project_dirs(project.id)["files_root"]
+            if abs_path.startswith(base_root):
+                rel = abs_path[len(base_root):].lstrip(os.sep).replace(os.sep, "/")
+                url = f"/uploads/{project.id}/{rel}"
+        except Exception:
+            url = None
+        link_html = f"<a href='{url}' target='_blank'>{escape(f.display_name)}</a>" if url else escape(f.display_name)
+        meta = f.metadata_json or {}
+        meta_keys = ', '.join([escape(str(k)) for k in (list(meta.keys())[:20])])
+        ai_block = f"""
+          <div class='small'>
+            <div><strong>AI Title:</strong> {escape(getattr(f, 'ai_title', None) or '(none)')}</div>
+            <div><strong>AI Category:</strong> {escape(getattr(f, 'ai_category', None) or '(none)')}</div>
+            <div><strong>AI Description:</strong> {escape((getattr(f, 'ai_description', None) or '')[:350])}</div>
+          </div>
+        """
+        tbl = f"""
+          <table class='table'>
+            <tbody>
+              <tr><th>Name</th><td>{link_html}</td></tr>
+              <tr><th>Type</th><td>{escape(f.file_type or '')}</td></tr>
+              <tr><th>Structure</th><td>{escape(f.structure or '')}</td></tr>
+              <tr><th>Branch</th><td>{escape(f.branch.name if f.branch else '')}</td></tr>
+              <tr><th>Size</th><td class='small muted'>{f.size_bytes or 0}</td></tr>
+              <tr><th>Created</th><td class='small muted'>{f.created_at.strftime("%Y-%m-%d %H:%M:%S")} UTC</td></tr>
+              <tr><th>Metadata keys</th><td class='small muted'>{meta_keys or '(none)'}</td></tr>
+            </tbody>
+          </table>
+        """
+        return ai_block + tbl
+
+    left_details = _file_detail_panel(selected_file)
+
+    # Thread tabs (above left panel)
+    thr_tabs = []
+    for t in threads:
+        sel = "style='font-weight:600'" if (selected_thread and t.id == selected_thread.id) else ""
+        thr_tabs.append(f"<a {sel} href='/project/{project.id}?branch_id={current.id}" + (f"&file_id={selected_file.id}" if selected_file else "") + f"&thread_id={t.id}' class='pill'>{escape(t.title)}</a>")
+    thr_tabs_html = " ".join(thr_tabs) + f" <a href='/project/{project.id}/threads/new?branch_id={current.id}" + (f"&file_id={selected_file.id}" if selected_file else "") + "' class='pill' title='New thread'>+</a>"
+
+    # Render thread messages
+    msgs = thread_messages or []
+    msg_rows = []
+    if msgs:
+        idx = 0
+        for m in msgs:
+            idx += 1
+            role = escape(m.role)
+            title_txt = escape(getattr(m, 'display_title', None) or (role.upper()))
+            details_id = f"msgd_{idx}"
+            # Prefer payload_json when available; else show content
+            details = ''
+            try:
+                import json as _json
+                if getattr(m, 'payload_json', None) is not None:
+                    details = f"<pre class='small' style='white-space:pre-wrap; background:#f8fafc; padding:8px; border-radius:6px; display:none' id='{details_id}'>" + escape(_json.dumps(m.payload_json, ensure_ascii=False, indent=2)) + "</pre>"
+                else:
+                    details = f"<pre class='small' style='white-space:pre-wrap; background:#f8fafc; padding:8px; border-radius:6px; display:none' id='{details_id}'>" + escape(m.content) + "</pre>"
+            except Exception:
+                details = f"<pre class='small' style='white-space:pre-wrap; background:#f8fafc; padding:8px; border-radius:6px; display:none' id='{details_id}'>" + escape(m.content) + "</pre>"
+            msg_rows.append(
+                f"<div class='small' style='margin:6px 0'>"
+                f"<span class='pill'>{role}</span> "
+                f"<a href='#' onclick=\"var e=document.getElementById('{details_id}'); if(e){{ e.style.display = (e.style.display==='none'?'block':'none'); }} return false;\" style='font-weight:600'>{title_txt}</a>"
+                f"{details}"
+                f"</div>"
+            )
+    else:
+        msg_rows.append("<div class='muted small'>(No messages yet)</div>")
+    msgs_html = "".join(msg_rows)
+
+    # Chat form (LLM keys required; see README)
+    chat_form = f"""
+      <form method='post' action='/project/{project.id}/threads/chat?branch_id={current.id}' style='margin-top:8px'>
+        <input type='hidden' name='thread_id' value='{(selected_thread.id if selected_thread else '')}' />
+        <input type='hidden' name='file_id' value='{(selected_file.id if selected_file else '')}' />
+        <textarea name='content' rows='3' placeholder='Ask a question about this file/context...' style='width:100%; font-family: ui-monospace, Menlo, monospace;'></textarea>
+        <div style='height:6px'></div>
+        <button type='submit'>Submit</button>
+        <span class='small muted'>LLM API key required; see README for setup.</span>
+      </form>
+    """
+
     return f"""
       <h1>{escape(project.title)}</h1>
       <div class=\"muted small\">Project ID: {project.id}</div>
       <div style=\"height:10px\"></div>
       <div>Branches: {tabs_html}</div>
 
-      <div class=\"row\" style=\"margin-top:16px\">
-        <div class=\"card\" style=\"flex:2\">
-          <h3>Files</h3>
+      <div style=\"margin-top:8px; display:flex; gap:8px; align-items:center\">\n        <form method=\"post\" action=\"/project/{project.id}/delete\" class=\"inline\" onsubmit=\"return confirm('Delete project {escape(project.title)} and all its data?');\">\n          <button type=\"submit\" class=\"secondary\">Delete Project</button>\n        </form>\n      </div>\n      <div class=\"row\" style='margin-top:8px'>
+        <div class='card' style='flex:2'>
+          <div style='margin-bottom:8px'>{thr_tabs_html}</div>
+          <h3>Chat</h3>
           {flash_html}
-          <table class=\"table\">
-            <thead><tr><th>Name</th><th>Type</th><th>Structure</th><th>Branch</th><th>Size</th><th>Created</th></tr></thead>
-            <tbody>{files_tbody}</tbody>
-          </table>
-          <h4>Upload a file to this branch</h4>
-          <form method=\"post\" action=\"/project/{project.id}/files/upload?branch_id={current.id}\" enctype=\"multipart/form-data\">
-            <input type=\"file\" name=\"file\" required />
-            <div style=\"height:8px\"></div>
-            <label>Structure</label>
-            <select name=\"structure\" required>
-              <option value=\"notes\">notes</option>
-              <option value=\"writeup\">writeup</option>
-              <option value=\"images\">images</option>
-              <option value=\"sources\">sources</option>
-              <option value=\"code\">code</option>
-            </select>
-            <div style=\"height:8px\"></div>
-            <button type=\"submit\">Upload</button>
-          </form>
-        </div>
+          <div>{msgs_html}</div>
+          {chat_form}
+        </div
 
-        <div class=\"card\" style=\"flex:1\">
-          <h3>Create Branch</h3>
-          <form method=\"post\" action=\"/project/{project.id}/branches/create\">
-            <input type=\"text\" name=\"name\" placeholder=\"experiment-1\" required />
-            <div style=\"height:8px\"></div>
-            <button type=\"submit\">Create Branch</button>
-          </form>
-          <div style=\"height:16px\"></div>
-          <h3>Create Thread</h3>
-          <form method=\"post\" action=\"/project/{project.id}/threads/create?branch_id={current.id}\">
-            <input type=\"text\" name=\"title\" placeholder=\"New exploration...\" required />
-            <div style=\"height:8px\"></div>
-            <button type=\"submit\">Create Thread</button>
-          </form>
-        </div>
+        <div style=\"flex:1; display:flex; flex-direction:column; gap:8px\">\n          <div class=\"card\" style=\"max-height:220px; overflow:auto; padding:12px\">\n            <h3 style='margin-bottom:6px'>Files</h3>\n            {file_list_html}\n          </div>\n          <div class=\"card\" style='padding:12px'>\n            <h3 style='margin-bottom:6px'>Upload a file</h3>\n            <form method=\"post\" action=\"/project/{project.id}/files/upload?branch_id={current.id}\" enctype=\"multipart/form-data\" data-testid=\"upload-form\">\n              <input type=\"file\" name=\"file\" required data-testid=\"upload-input\" />\n              <div style=\"height:6px\"></div>\n              <div class=\"small muted\">LLM classification runs automatically on upload. See README for API key setup.</div>\n              <div style=\"height:6px\"></div>\n              <button type=\"submit\" data-testid=\"upload-submit\">Upload</button>\n            </form>\n          </div>\n          {sql_card}\n        </div>
       </div>
 
       <div class=\"row\">
         <div class=\"card\" style=\"flex:1\">
-          <h3>Threads</h3>
+          <h3>Chat / Threads</h3>
           <table class=\"table\">
             <thead><tr><th>Title</th><th>Branch</th><th>Created</th></tr></thead>
             <tbody>{thread_tbody}</tbody>
@@ -823,7 +1380,7 @@ SELECT * FROM demo LIMIT 10;""")
         </div>
       </div>
 
-      <div class=\"row\">{sql_card}
+      <div class=\"row\">
         <div class=\"card\" style=\"flex:1\">
           <h3>Branch Ops</h3>
           <div class=\"small muted\">Branch-aware SQL is active. Use these actions to manage data.</div>
@@ -849,12 +1406,14 @@ SELECT * FROM demo LIMIT 10;""")
 # ----------------------------------------------------------------------------------
 
 class ShellJob:
-    def __init__(self, script: str, shell_path: Optional[str] = None):
+    def __init__(self, script: str, shell_path: Optional[str] = None, trace_x: bool = False, workdir: Optional[str] = None):
         self.id = uuid.uuid4().hex
         self.script = script
         # Preserve requested shell_path if provided; resolution and fallbacks happen at run-time
         self.shell_path = shell_path or os.environ.get("SHELL")
-        self.start_time = datetime.utcnow()
+        self.trace_x = bool(trace_x)
+        self.workdir = workdir or SHELL_DEFAULT_WORKDIR
+        self.start_time = datetime.now(timezone.utc)
         self.end_time: Optional[datetime] = None
         self.status = "starting"  # starting|running|finished|error|killed
         self.return_code: Optional[int] = None
@@ -937,17 +1496,36 @@ def _run_job(job: ShellJob):
             pass
         return
 
-    args = _args_for(resolved, job.script)
+    # Optionally enable shell xtrace to echo commands as they are executed
+    effective_script = job.script
+    try:
+        base_shell = os.path.basename(resolved)
+    except Exception:
+        base_shell = ''
+    if job.trace_x:
+        if base_shell in {"bash", "zsh", "ksh", "sh"}:
+            effective_script = "set -x; " + effective_script
+        else:
+            # Non-POSIX shells may not support set -x; we note this and continue without it
+            job.append_line(f"[trace] requested but not supported for shell={base_shell}\n")
+    args = _args_for(resolved, effective_script)
 
     # Start process group so Stop can kill descendants
     job.status = "running"
     # Emit startup context to both UI and log file
     job.append_line(f"[start] job_id={job.id} at={datetime.utcnow().isoformat()}Z\n")
     job.append_line(f"[using-shell] path={resolved} args={' '.join(args[:-1])} (script length={len(job.script)} chars)\n")
-    job.append_line(f"[cwd] {os.getcwd()}\n")
+    if job.trace_x:
+        job.append_line("[trace] set -x enabled\n")
+    job.append_line(f"[cwd] {job.workdir}\n")
     job.append_line(f"[log] {job.log_path}\n")
 
     try:
+        # Ensure workdir exists
+        try:
+            os.makedirs(job.workdir, exist_ok=True)
+        except Exception:
+            pass
         job.proc = subprocess.Popen(
             [resolved] + args,
             stdout=subprocess.PIPE,
@@ -957,6 +1535,7 @@ def _run_job(job: ShellJob):
             bufsize=1,
             preexec_fn=os.setsid,
             env=os.environ.copy(),
+            cwd=job.workdir,
         )
     except Exception as e:
         job.status = "error"
@@ -993,8 +1572,8 @@ _shell_jobs: Dict[str, ShellJob] = {}
 _shell_jobs_lock = threading.Lock()
 
 
-def start_shell_job(script: str, shell_path: Optional[str] = None) -> ShellJob:
-    job = ShellJob(script=script, shell_path=shell_path)
+def start_shell_job(script: str, shell_path: Optional[str] = None, trace_x: bool = False, workdir: Optional[str] = None) -> ShellJob:
+    job = ShellJob(script=script, shell_path=shell_path, trace_x=trace_x, workdir=workdir)
     with _shell_jobs_lock:
         _shell_jobs[job.id] = job
     t = threading.Thread(target=_run_job, args=(job,), daemon=True)
@@ -1039,6 +1618,9 @@ def require_shell_enabled_and_auth(request: Request, x_api_token: Optional[str] 
 class ShellRunRequest(BaseModel):
     script: str
     shell_path: Optional[str] = None
+    trace_x: Optional[bool] = None
+    workdir_mode: Optional[str] = None  # 'data' (default) | 'root'
+    workdir: Optional[str] = None       # explicit path (optional)
 
 @app.get("/shell", response_class=HTMLResponse)
 def shell_ui(request: Request):
@@ -1051,6 +1633,7 @@ def shell_ui(request: Request):
         return layout("Shell – disabled", body)
 
     default_shell = html.escape(os.environ.get("SHELL", "/bin/zsh"))
+    default_data_dir = html.escape(SHELL_DEFAULT_WORKDIR)
     body = """
       <h1>Shell</h1>
       <p class='muted small'>Minimal shell UI. Proves WebSocket handshake on load and runs a simple script.</p>
@@ -1069,7 +1652,19 @@ def shell_ui(request: Request):
           </div>
         </div>
         <div style='height:10px'></div>
+        <label class='small muted'>Working directory</label>
+        <div>
+          <select id='workdirMode' style='padding:6px; border:1px solid var(--border); border-radius:6px;'>
+            <option value='data' selected>User Data (__DATA_DIR__)</option>
+            <option value='root'>Entire Disk (/)</option>
+          </select>
+          <div class='small muted'>User data path: __DATA_DIR__</div>
+        </div>
+        <div style='height:10px'></div>
+        <label class='small'><input id='traceX' type='checkbox' checked /> Trace commands (-x)</label>
+        <div style='height:10px'></div>
         <button id='runBtn' type='button'>Run</button>
+        <button id='openWorldBtn' type='button' class='secondary'>Open World</button>
         <button id='stopBtn' type='button' class='secondary' disabled>Stop</button>
       </div>
 
@@ -1082,12 +1677,22 @@ def shell_ui(request: Request):
         <pre id='output' style='min-height:220px; max-height:520px; overflow:auto; background:#0b1021; color:#e6e6e6; padding:12px; border-radius:6px;'></pre>
       </div>
 
+      <div style='height:16px'></div>
+      <div class='card'>
+        <h3 style='margin:0 0 8px 0'>Submitted Commands</h3>
+        <ul id='historyList' class='small' style='margin:0; padding-left:18px; max-height:240px; overflow:auto;'></ul>
+      </div>
+
       <script>
         const runBtn = document.getElementById('runBtn');
         const stopBtn = document.getElementById('stopBtn');
+        const openWorldBtn = document.getElementById('openWorldBtn');
         const output = document.getElementById('output');
         const statusEl = document.getElementById('status');
+        const historyList = document.getElementById('historyList');
+        const workdirModeEl = document.getElementById('workdirMode');
         let currentJob = null;
+        let lastHistoryItem = null;
         let ws = null;
 
         function setStatus(s) { statusEl.textContent = s; }
@@ -1096,6 +1701,18 @@ def shell_ui(request: Request):
           output.scrollTop = output.scrollHeight;
         }
         function disableRun(disabled) { runBtn.disabled = disabled; stopBtn.disabled = !disabled; }
+        function addHistory(script, shellPath) {
+          if (!historyList) return;
+          const li = document.createElement('li');
+          const ts = new Date().toISOString();
+          li.textContent = '[' + ts + '] ' + (shellPath ? ('(' + shellPath + ') ') : '') + script + ' — queued';
+          historyList.prepend(li);
+          lastHistoryItem = li;
+        }
+        function updateHistoryStatus(status) {
+          if (!lastHistoryItem) return;
+          lastHistoryItem.textContent = lastHistoryItem.textContent.replace(/ — .+$/, '') + ' — ' + status;
+        }
 
         // Prove WS handshake at page load via /ws/health
         (function healthWS(){
@@ -1105,50 +1722,58 @@ def shell_ui(request: Request):
           const qs = token ? ('?token='+encodeURIComponent(token)) : '';
           try {
             const hws = new WebSocket(wsScheme + '://' + location.host + '/ws/health' + qs);
-            hws.onopen = function () { console.log('[ws-health-open]'); append('[ws-health-open]\n'); };
-            hws.onmessage = function (e) { console.log('[ws-health]', e.data); append('[ws-health] '+e.data+'\n'); };
-            hws.onerror = function (e) { console.error('[ws-health-error]', e); append('[ws-health-error]\n'); };
-            hws.onclose = function (e) { var code=(e && e.code) ? e.code : ''; console.log('[ws-health-close]', code); append('[ws-health-close '+code+']\n'); };
+            hws.onopen = function () { console.log('[ws-health-open]'); append('[ws-health-open]'); };
+            hws.onmessage = function (e) { console.log('[ws-health]', e.data); append('[ws-health] ' + e.data); };
+            hws.onerror = function (e) { console.error('[ws-health-error]', e); append('[ws-health-error]'); };
+            hws.onclose = function (e) { var code=(e && e.code) ? e.code : ''; console.log('[ws-health-close]', code); append('[ws-health-close ' + code + ']'); };
           } catch (e) {
             console.error('[ws-health-exc]', e);
-            append('[ws-health-exc] '+e+'\n');
+            append('[ws-health-exc] ' + String(e));
           }
         })();
 
         runBtn.addEventListener('click', async () => {
           output.textContent = '';
           console.log('[ui] run clicked');
-          append('[ui] run clicked\n');
+          append('[ui] run clicked');
           const script = document.getElementById('script').value;
           const shellPathRaw = document.getElementById('shellPath').value;
           const shellPath = (shellPathRaw && shellPathRaw.trim()) ? shellPathRaw.trim() : null;
+          const traceEl = document.getElementById('traceX');
+          const trace_x = !!(traceEl && traceEl.checked);
+          const workdir_mode = workdirModeEl ? workdirModeEl.value : 'data';
           var tokenEl = document.getElementById('apiToken');
           const token = tokenEl ? tokenEl.value : null;
           setStatus('starting...');
           disableRun(true);
+          // Echo the submitted script into the output and history
+          append('>>> ' + script);
+          append(String.fromCharCode(10));
+          addHistory(script, shellPath);
           try {
-            append('[ui] POST /api/shell/run\n');
+            append('[ui] POST /api/shell/run');
             const resp = await fetch('/api/shell/run', {
               method: 'POST',
               headers: Object.assign({'Content-Type': 'application/json'}, token ? {'X-API-Token': token} : {}),
-              body: JSON.stringify({ script, shell_path: shellPath }),
+              body: JSON.stringify({ script, shell_path: shellPath, trace_x, workdir_mode }),
             });
             if (!resp.ok) { const t = await resp.text(); throw new Error(t || ('HTTP '+resp.status)); }
             const data = await resp.json();
             currentJob = data.job_id;
-            append('[ui] job '+currentJob+' started\n');
+            append('[ui] job ' + currentJob + ' started');
             setStatus('running (pid '+(data.pid || '?')+')');
             // WebSocket stream (token via query string if present)
             const wsScheme = (location.protocol === 'https:') ? 'wss' : 'ws';
             const qs = token ? ('?token='+encodeURIComponent(token)) : '';
             ws = new WebSocket(wsScheme + '://' + location.host + '/ws/shell/' + data.job_id + qs);
-            ws.onopen = function () { console.log('[ws-open]'); append('[ws-open]\n'); };
+            ws.onopen = function () { console.log('[ws-open]'); append('[ws-open]'); updateHistoryStatus('running'); };
             ws.onmessage = function (e) {
               const line = e.data;
               if (line === '__CEDARPY_EOF__') {
                 setStatus('finished');
+                updateHistoryStatus('finished');
                 disableRun(false);
-                try { ws && ws.close(); } catch {}
+                try { ws && ws.close(); } catch (e) {}
                 ws = null;
               } else {
                 append(line);
@@ -1156,10 +1781,11 @@ def shell_ui(request: Request):
             };
             ws.onerror = function (e) {
               console.error('[ws-error]', e);
-              append('\n[ws-error]');
+              append('[ws-error]');
               setStatus('error');
+              updateHistoryStatus('error');
               disableRun(false);
-              try { ws && ws.close(); } catch {}
+              try { ws && ws.close(); } catch (e2) {}
               ws = null;
             };
             ws.onclose = function (e) {
@@ -1167,12 +1793,13 @@ def shell_ui(request: Request):
               console.log('[ws-close]', code);
               if (statusEl.textContent === 'starting...' || statusEl.textContent.indexOf('running') === 0) {
                 setStatus('closed');
+                updateHistoryStatus('closed');
                 disableRun(false);
               }
             };
           } catch (err) {
             console.error('[ui] run error', err);
-            append('[error] '+err+'\n');
+            append('[error] ' + err);
             setStatus('error');
             disableRun(false);
           }
@@ -1182,18 +1809,65 @@ def shell_ui(request: Request):
           if (!currentJob) return;
           const token = document.getElementById('apiToken').value || null;
           console.log('[ui] stop clicked for job', currentJob);
-          append('[ui] stop clicked\n');
+          append('[ui] stop clicked');
+          updateHistoryStatus('stopping');
           try {
             const resp = await fetch(`/api/shell/stop/${currentJob}`, { method: 'POST', headers: token ? {'X-API-Token': token} : {} });
-            if (!resp.ok) { append('[stop-error] '+(await resp.text())+'\n'); return; }
-            append('[killing]\n');
-            try { ws && ws.close(); } catch {}
+            if (!resp.ok) { append('[stop-error] ' + (await resp.text())); return; }
+            append('[killing]');
+            try { ws && ws.close(); } catch (e2) {}
             ws = null;
-          } catch (e) { console.error('[stop-error]', e); append('[stop-error] '+e+'\n'); }
+          } catch (e) { console.error('[stop-error]', e); append('[stop-error] ' + e); }
         });
+
+        // Quick action: Open World — one click to run a simple script and stream output
+        if (openWorldBtn) {
+          openWorldBtn.addEventListener('click', async () => {
+            try {
+              output.textContent = '';
+              append('[ui] open world clicked');
+              const tokenEl = document.getElementById('apiToken');
+              const token = tokenEl ? tokenEl.value : null;
+              const traceEl = document.getElementById('traceX');
+              const trace_x = !!(traceEl && traceEl.checked);
+              const workdir_mode = workdirModeEl ? workdirModeEl.value : 'data';
+              addHistory('echo hello world', null);
+              append('>>> echo hello world');
+              append(String.fromCharCode(10));
+              const resp = await fetch('/api/shell/run', {
+                method: 'POST',
+                headers: Object.assign({'Content-Type': 'application/json'}, token ? {'X-API-Token': token} : {}),
+                body: JSON.stringify({ script: 'echo hello world', trace_x, workdir_mode }),
+              });
+              if (!resp.ok) { append('[error] ' + (await resp.text())); return; }
+              const data = await resp.json();
+              setStatus('running (pid '+(data.pid || '?')+')');
+              const wsScheme = (location.protocol === 'https:') ? 'wss' : 'ws';
+              const qs = token ? ('?token='+encodeURIComponent(token)) : '';
+              // Reuse outer ws so Stop can close it
+              ws = new WebSocket(wsScheme + '://' + location.host + '/ws/shell/' + data.job_id + qs);
+              ws.onopen = function () { console.log('[ws-open]'); append('[ws-open]'); updateHistoryStatus('running'); };
+              ws.onmessage = function (e) {
+                const line = e.data;
+                if (line === '__CEDARPY_EOF__') {
+                  setStatus('finished');
+                  updateHistoryStatus('finished');
+                  try { ws.close(); } catch (e) {}
+                } else {
+                  append(line);
+                }
+              };
+              ws.onerror = function () { append('[ws-error]'); setStatus('error'); updateHistoryStatus('error'); try { ws.close(); } catch (e) {} };
+            } catch (e) {
+              console.error('[openworld-error]', e);
+              append('[openworld-error] ' + e);
+            }
+          });
+        }
       </script>
     """
     body = body.replace("__DEFAULT_SHELL__", default_shell)
+    body = body.replace("__DATA_DIR__", default_data_dir)
     return layout("Shell", body)
 
 
@@ -1202,17 +1876,31 @@ def api_shell_run(request: Request, body: ShellRunRequest, x_api_token: Optional
     require_shell_enabled_and_auth(request, x_api_token)
     script = body.script
     shell_path = body.shell_path
+    trace_x = bool(body.trace_x) if body.trace_x is not None else False
+    # Resolve working directory
+    workdir_eff = None
+    try:
+        if body.workdir and isinstance(body.workdir, str) and body.workdir.strip():
+            workdir_eff = os.path.abspath(os.path.expanduser(body.workdir.strip()))
+        else:
+            mode = (body.workdir_mode or "data").strip().lower()
+            if mode == "root":
+                workdir_eff = "/"
+            else:
+                workdir_eff = SHELL_DEFAULT_WORKDIR
+    except Exception:
+        workdir_eff = SHELL_DEFAULT_WORKDIR
     # Server-side trace for UI clicks
     try:
         host = request.client.host if request and request.client else "?"
         cookie_tok = request.cookies.get("Cedar-Shell-Token") if hasattr(request, "cookies") else None
         tok_src = "hdr" if x_api_token else ("cookie" if cookie_tok else "no")
-        print(f"[shell-api] RUN click from={host} token={tok_src} shell_path={(shell_path or os.environ.get('SHELL') or '')} script_len={len(script or '')}")
+        print(f"[shell-api] RUN click from={host} token={tok_src} shell_path={(shell_path or os.environ.get('SHELL') or '')} script_len={len(script or '')} trace_x={trace_x} workdir={workdir_eff}")
     except Exception:
         pass
     if not script or not isinstance(script, str):
         raise HTTPException(status_code=400, detail="script is required")
-    job = start_shell_job(script=script, shell_path=shell_path)
+    job = start_shell_job(script=script, shell_path=shell_path, trace_x=trace_x, workdir=workdir_eff)
     pid = job.proc.pid if job.proc else None
     try:
         print(f"[shell-api] job started id={job.id} pid={pid}")
@@ -1363,6 +2051,258 @@ async def ws_health(websocket: WebSocket):
     except Exception:
         pass
 
+# WebSocket SQL endpoint (WebSockets-only contract for DB queries)
+# Accepts JSON messages: { sql: "...", max_rows?: number }
+# Responds with JSON per message: { ok, statement_type, columns?, rows?, rowcount?, truncated?, error? }
+# Auth mirrors other WS endpoints: token via query (?token=...) when CEDARPY_SHELL_API_TOKEN is set; otherwise local-only.
+@app.websocket("/ws/sql/{project_id}")
+async def ws_sql(websocket: WebSocket, project_id: int):
+    token_q = websocket.query_params.get("token") if hasattr(websocket, "query_params") else None
+    if not SHELL_API_ENABLED:
+        await websocket.close(code=4403)
+        return
+    if SHELL_API_TOKEN:
+        cookie_tok = websocket.cookies.get("Cedar-Shell-Token") if hasattr(websocket, "cookies") else None
+        if (token_q or cookie_tok) != SHELL_API_TOKEN:
+            await websocket.close(code=4401)
+            return
+    else:
+        try:
+            client_host = (websocket.client.host if websocket.client else "")
+        except Exception:
+            client_host = ""
+        if client_host not in {"127.0.0.1", "::1", "localhost"}:
+            await websocket.close(code=4401)
+            return
+    await websocket.accept()
+    # Ensure per-project database exists
+    try:
+        ensure_project_initialized(project_id)
+    except Exception:
+        pass
+    # Process messages
+    while True:
+        try:
+            msg = await websocket.receive_text()
+        except WebSocketDisconnect:
+            break
+        except Exception:
+            break
+        if not msg:
+            continue
+        if msg.strip() == "__CLOSE__":
+            break
+        payload = None
+        try:
+            payload = json.loads(msg)
+        except Exception:
+            payload = {"sql": msg}
+        sql_text = (payload.get("sql") if isinstance(payload, dict) else msg) or ""
+        try:
+            try:
+                max_rows = int(payload.get("max_rows", int(os.getenv("CEDARPY_SQL_MAX_ROWS", "200")))) if isinstance(payload, dict) else int(os.getenv("CEDARPY_SQL_MAX_ROWS", "200"))
+            except Exception:
+                max_rows = 200
+            result = _execute_sql(sql_text, project_id, max_rows=max_rows)
+            out = {
+                "ok": bool(result.get("success")),
+                "statement_type": result.get("statement_type"),
+                "columns": result.get("columns"),
+                "rows": result.get("rows"),
+                "rowcount": result.get("rowcount"),
+                "truncated": result.get("truncated"),
+                "error": None if result.get("success") else result.get("error"),
+            }
+        except Exception as e:
+            out = {"ok": False, "error": str(e)}
+        try:
+            await websocket.send_text(json.dumps(out))
+        except Exception:
+            break
+    try:
+        await websocket.close()
+    except Exception:
+        pass
+
+# WebSocket SQL with undo and branch context
+# Message format:
+#  - { "action": "exec", "sql": "...", "branch_id": 2 | null, "branch_name": "Main" | null, "max_rows": 200 }
+#  - { "action": "undo_last", "branch_id": 2 | null, "branch_name": "Main" | null }
+@app.websocket("/ws/sqlx/{project_id}")
+async def ws_sqlx(websocket: WebSocket, project_id: int):
+    token_q = websocket.query_params.get("token") if hasattr(websocket, "query_params") else None
+    if not SHELL_API_ENABLED:
+        await websocket.close(code=4403); return
+    if SHELL_API_TOKEN:
+        cookie_tok = websocket.cookies.get("Cedar-Shell-Token") if hasattr(websocket, "cookies") else None
+        if (token_q or cookie_tok) != SHELL_API_TOKEN:
+            await websocket.close(code=4401); return
+    else:
+        try:
+            client_host = (websocket.client.host if websocket.client else "")
+        except Exception:
+            client_host = ""
+        if client_host not in {"127.0.0.1", "::1", "localhost"}:
+            await websocket.close(code=4401); return
+
+    await websocket.accept()
+
+    # Ensure per-project database schema and storage are initialized
+    try:
+        ensure_project_initialized(project_id)
+    except Exception:
+        pass
+
+    # Per-project session
+    SessionLocal = sessionmaker(bind=_get_project_engine(project_id), autoflush=False, autocommit=False, future=True)
+
+    def _resolve_branch_id(db: Session, branch_id: Optional[int], branch_name: Optional[str]) -> int:
+        if branch_id:
+            b = db.query(Branch).filter(Branch.id == branch_id, Branch.project_id == project_id).first()
+            if b: return b.id
+        if branch_name:
+            b = db.query(Branch).filter(Branch.project_id == project_id, Branch.name == branch_name).first()
+            if b: return b.id
+        # default to Main
+        main_b = db.query(Branch).filter(Branch.project_id == project_id, Branch.name == "Main").first()
+        if not main_b:
+            main_b = ensure_main_branch(db, project_id)
+        return main_b.id
+
+    while True:
+        try:
+            raw = await websocket.receive_text()
+        except WebSocketDisconnect:
+            break
+        except Exception:
+            break
+        if not raw:
+            continue
+        try:
+            msg = json.loads(raw)
+        except Exception:
+            msg = {"action": "exec", "sql": raw}
+
+        action = (msg.get("action") or "exec").lower()
+        sql_text = msg.get("sql") or ""
+        br_id = msg.get("branch_id")
+        br_name = msg.get("branch_name")
+        try:
+            max_rows = int(msg.get("max_rows", int(os.getenv("CEDARPY_SQL_MAX_ROWS", "200"))))
+        except Exception:
+            max_rows = 200
+
+        db = SessionLocal()
+        try:
+            branch_id_eff = _resolve_branch_id(db, br_id, br_name)
+            if action == "undo_last":
+                # Deterministic undo: allow specifying an explicit log_id
+                log = None
+                req_log_id = msg.get("log_id")
+                if req_log_id:
+                    try:
+                        req_log_id = int(req_log_id)
+                        log = db.query(SQLUndoLog).filter(SQLUndoLog.id==req_log_id, SQLUndoLog.project_id==project_id).first()
+                    except Exception:
+                        log = None
+                if not log:
+                    # Fallback: find last log for this project+branch
+                    log = db.query(SQLUndoLog).filter(SQLUndoLog.project_id==project_id, SQLUndoLog.branch_id==branch_id_eff).order_by(SQLUndoLog.created_at.desc(), SQLUndoLog.id.desc()).first()
+                if not log:
+                    # Fallback: find the latest log for this project whose rows_after indicate the target branch
+                    cand = db.query(SQLUndoLog).filter(SQLUndoLog.project_id==project_id).order_by(SQLUndoLog.created_at.desc(), SQLUndoLog.id.desc()).limit(50).all()
+                    for lg in cand:
+                        try:
+                            ra = lg.rows_after or []
+                            if any((isinstance(r, dict) and int(r.get("branch_id", -1)) == int(branch_id_eff)) for r in ra):
+                                log = lg; break
+                        except Exception:
+                            pass
+                if not log:
+                    await websocket.send_text(json.dumps({"ok": False, "error": "Nothing to undo"}))
+                    db.close(); continue
+                table = _safe_identifier(log.table_name)
+                pk_cols = log.pk_columns or []
+                with _get_project_engine(project_id).begin() as conn:
+                    if log.op == "insert":
+                        for row in (log.rows_after or []):
+                            conds = [f"{pc} = {_sql_quote(row.get(pc))}" for pc in pk_cols if pc in row]
+                            conds.append(f"project_id = {project_id}")
+                            conds.append(f"branch_id = {branch_id_eff}")
+                            if conds:
+                                conn.exec_driver_sql(f"DELETE FROM {table} WHERE " + " AND ".join(conds))
+                    elif log.op == "delete":
+                        for row in (log.rows_before or []):
+                            cols = list(row.keys())
+                            vals = ", ".join(_sql_quote(row[c]) for c in cols)
+                            conn.exec_driver_sql(f"INSERT INTO {table} (" + ", ".join(cols) + ") VALUES (" + vals + ")")
+                    elif log.op == "update":
+                        for row in (log.rows_before or []):
+                            sets = []
+                            conds = []
+                            for k, v in row.items():
+                                if k in pk_cols or k in ("project_id","branch_id"):
+                                    conds.append(f"{k} = {_sql_quote(v)}")
+                                else:
+                                    sets.append(f"{k} = {_sql_quote(v)}")
+                            if sets and conds:
+                                conn.exec_driver_sql(f"UPDATE {table} SET " + ", ".join(sets) + " WHERE " + " AND ".join(conds))
+                try:
+                    db.delete(log); db.commit()
+                except Exception:
+                    db.rollback()
+                await websocket.send_text(json.dumps({"ok": True, "undone": True}))
+                db.close(); continue
+            else:
+                # Execute with undo capture (SELECT/PRAGMA will be routed internally to _execute_sql)
+                res = _execute_sql_with_undo(db, sql_text, project_id, branch_id_eff, max_rows=max_rows)
+                # Use exact undo id from execution result when available; fall back to latest log for this branch
+                last_log_id = res.get("undo_log_id")
+                if last_log_id is None:
+                    try:
+                        # Ensure session sees freshest state
+                        try:
+                            db.expire_all()
+                        except Exception:
+                            pass
+                        _last = db.query(SQLUndoLog).filter(SQLUndoLog.project_id==project_id, SQLUndoLog.branch_id==branch_id_eff).order_by(SQLUndoLog.created_at.desc(), SQLUndoLog.id.desc()).first()
+                        if not _last:
+                            _last = db.query(SQLUndoLog).filter(SQLUndoLog.project_id==project_id).order_by(SQLUndoLog.created_at.desc(), SQLUndoLog.id.desc()).first()
+                        if _last:
+                            last_log_id = _last.id
+                    except Exception:
+                        pass
+                # Use 0 as a sentinel when we couldn't determine a specific undo id; this allows downstream callers
+                # to treat it as "unknown" while still providing a non-null value and relying on branch-based fallbacks.
+                if last_log_id is None:
+                    last_log_id = 0
+                out = {
+                    "ok": bool(res.get("success")),
+                    "statement_type": res.get("statement_type"),
+                    "columns": res.get("columns"),
+                    "rows": res.get("rows"),
+                    "rowcount": res.get("rowcount"),
+                    "truncated": res.get("truncated"),
+                    "error": None if res.get("success") else res.get("error"),
+                    "last_log_id": last_log_id,
+                }
+                await websocket.send_text(json.dumps(out))
+        except Exception as e:
+            try:
+                await websocket.send_text(json.dumps({"ok": False, "error": str(e)}))
+            except Exception:
+                pass
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
+
+    try:
+        await websocket.close()
+    except Exception:
+        pass
+
 
 @app.post("/api/shell/stop/{job_id}")
 def api_shell_stop(job_id: str, request: Request, x_api_token: Optional[str] = Header(default=None)):
@@ -1393,6 +2333,55 @@ def api_shell_status(job_id: str, request: Request, x_api_token: Optional[str] =
 # ----------------------------------------------------------------------------------
 # Routes
 # ----------------------------------------------------------------------------------
+
+# Client log ingestion API
+# This endpoint receives client-side console/error logs sent by the injected script in layout().
+# See README.md (section "Client-side logging") for details and troubleshooting.
+# In-memory ring buffer of recent client logs (latest first when rendered)
+_CLIENT_LOG_BUFFER: deque = deque(maxlen=1000)
+
+class ClientLogEntry(BaseModel):
+    when: Optional[str] = None
+    level: str
+    message: str
+    url: Optional[str] = None
+    line: Optional[int] = None
+    column: Optional[int] = None
+    stack: Optional[str] = None
+    userAgent: Optional[str] = None
+    origin: Optional[str] = None
+
+@app.post("/api/client-log")
+def api_client_log(entry: ClientLogEntry, request: Request):
+    host = (request.client.host if request and request.client else "?")
+    ts = entry.when or datetime.utcnow().isoformat() + "Z"
+    lvl = (entry.level or "info").upper()
+    url = entry.url or ""
+    lc = f"{entry.line or ''}:{entry.column or ''}" if (entry.line or entry.column) else ""
+    ua = entry.userAgent or ""
+    origin = entry.origin or ""
+    # Append to in-memory buffer for viewing in /log
+    try:
+        _CLIENT_LOG_BUFFER.append({
+            "ts": ts,
+            "level": lvl,
+            "host": host,
+            "origin": origin,
+            "url": url,
+            "loc": lc,
+            "ua": ua,
+            "message": entry.message,
+            "stack": entry.stack or None,
+        })
+    except Exception:
+        pass
+    try:
+        print(f"[client-log] ts={ts} level={lvl} host={host} origin={origin} url={url} loc={lc} ua={ua} msg={entry.message}")
+        if entry.stack:
+            print("[client-log-stack] " + str(entry.stack))
+    except Exception:
+        pass
+    return {"ok": True}
 
 # -------------------- Merge to Main (SQLite-first implementation) --------------------
 
@@ -1518,7 +2507,36 @@ def merge_to_main(project_id: int, request: Request, db: Session = Depends(get_p
     except Exception:
         pass
 
+    # After merging data rows, also adopt unique changelog entries from the branch into Main
+    try:
+        main_entries = db.query(ChangelogEntry).filter(ChangelogEntry.project_id==project.id, ChangelogEntry.branch_id==main_b.id).order_by(ChangelogEntry.created_at.desc()).limit(500).all()
+        seen = set((ce.action, _hash_payload(ce.input_json)) for ce in main_entries)
+        branch_entries = db.query(ChangelogEntry).filter(ChangelogEntry.project_id==project.id, ChangelogEntry.branch_id==current_b.id).order_by(ChangelogEntry.created_at.asc()).all()
+        adopted = 0
+        for ce in branch_entries:
+            key = (ce.action, _hash_payload(ce.input_json))
+            if key in seen:
+                continue
+            ne = ChangelogEntry(
+                project_id=project.id,
+                branch_id=main_b.id,
+                action=ce.action,
+                input_json=ce.input_json,
+                output_json={"merged_from_branch_id": current_b.id, "merged_from_branch": current_b.name, "original_output": ce.output_json},
+                summary_text=(ce.summary_text or f"Adopted from {current_b.name}: {ce.action}"),
+            )
+            db.add(ne)
+            adopted += 1
+        if adopted:
+            db.commit()
+    except Exception:
+        db.rollback()
+
     msg = f"Merged files={merged_counts['files']}, threads={merged_counts['threads']}, datasets={merged_counts['datasets']}, tables={merged_counts['tables']}"
+    try:
+        record_changelog(db, project.id, main_b.id, "branch.merge_to_main", {"from_branch": current_b.name}, {"merged_counts": merged_counts})
+    except Exception:
+        pass
     return RedirectResponse(f"/project/{project.id}?branch_id={main_b.id}&msg=" + html.escape(msg), status_code=303)
 
 # -------------------- Delete all files in branch --------------------
@@ -1545,6 +2563,10 @@ def delete_all_files(project_id: int, request: Request, db: Session = Depends(ge
             pass
         db.delete(f)
     db.commit()
+    try:
+        record_changelog(db, project.id, current_b.id, "files.delete_all", {}, {"deleted_count": len(files)})
+    except Exception:
+        pass
     return RedirectResponse(f"/project/{project.id}?branch_id={current_b.id}&msg=Files+deleted", status_code=303)
 
 # -------------------- Make existing table branch-aware (SQLite) --------------------
@@ -1608,11 +2630,52 @@ def make_table_branch_aware(project_id: int, request: Request, table: str = Form
             # Drop old
             conn.exec_driver_sql(f"DROP TABLE {tmp}")
     except Exception as e:
+        try:
+            record_changelog(db, project.id, current_b.id, "sql.make_branch_aware", {"table": tbl}, {"error": str(e)})
+        except Exception:
+            pass
         return RedirectResponse(f"/project/{project.id}?branch_id={current_b.id}&msg=Error:+{html.escape(str(e))}", status_code=303)
 
+    try:
+        record_changelog(db, project.id, current_b.id, "sql.make_branch_aware", {"table": tbl}, {"ok": True})
+    except Exception:
+        pass
     return RedirectResponse(f"/project/{project.id}?branch_id={current_b.id}&msg=Converted+{tbl}+to+branch-aware", status_code=303)
 
 BRANCH_AWARE_SQL_DEFAULT = os.getenv("CEDARPY_SQL_BRANCH_MODE", "1") == "1"
+
+# -------------------- Delete project (registry + files + per-project DB dir) --------------------
+
+@app.post("/project/{project_id}/delete")
+def delete_project(project_id: int):
+    # Remove from central registry
+    try:
+        with RegistrySessionLocal() as reg:
+            proj = reg.query(Project).filter(Project.id == project_id).first()
+            if proj:
+                reg.delete(proj)
+                reg.commit()
+    except Exception:
+        pass
+    # Dispose cached engine if present
+    try:
+        with _project_engines_lock:
+            eng = _project_engines.pop(project_id, None)
+        if eng is not None:
+            try:
+                eng.dispose()
+            except Exception:
+                pass
+    except Exception:
+        pass
+    # Remove project storage directory (DB + files)
+    try:
+        base = _project_dirs(project_id)["base"]
+        if os.path.isdir(base):
+            shutil.rmtree(base, ignore_errors=True)
+    except Exception:
+        pass
+    return RedirectResponse("/", status_code=303)
 
 # -------------------- Undo last SQL --------------------
 
@@ -1664,6 +2727,10 @@ def undo_last_sql(project_id: int, request: Request, db: Session = Depends(get_p
                     if sets and conds:
                         conn.exec_driver_sql(f"UPDATE {table} SET " + ", ".join(sets) + " WHERE " + " AND ".join(conds))
     except Exception as e:
+        try:
+            record_changelog(db, project.id, current_b.id, "sql.undo_last", {"undo_log_id": getattr(log, 'id', None)}, {"error": str(e)})
+        except Exception:
+            pass
         return RedirectResponse(f"/project/{project.id}?branch_id={current_b.id}&msg=Undo+failed:+{html.escape(str(e))}", status_code=303)
 
     # Remove the log entry we just undid
@@ -1672,6 +2739,11 @@ def undo_last_sql(project_id: int, request: Request, db: Session = Depends(get_p
         db.commit()
     except Exception:
         db.rollback()
+
+    try:
+        record_changelog(db, project.id, current_b.id, "sql.undo_last", {"undo_log_id": getattr(log, 'id', None)}, {"ok": True})
+    except Exception:
+        pass
 
     return RedirectResponse(f"/project/{project.id}?branch_id={current_b.id}&msg=Undone", status_code=303)
 
@@ -1780,7 +2852,15 @@ def execute_sql(project_id: int, request: Request, sql: str = Form(...), db: Ses
     result = _execute_sql_with_undo(db, transformed_sql, project.id, current.id, max_rows=max_rows)
     sql_block = _render_sql_result_html(result)
 
-    return layout(project.title, project_page_html(project, branches, current, files, threads, datasets, msg="Per-project database is active", sql_result_block=sql_block))
+    # Changelog entry for this SQL action
+    try:
+        input_payload = {"sql": sql, "transformed_sql": transformed_sql}
+        output_payload = {k: v for k, v in result.items() if k not in ("rows",)}
+        record_changelog(db, project.id, current.id, "sql.execute", input_payload, output_payload)
+    except Exception:
+        pass
+
+    return layout(project.title, project_page_html(project, branches, current, files, threads, datasets, selected_file=None, msg="Per-project database is active", sql_result_block=sql_block))
 
 def _render_sql_result_html(result: dict) -> str:
     if not result:
@@ -1799,7 +2879,12 @@ def _render_sql_result_html(result: dict) -> str:
     # Table for rows
     rows_html = ""
     if result.get("columns") and result.get("rows") is not None:
-        headers = ''.join(f"<th>{escape(str(c))}</th>" for c in result["columns"])
+        # Deduplicate headers to avoid showing duplicate column names (observed in some drivers)
+        cols_unique = []
+        for c in (result["columns"] or []):
+            if c not in cols_unique:
+                cols_unique.append(c)
+        headers = ''.join(f"<th>{escape(str(c))}</th>" for c in cols_unique)
         body_rows = []
         for row in result["rows"]:
             tds = []
@@ -1950,6 +3035,7 @@ def _execute_sql_with_undo(db: Session, sql_text: str, project_id: int, branch_i
         pk_cols = _get_pk_columns(conn, table)
         rows_before = []
         rows_after = []
+        created_log_id = None
 
         if op in ("update", "delete"):
             w = _extract_where_clause(s)
@@ -2004,35 +3090,204 @@ def _execute_sql_with_undo(db: Session, sql_text: str, project_id: int, branch_i
                     count += 1
                     if count >= undo_cap: break
 
-        # Store undo log
+        # Done with data mutations; log insertion happens outside this transaction to avoid SQLite locking
+
+    # Store undo log using the ORM session (separate transaction)
+    try:
+        log = SQLUndoLog(
+            project_id=project_id,
+            branch_id=branch_id,
+            table_name=table,
+            op=op,
+            sql_text=s,
+            pk_columns=pk_cols,
+            rows_before=rows_before,
+            rows_after=rows_after,
+        )
+        db.add(log)
+        # Ensure PK is assigned before commit even if expire_on_commit=True
+        db.flush()
         try:
-            log = SQLUndoLog(
-                project_id=project_id,
-                branch_id=branch_id,
-                table_name=table,
-                op=op,
-                sql_text=s,
-                pk_columns=pk_cols,
-                rows_before=rows_before,
-                rows_after=rows_after,
-            )
-            db.add(log)
-            db.commit()
+            created_log_id = log.id
         except Exception:
-            db.rollback()
+            created_log_id = None
+        db.commit()
+    except Exception as e:
+        try:
+            print(f"[undo-log-error] {type(e).__name__}: {e}")
+        except Exception:
+            pass
+        db.rollback()
+
+    # Best-effort fallback: if we did not capture an explicit created_log_id, query the latest log for this project+branch
+    if created_log_id is None:
+        try:
+            _last = db.query(SQLUndoLog).filter(SQLUndoLog.project_id==project_id, SQLUndoLog.branch_id==branch_id).order_by(SQLUndoLog.created_at.desc(), SQLUndoLog.id.desc()).first()
+            if not _last:
+                _last = db.query(SQLUndoLog).filter(SQLUndoLog.project_id==project_id).order_by(SQLUndoLog.created_at.desc(), SQLUndoLog.id.desc()).first()
+            if _last:
+                created_log_id = _last.id
+        except Exception:
+            created_log_id = None
 
     # Return a generic result (we can run a SELECT for UPDATE/DELETE to show rowcount)
-    return _execute_sql(
+    _res = _execute_sql(
         f"SELECT changes() as affected" if _dialect(_get_project_engine(project_id)) == "sqlite" else s,
         project_id,
         max_rows=max_rows,
     )
+    # Include undo_log_id when we created one
+    if created_log_id is not None:
+        try:
+            _res["undo_log_id"] = created_log_id
+        except Exception:
+            pass
+    return _res
 
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request, db: Session = Depends(get_registry_db)):
     # Central registry for list of projects
     projects = db.query(Project).order_by(Project.created_at.desc()).all()
     return layout("Cedar", projects_list_html(projects))
+
+
+# ----------------------------------------------------------------------------------
+# Log page
+# ----------------------------------------------------------------------------------
+
+@app.get("/log", response_class=HTMLResponse)
+def view_logs():
+    # Render recent client logs (newest last for readability)
+    rows = []
+    try:
+        logs = list(_CLIENT_LOG_BUFFER)
+    except Exception:
+        logs = []
+    if logs:
+        for e in logs:
+            ts = escape(str(e.get("ts") or ""))
+            lvl = escape(str(e.get("level") or ""))
+            url = escape(str(e.get("url") or ""))
+            origin = escape(str(e.get("origin") or ""))
+            msg = escape(str(e.get("message") or ""))
+            loc = escape(str(e.get("loc") or ""))
+            stack = escape(str(e.get("stack") or ""))
+            ua = escape(str(e.get("ua") or ""))
+            rows.append(f"<tr><td class='small'>{ts}</td><td class='small'>{lvl}</td><td class='small'>{origin}</td><td class='small'>{loc}</td><td>{msg}</td><td class='small'>{url}</td></tr>" + (f"<tr><td colspan='6'><pre class='small' style='white-space:pre-wrap'>{stack}</pre></td></tr>" if stack else ""))
+    body = f"""
+      <h1>Client Log</h1>
+      <div class='card'>
+        <div class='small muted'>Most recent {len(logs)} entries.</div>
+        <table class='table'>
+          <thead><tr><th>When</th><th>Level</th><th>Origin</th><th>Loc</th><th>Message</th><th>URL</th></tr></thead>
+          <tbody>{''.join(rows) or "<tr><td colspan='6' class='muted'>(no entries)</td></tr>"}</tbody>
+        </table>
+      </div>
+    """
+    return layout("Log", body)
+
+# ----------------------------------------------------------------------------------
+# Merge dashboard pages
+# ----------------------------------------------------------------------------------
+
+def merge_index_html(projects: List[Project]) -> str:
+    rows = []
+    for p in projects:
+        rows.append(f"<tr><td>{escape(p.title)}</td><td><a class='pill' href='/merge/{p.id}'>Open</a></td></tr>")
+    body = f"""
+      <h1>Merge</h1>
+      <div class='card' style='max-width:720px'>
+        <h3>Projects</h3>
+        <table class='table'>
+          <thead><tr><th>Title</th><th>Actions</th></tr></thead>
+          <tbody>{''.join(rows) or '<tr><td colspan="2" class="muted">No projects yet.</td></tr>'}</tbody>
+        </table>
+      </div>
+    """
+    return body
+
+
+def _hash_payload(obj: Any) -> str:
+    try:
+        import json as _json
+        s = _json.dumps(obj, ensure_ascii=False, sort_keys=True)
+    except Exception:
+        s = str(obj)
+    h = hashlib.sha256(s.encode('utf-8', errors='ignore')).hexdigest()
+    return h
+
+
+@app.get("/merge", response_class=HTMLResponse)
+def merge_index(request: Request, db: Session = Depends(get_registry_db)):
+    projects = db.query(Project).order_by(Project.created_at.desc()).all()
+    return layout("Merge", merge_index_html(projects))
+
+
+@app.get("/merge/{project_id}", response_class=HTMLResponse)
+def merge_project_view(project_id: int, db: Session = Depends(get_project_db)):
+    ensure_project_initialized(project_id)
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        return layout("Not found", "<h1>Project not found</h1>")
+    # Branches
+    branches = db.query(Branch).filter(Branch.project_id == project.id).order_by(Branch.created_at.asc()).all()
+    if not branches:
+        ensure_main_branch(db, project.id)
+        branches = db.query(Branch).filter(Branch.project_id == project.id).order_by(Branch.created_at.asc()).all()
+    main_b = ensure_main_branch(db, project.id)
+
+    # Build main changelog hash set
+    main_entries = db.query(ChangelogEntry).filter(ChangelogEntry.project_id==project.id, ChangelogEntry.branch_id==main_b.id).order_by(ChangelogEntry.created_at.desc()).limit(500).all()
+    seen = set((ce.action, _hash_payload(ce.input_json)) for ce in main_entries)
+
+    # For each branch, compute unique entries (not present in main by action+input)
+    cards = []
+    for b in branches:
+        if b.id == main_b.id:
+            # Render main summary card
+            cards.append(f"""
+              <div class='card'>
+                <h3>Main</h3>
+                <div class='small muted'>Branch ID: {b.id}</div>
+                <div class='small muted'>Changelog entries: {len(main_entries)}</div>
+              </div>
+            """)
+            continue
+        entries = db.query(ChangelogEntry).filter(ChangelogEntry.project_id==project.id, ChangelogEntry.branch_id==b.id).order_by(ChangelogEntry.created_at.desc()).limit(200).all()
+        unique = []
+        for ce in entries:
+            key = (ce.action, _hash_payload(ce.input_json))
+            if key not in seen:
+                unique.append(ce)
+        # Render card with unique entries and a merge button
+        ul_items = []
+        for ce in unique[:20]:
+            summ = escape((ce.summary_text or ce.action or '').strip() or '(no summary)')
+            ul_items.append(f"<li class='small'>{summ}</li>")
+        unique_html = "<ul class='small'>" + ("".join(ul_items) or "<li class='muted small'>(no unique items found)</li>") + "</ul>"
+        merge_form = f"""
+          <form method='post' action='/project/{project.id}/merge_to_main?branch_id={b.id}' class='inline'>
+            <button type='submit' data-testid='merge-branch-{b.id}'>Merge {escape(b.name)} → Main</button>
+          </form>
+        """
+        cards.append(f"""
+          <div class='card'>
+            <h3>Branch: {escape(b.name)}</h3>
+            <div class='small muted'>Branch ID: {b.id}</div>
+            <div>{merge_form}</div>
+            <div style='height:8px'></div>
+            <div><strong>Unique vs Main</strong></div>
+            {unique_html}
+          </div>
+        """)
+
+    body = f"""
+      <h1>Merge: {escape(project.title)}</h1>
+      <div class='row'>
+        {''.join(cards)}
+      </div>
+    """
+    return layout(f"Merge • {project.title}", body)
 
 
 @app.post("/projects/create")
@@ -2079,7 +3334,7 @@ def create_project(title: str = Form(...), db: Session = Depends(get_registry_db
 
 
 @app.get("/project/{project_id}", response_class=HTMLResponse)
-def view_project(project_id: int, branch_id: Optional[int] = None, msg: Optional[str] = None, db: Session = Depends(get_project_db)):
+def view_project(project_id: int, branch_id: Optional[int] = None, msg: Optional[str] = None, file_id: Optional[int] = None, thread_id: Optional[int] = None, db: Session = Depends(get_project_db)):
     ensure_project_initialized(project_id)
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
@@ -2110,7 +3365,30 @@ def view_project(project_id: int, branch_id: Optional[int] = None, msg: Optional
         .order_by(Dataset.created_at.desc())\
         .all()
 
-    return layout(project.title, project_page_html(project, branches, current, files, threads, datasets, msg=msg))
+    # resolve selected file if provided
+    selected_file = None
+    try:
+        if file_id is not None:
+            selected_file = db.query(FileEntry).filter(
+                FileEntry.id == int(file_id),
+                FileEntry.project_id == project.id,
+                FileEntry.branch_id.in_(show_branch_ids)
+            ).first()
+    except Exception:
+        selected_file = None
+
+    # resolve selected thread and messages
+    selected_thread = None
+    thread_messages: List[ThreadMessage] = []
+    try:
+        if thread_id is not None:
+            selected_thread = db.query(Thread).filter(Thread.id == int(thread_id), Thread.project_id == project.id, Thread.branch_id.in_(show_branch_ids)).first()
+            if selected_thread:
+                thread_messages = db.query(ThreadMessage).filter(ThreadMessage.project_id==project.id, ThreadMessage.thread_id==selected_thread.id).order_by(ThreadMessage.created_at.asc()).all()
+    except Exception:
+        selected_thread = None
+
+    return layout(project.title, project_page_html(project, branches, current, files, threads, datasets, selected_file=selected_file, selected_thread=selected_thread, thread_messages=thread_messages, msg=msg))
 
 
 @app.post("/project/{project_id}/branches/create")
@@ -2139,7 +3417,10 @@ def create_branch(project_id: int, name: str = Form(...), db: Session = Depends(
 
 
 @app.post("/project/{project_id}/threads/create")
-def create_thread(project_id: int, request: Request, title: str = Form(...), db: Session = Depends(get_project_db)):
+@app.get("/project/{project_id}/threads/new")
+# LLM chat uses threads. If using the GET '/threads/new', a default title 'New Thread' is created
+# and the user is redirected to the project page focusing the new tab. See README for LLM setup.
+def create_thread(project_id: int, request: Request, title: Optional[str] = Form(None), db: Session = Depends(get_project_db)):
     ensure_project_initialized(project_id)
     # branch selected via query parameter
     branch_id = request.query_params.get("branch_id")
@@ -2153,16 +3434,143 @@ def create_thread(project_id: int, request: Request, title: str = Form(...), db:
         return RedirectResponse("/", status_code=303)
 
     branch = current_branch(db, project.id, branch_id)
-    t = Thread(project_id=project.id, branch_id=branch.id, title=title.strip())
+    # Title handling: for GET /threads/new, title may be None -> default
+    if request.method.upper() == 'GET' and (title is None or not str(title).strip()):
+        title = "New Thread"
+    title = (title or "New Thread").strip()
+    t = Thread(project_id=project.id, branch_id=branch.id, title=title)
     db.add(t)
     db.commit()
     db.refresh(t)
     add_version(db, "thread", t.id, {"project_id": project.id, "branch_id": branch.id, "title": t.title})
-    return RedirectResponse(f"/project/{project.id}?branch_id={branch.id}&msg=Thread+created", status_code=303)
+    # Redirect to focus the newly created thread
+    return RedirectResponse(f"/project/{project.id}?branch_id={branch.id}&thread_id={t.id}&msg=Thread+created", status_code=303)
+
+
+@app.post("/project/{project_id}/threads/chat")
+# Submit a chat message in the selected thread; includes file metadata context to LLM.
+# Requires OpenAI API key; see README for setup. Verbose errors are surfaced to the UI/log.
+def thread_chat(project_id: int, request: Request, content: str = Form(...), thread_id: Optional[int] = Form(None), file_id: Optional[int] = Form(None), db: Session = Depends(get_project_db)):
+    ensure_project_initialized(project_id)
+    # derive branch context
+    branch_q = request.query_params.get("branch_id")
+    try:
+        branch_q = int(branch_q) if branch_q is not None else None
+    except Exception:
+        branch_q = None
+
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        return RedirectResponse("/", status_code=303)
+
+    branch = current_branch(db, project.id, branch_q)
+
+    # Resolve thread; if missing, auto-create a default one
+    thr = None
+    if thread_id:
+        try:
+            thr = db.query(Thread).filter(Thread.id == int(thread_id), Thread.project_id == project.id).first()
+        except Exception:
+            thr = None
+    if not thr:
+        thr = Thread(project_id=project.id, branch_id=branch.id, title="New Thread")
+        db.add(thr)
+        db.commit(); db.refresh(thr)
+
+    # Persist user message
+    um = ThreadMessage(project_id=project.id, branch_id=branch.id, thread_id=thr.id, role="user", content=content)
+    db.add(um); db.commit()
+
+    # Build file metadata context if provided
+    fctx = None
+    if file_id:
+        try:
+            fctx = db.query(FileEntry).filter(FileEntry.id == int(file_id), FileEntry.project_id == project.id).first()
+        except Exception:
+            fctx = None
+
+    # LLM call (OpenAI). See README for keys setup. No fallbacks; verbose errors.
+    reply_text = None
+    reply_title = None
+    reply_payload = None
+    client, model = _llm_client_config()
+    if not client:
+        reply_text = "[llm-missing-key] Set CEDARPY_OPENAI_API_KEY or OPENAI_API_KEY."
+    else:
+        try:
+            sys_prompt = (
+                "You are Cedar's assistant. Always respond with strict JSON containing keys: title (string) and data (object).\n"
+                "title should be a short human-friendly heading summarizing the result.\n"
+                "data should be structured and parsable. Do not include anything outside JSON."
+            )
+            # Provide an example to enforce structure
+            example = {
+                "title": "Extracted insights for Project Risks",
+                "data": {
+                    "summary": "Three key risks identified",
+                    "items": [
+                        {"risk": "Budget overrun", "severity": "high"},
+                        {"risk": "Scope creep", "severity": "medium"}
+                    ]
+                }
+            }
+            ctx = {}
+            if fctx:
+                ctx = {
+                    "file": {
+                        "display_name": fctx.display_name,
+                        "file_type": fctx.file_type,
+                        "structure": fctx.structure,
+                        "ai_title": fctx.ai_title,
+                        "ai_category": fctx.ai_category,
+                        "ai_description": (fctx.ai_description or "")[:350],
+                    }
+                }
+            import json as _json
+            messages = [
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": "Context:"},
+                {"role": "user", "content": _json.dumps(ctx, ensure_ascii=False)},
+                {"role": "user", "content": "Follow this response schema strictly (example):"},
+                {"role": "user", "content": _json.dumps(example, ensure_ascii=False)},
+                {"role": "user", "content": content},
+            ]
+            resp = client.chat.completions.create(model=model, messages=messages)
+            raw = (resp.choices[0].message.content or "").strip()
+            try:
+                parsed = _json.loads(raw)
+                reply_title = str(parsed.get("title") or "Assistant")
+                reply_payload = parsed.get("data")
+                reply_text = raw
+            except Exception:
+                reply_title = "Assistant"
+                reply_text = raw
+        except Exception as e:
+            reply_text = f"[llm-error] {type(e).__name__}: {e}"
+            reply_title = "LLM Error"
+    # Persist assistant message (with title/payload if available)
+    am = ThreadMessage(project_id=project.id, branch_id=branch.id, thread_id=thr.id, role="assistant", content=reply_text or "", display_title=reply_title, payload_json=reply_payload)
+    try:
+        db.add(am); db.commit()
+    except Exception:
+        db.rollback()
+
+    # Changelog for chat with full prompts and raw result
+    try:
+        input_payload = {"messages": messages, "file_context_id": (fctx.id if fctx else None)}
+        output_payload = {"assistant_title": reply_title, "assistant_raw": reply_text, "assistant_payload": reply_payload}
+        record_changelog(db, project.id, branch.id, "thread.chat", input_payload, output_payload)
+    except Exception:
+        pass
+
+    # Redirect back focusing this thread
+    return RedirectResponse(f"/project/{project.id}?branch_id={branch.id}&thread_id={thr.id}" + (f"&file_id={file_id}" if file_id else ""), status_code=303)
 
 
 @app.post("/project/{project_id}/files/upload")
-def upload_file(project_id: int, request: Request, file: UploadFile = File(...), structure: str = Form(...), db: Session = Depends(get_project_db)):
+# LLM classification runs after file is saved. See README for API key setup.
+# If LLM fails or is disabled, the file is kept and structure fields remain unset.
+def upload_file(project_id: int, request: Request, file: UploadFile = File(...), db: Session = Depends(get_project_db)):
     ensure_project_initialized(project_id)
     branch_id = request.query_params.get("branch_id")
     try:
@@ -2183,7 +3591,7 @@ def upload_file(project_id: int, request: Request, file: UploadFile = File(...),
     os.makedirs(project_dir, exist_ok=True)
 
     original_name = file.filename or "upload.bin"
-    ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     safe_base = os.path.basename(original_name)
     storage_name = f"{ts}__{safe_base}"
     disk_path = os.path.join(project_dir, storage_name)
@@ -2203,15 +3611,69 @@ def upload_file(project_id: int, request: Request, file: UploadFile = File(...),
         filename=storage_name,
         display_name=original_name,
         file_type=ftype,
-        structure=structure.strip(),
+        structure=None,
         mime_type=mime or file.content_type or "",
         size_bytes=size,
         storage_path=os.path.abspath(disk_path),
         metadata_json=meta,
+        ai_processing=True,
     )
     db.add(record)
     db.commit()
     db.refresh(record)
+
+    # Create a processing thread entry so the user can see steps
+    thr_title = (f"File: {original_name}")[:100]
+    thr = Thread(project_id=project.id, branch_id=branch.id, title=thr_title)
+    db.add(thr); db.commit(); db.refresh(thr)
+    try:
+        import json as _json
+        # Add a 'system' message with the planned classification prompt payload
+        payload = {
+            "action": "classify_file",
+            "metadata_sample": {
+                k: meta.get(k) for k in [
+                    "extension","mime_guess","format","language","is_text","size_bytes","line_count","json_valid","json_top_level_keys","csv_dialect"] if k in meta
+            },
+            "display_name": original_name
+        }
+        tm = ThreadMessage(project_id=project.id, branch_id=branch.id, thread_id=thr.id, role="system", display_title="Submitting file to LLM to analyze...", content=_json.dumps(payload, ensure_ascii=False), payload_json=payload)
+        db.add(tm); db.commit()
+    except Exception:
+        db.rollback()
+
+    # LLM classification (best-effort, no fallbacks). See README for details.
+    try:
+        meta_for_llm = dict(meta)
+        meta_for_llm["display_name"] = original_name
+        ai = _llm_classify_file(meta_for_llm)
+        if ai:
+            struct = ai.get("structure") if isinstance(ai, dict) else None
+            record.structure = struct
+            record.ai_title = ai.get("ai_title")
+            record.ai_description = ai.get("ai_description")
+            record.ai_category = ai.get("ai_category")
+            record.ai_processing = False
+            db.commit(); db.refresh(record)
+            # Persist assistant message with result
+            tm2 = ThreadMessage(project_id=project.id, branch_id=branch.id, thread_id=thr.id, role="assistant", display_title="File analyzed", content=json.dumps(ai), payload_json=ai)
+            db.add(tm2); db.commit()
+        else:
+            record.ai_processing = False
+            db.commit()
+            tm2 = ThreadMessage(project_id=project.id, branch_id=branch.id, thread_id=thr.id, role="assistant", display_title="File analysis skipped", content="LLM classification disabled or missing key")
+            db.add(tm2); db.commit()
+    except Exception as e:
+        try:
+            print(f"[llm-exec-error] {type(e).__name__}: {e}")
+        except Exception:
+            pass
+        try:
+            record.ai_processing = False
+            db.commit()
+        except Exception:
+            db.rollback()
+
     add_version(db, "file", record.id, {
         "project_id": project.id, "branch_id": branch.id,
         "filename": record.filename, "display_name": record.display_name,
@@ -2220,4 +3682,13 @@ def upload_file(project_id: int, request: Request, file: UploadFile = File(...),
         "metadata": meta,
     })
 
-    return RedirectResponse(f"/project/{project.id}?branch_id={branch.id}&msg=File+uploaded", status_code=303)
+    # Changelog for file upload + classification
+    try:
+        input_payload = {"action": "classify_file", "metadata_for_llm": meta_for_llm}
+        output_payload = {"ai": ai, "thread_id": thr.id}
+        record_changelog(db, project.id, branch.id, "file.upload+classify", input_payload, output_payload)
+    except Exception:
+        pass
+
+    # Redirect focusing the uploaded file and processing thread, so the user sees the steps
+    return RedirectResponse(f"/project/{project.id}?branch_id={branch.id}&file_id={record.id}&thread_id={thr.id}&msg=File+uploaded", status_code=303)
