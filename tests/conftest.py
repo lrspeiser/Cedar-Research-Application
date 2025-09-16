@@ -64,3 +64,16 @@ def pytest_sessionstart(session):
     except Exception:
         ready = False
     os.environ["CEDARPY_TEST_LLM_READY"] = "1" if ready else "0"
+
+
+# Register custom marks (no-op) so @pytest.mark.e2e / @pytest.mark.timeout don't warn
+try:
+    import pytest  # type: ignore
+    def pytest_configure(config):  # type: ignore
+        try:
+            config.addinivalue_line("markers", "e2e: end-to-end tests against embedded UI")
+            config.addinivalue_line("markers", "timeout(x): per-test timeout")
+        except Exception:
+            pass
+except Exception:
+    pass

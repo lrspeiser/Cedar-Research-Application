@@ -186,6 +186,31 @@ Note on API keys: This feature uses environment variables for configuration. See
 
 ## Front-end choice for embedded browser (QtWebEngine)
 
+### Embedded UI testing via Playwright + CDP
+
+We embed a Chromium-based engine (QtWebEngine) for the desktop app. You can test the exact embedded browser end-to-end using Playwright by connecting over the Chrome DevTools Protocol (CDP):
+
+Environment variables (cedarqt.py reads these):
+- CEDARPY_QT_DEVTOOLS_PORT: DevTools port to expose (default 9222).
+- CEDARPY_QT_HEADLESS: Set to 1/true to run Qt in offscreen mode for CI.
+
+Example manual run:
+```bash
+# one terminal: run embedded shell exposing DevTools
+export CEDARPY_QT_DEVTOOLS_PORT=9222
+export CEDARPY_QT_HEADLESS=1
+export CEDARPY_OPEN_BROWSER=0
+python cedarqt.py
+
+# second terminal: run the embedded E2E test
+pytest -q tests/test_embedded_qt_ui.py
+```
+
+Notes
+- The test connects with playwright.chromium.connect_over_cdp("http://127.0.0.1:9222").
+- We also keep cross-browser tests (Chromium/WebKit) to catch Safari/WebKit differences.
+- Our upload tests assert the submit button is visible and enabled to prevent false passes where UI is not interactive.
+
 - We standardize on vanilla ES modules and minimal inline JS for the built-in browser (QtWebEngine, Chromium-based). No SSE is used; all live streams use WebSockets.
 - Rationale:
   - Keeps the bundle small and avoids additional frameworks.

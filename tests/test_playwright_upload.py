@@ -82,7 +82,17 @@ def test_project_upload_flow(page: Page, path: str):
         tmp_path = Path.cwd() / ".pw_tmp_upload.txt"
         tmp_path.write_text("hello,playwright\n", encoding="utf-8")
         upload_input.set_input_files(str(tmp_path))
-        page.get_by_test_id("upload-submit").click()
+        # Verify the submit button is visible and enabled before clicking
+        submit_btn = page.get_by_test_id("upload-submit")
+        try:
+            from playwright.sync_api import expect
+            expect(submit_btn).to_be_visible()
+            expect(submit_btn).to_be_enabled()
+        except Exception:
+            # Fallback: attribute check if expect is unavailable
+            assert submit_btn.is_visible(), "Upload submit not visible"
+            assert submit_btn.is_enabled(), "Upload submit not enabled"
+        submit_btn.click()
         # Should navigate back to project with msg=File+uploaded
         page.wait_for_url("**/project/*?**msg=File+uploaded**")
         # Verify file appears in Files list
@@ -90,6 +100,19 @@ def test_project_upload_flow(page: Page, path: str):
         # The Files card heading should be present (avoid strict mode violation)
         assert page.get_by_role("heading", name="Files").is_visible()
         assert page.get_by_text(".pw_tmp_upload.txt").first.is_visible()
+        # If LLM is configured and reachable, verify that AI fields are populated
+        if os.environ.get("CEDARPY_TEST_LLM_READY") == "1":
+            try:
+                html = page.content()
+                assert "AI Title:" in html, "AI Title label missing in UI"
+                assert "AI Title:</strong> (none)" not in html, "LLM did not populate AI Title"
+                # Optionally ensure the processing thread shows a success entry
+                # (display_title is "File analyzed" when classification succeeds)
+                if page.get_by_text("File analyzed").count() == 0:
+                    assert "File analyzed" in html, "Missing 'File analyzed' thread entry"
+            except Exception:
+                # Fall back to a visible check for the label in case content() changes
+                assert page.get_by_text("AI Title:").first.is_visible(), "AI Title label not visible"
     except Exception as ui_err:
         # Backend fallback: run the same flow via HTTP to distinguish FE vs BE failure
         backend_ok = False

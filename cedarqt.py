@@ -10,6 +10,15 @@ import errno
 from datetime import datetime, timezone
 from threading import Thread
 
+# Enable DevTools for QtWebEngine so tests can drive the embedded browser via CDP.
+# Use CEDARPY_QT_DEVTOOLS_PORT to choose the port (default 9222).
+# For CI, you can set CEDARPY_QT_HEADLESS=1 to run Qt offscreen.
+# See README ("Embedded UI testing via Playwright + CDP") for details.
+if os.getenv("QTWEBENGINE_REMOTE_DEBUGGING") is None:
+    os.environ["QTWEBENGINE_REMOTE_DEBUGGING"] = os.getenv("CEDARPY_QT_DEVTOOLS_PORT", "9222")
+if os.getenv("CEDARPY_QT_HEADLESS", "").strip().lower() in {"1", "true", "yes"}:
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
 # Initialize logging similar to run_cedarpy
 LOG_DIR_DEFAULT = os.path.join(os.path.expanduser("~"), "Library", "Logs", "CedarPy")
 # Lock path now respects CEDARPY_LOG_DIR for consistency with logs.
@@ -103,7 +112,12 @@ def _acquire_single_instance_lock(lock_path: str):
         return None
 
 
-_single_lock_fh = _acquire_single_instance_lock(LOCK_PATH)
+# Allow tests/CI to run multiple instances without fighting over a global lock
+if os.getenv("CEDARPY_ALLOW_MULTI", "").strip().lower() in {"1", "true", "yes"}:
+    _single_lock_fh = None
+    print("[cedarqt] single-instance lock disabled via CEDARPY_ALLOW_MULTI=1")
+else:
+    _single_lock_fh = _acquire_single_instance_lock(LOCK_PATH)
 
 # Qt imports (PySide6 + QtWebEngine)
 from PySide6.QtCore import Qt, QUrl, QObject
@@ -139,6 +153,21 @@ class LoggingWebPage(QWebEnginePage):
         except Exception:
             pass
         # Don't call super(); default implementation prints to stderr.
+
+    # Allow tests to provide a file selection path without a native dialog.
+    def chooseFiles(self, mode, oldFiles, acceptedMimeTypes):  # type: ignore[override]
+        try:
+            test_mode = os.getenv("CEDARPY_QT_HARNESS", "").strip().lower() in {"1", "true", "yes"}
+            test_file = os.getenv("CEDARPY_QT_TEST_FILE")
+            if test_mode and test_file and os.path.isfile(test_file):
+                print(f"[qt-page] chooseFiles intercepted, returning: {test_file}")
+                return [test_file]
+        except Exception as e:
+            try:
+                print(f"[qt-page] chooseFiles error: {e}")
+            except Exception:
+                pass
+        return super().chooseFiles(mode, oldFiles, acceptedMimeTypes)
 
 
 def _wait_for_server(url: str, timeout_sec: float = 20.0) -> bool:
@@ -270,12 +299,70 @@ def main():
         sys.exit(1)
 
     win.show()
-    try:
-        win.raise_()
-        win.activateWindow()
-        app.setActiveWindow(win)
-    except Exception:
-        pass
+    # Only attempt to raise/activate when not in headless/offscreen mode
+    if os.getenv("QT_QPA_PLATFORM", "") != "offscreen":
+        try:
+            win.raise_()
+            win.activateWindow()
+            app.setActiveWindow(win)
+        except Exception:
+            pass
+
+    # Optional in-process UI harness for end-to-end testing of the embedded browser.
+    # Set CEDARPY_QT_HARNESS=1 to enable. Provide CEDARPY_QT_TEST_FILE for the file to upload.
+    if os.getenv("CEDARPY_QT_HARNESS", "").strip().lower() in {"1", "true", "yes"}:
+        try:
+            from PySide6.QtCore import QTimer
+            def run_harness():
+                print("[qt-harness] starting")
+                def js(script):
+                    try:
+                        page.runJavaScript(script)
+                    except Exception as e:
+                        print(f"[qt-harness] js error: {e}")
+                # Step 1: create a project
+                title = f"Harness {int(time.time()*1000)}"
+                js(
+                    "(function(){\n"
+                    "var el=document.querySelector(\"input[name=title]\"); if(el){ el.value=%s; el.dispatchEvent(new Event('input',{bubbles:true})); }\n"
+                    "var btn=document.querySelector(\"form[action='/projects/create'] button[type=submit]\");\n"
+                    "if(!btn){ var all=[].slice.call(document.querySelectorAll('button,a')); btn=all.find(e=>e.textContent.trim()==='Create Project'); }\n"
+                    "if(btn){ btn.click(); }\n"
+                    "})();" % (repr(title))
+                )
+                # Poll for project page then upload
+                def wait_project_and_upload():
+                    try:
+                        cur = page.url().toString()
+                        if "/project/" in cur:
+                            print(f"[qt-harness] on project page: {cur}")
+                            # Click the file input to trigger chooseFiles (avoid nested quotes in selector)
+                            js("(function(){ var i=document.querySelector('[data-testid=upload-input]'); if(i){ i.click(); } })();")
+                            # Small delay then click submit
+                            def click_submit():
+                                js("(function(){ var b=document.querySelector('[data-testid=upload-submit]'); if(b){ b.click(); } })();")
+                                # Wait for msg=File+uploaded in URL
+                                def wait_uploaded():
+                                    try:
+                                        here = page.url().toString()
+                                        if 'msg=File+uploaded' in here:
+                                            print(f"[qt-harness] success url={here}")
+                                            return
+                                    except Exception:
+                                        pass
+                                    QTimer.singleShot(300, wait_uploaded)
+                                QTimer.singleShot(500, wait_uploaded)
+                            QTimer.singleShot(500, click_submit)
+                            return
+                    except Exception:
+                        pass
+                    QTimer.singleShot(300, wait_project_and_upload)
+                QTimer.singleShot(500, wait_project_and_upload)
+            # Grab page from view
+            page = view.page()
+            QTimer.singleShot(800, run_harness)
+        except Exception as e:
+            print(f"[qt-harness] init error: {e}")
 
     # Prompt for Full Disk Access on first launch to reduce later interruptions
     try:
