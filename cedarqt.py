@@ -398,55 +398,22 @@ def main():
                     try:
                         import urllib.request as _ur
                         from urllib.parse import urlparse as _urlparse, parse_qs as _parse_qs
-                        import re as _re, time as _time, uuid as _uuid
+                        import uuid as _uuid
                         test_file = os.getenv("CEDARPY_QT_TEST_FILE")
                         if not test_file or not os.path.isfile(test_file):
                             print("[qt-harness] fallback skipped: no test file")
                             return
-                        # Resolve or create a project id
-                        proj_id = None
-                        branch_id = 1
+                        here = page.url().toString()
+                        u = _urlparse(here)
+                        if not u.path.startswith('/project/'):
+                            print(f"[qt-harness] fallback cannot parse project from {here}")
+                            return
+                        proj_id = int(u.path.split('/')[-1] or '0')
+                        qs = _parse_qs(u.query)
                         try:
-                            # Try current page first
-                            here = page.url().toString()
-                            u = _urlparse(here)
-                            if u.path.startswith('/project/'):
-                                proj_id = int(u.path.split('/')[-1] or '0')
-                                qs = _parse_qs(u.query)
-                                try:
-                                    branch_id = int((qs.get('branch_id') or ['1'])[0])
-                                except Exception:
-                                    branch_id = 1
+                            branch_id = int((qs.get('branch_id') or ['1'])[0])
                         except Exception:
-                            proj_id = None
-                        # If we still don't have a project, create one programmatically
-                        if not proj_id:
-                            try:
-                                home_url = f"http://{host}:{port}/"
-                                home_html = _ur.urlopen(home_url, timeout=5).read().decode('utf-8', 'ignore')
-                                m = _re.search(r"/project/(\\d+)", home_html)
-                                if m:
-                                    proj_id = int(m.group(1))
-                                else:
-                                    title = f"Harness Programmatic {_int(_time.time()*1000) if ' _int' in dir() else str(int(_time.time()*1000))}"
-                                    data = f"title={_ur.quote(title)}".encode('utf-8')
-                                    req = _ur.Request(f"http://{host}:{port}/projects/create", data=data, method='POST')
-                                    req.add_header('Content-Type', 'application/x-www-form-urlencoded')
-                                    try:
-                                        _ur.urlopen(req, timeout=5)
-                                    except Exception:
-                                        pass
-                                    home_html = _ur.urlopen(home_url, timeout=5).read().decode('utf-8', 'ignore')
-                                    m = _re.search(r"/project/(\\d+)", home_html)
-                                    if m:
-                                        proj_id = int(m.group(1))
-                                    else:
-                                        print("[qt-harness] fallback could not find project after create")
-                                        return
-                            except Exception as e:
-                                print(f"[qt-harness] fallback project resolution error: {e}")
-                                return
-                        # Build multipart and upload
+                            branch_id = 1
                         boundary = '----CedarHarness' + _uuid.uuid4().hex
                         with open(test_file, 'rb') as f:
                             data = f.read()
