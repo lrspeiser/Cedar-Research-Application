@@ -255,6 +255,9 @@ def ensure_project_initialized(project_id: int) -> None:
         eng = _get_project_engine(project_id)
         # Create all tables for this project DB
         Base.metadata.create_all(eng)
+        # Lightweight migrations for this project DB
+        _migrate_project_files_ai_columns(eng)
+        _migrate_thread_messages_columns(eng)
         # Seed project row and Main branch if missing
         SessionLocal = sessionmaker(bind=eng, autoflush=False, autocommit=False, future=True)
         pdb = SessionLocal()
@@ -401,6 +404,22 @@ class Version(Base):
     __table_args__ = (
         UniqueConstraint("entity_type", "entity_id", "version_num", name="uq_version_key"),
         Index("ix_versions_entity", "entity_type", "entity_id"),
+    )
+
+
+class ChangelogEntry(Base):
+    __tablename__ = "changelog_entries"
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, nullable=False, index=True)
+    branch_id = Column(Integer, nullable=False, index=True)
+    action = Column(String(255), nullable=False)
+    input_json = Column(JSON)    # what we submitted (prompts, commands, SQL, etc.)
+    output_json = Column(JSON)   # results (success payloads or errors)
+    summary_text = Column(Text)  # LLM-produced human summary (gpt-5-nano)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        Index("ix_changelog_project_branch", "project_id", "branch_id", "created_at"),
     )
 
 
@@ -578,6 +597,46 @@ def _llm_classify_file(meta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             pass
         return None
 
+
+def _llm_summarize_action(action: str, input_payload: Dict[str, Any], output_payload: Dict[str, Any]) -> Optional[str]:
+    """Summarize an action for the changelog using a small, fast model.
+    Default model: gpt-5-nano (override via CEDARPY_SUMMARY_MODEL).
+    Returns summary text or None on error/missing key.
+    """
+    try:
+        from openai import OpenAI  # type: ignore
+    except Exception:
+        return None
+    api_key = os.getenv("CEDARPY_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return None
+    model = os.getenv("CEDARPY_SUMMARY_MODEL", "gpt-5-nano")
+    try:
+        client = OpenAI(api_key=api_key)
+        import json as _json
+        sys_prompt = (
+            "You are Cedar's changelog assistant. Summarize the action in 1-3 concise sentences. "
+            "Focus on what changed, why, and outcomes (including errors). Avoid secrets and long dumps."
+        )
+        messages = [
+            {"role": "system", "content": sys_prompt},
+            {"role": "user", "content": f"Action: {action}"},
+            {"role": "user", "content": "Input payload:"},
+            {"role": "user", "content": _json.dumps(input_payload, ensure_ascii=False)},
+            {"role": "user", "content": "Output payload:"},
+            {"role": "user", "content": _json.dumps(output_payload, ensure_ascii=False)},
+        ]
+        resp = client.chat.completions.create(model=model, messages=messages)
+        text = (resp.choices[0].message.content or "").strip()
+        return text
+    except Exception as e:
+        try:
+            print(f"[llm-summary-error] {type(e).__name__}: {e}")
+        except Exception:
+            pass
+        return None
+
+
 def _is_probably_text(path: str, sample_bytes: int = 4096) -> bool:
     try:
         with open(path, "rb") as f:
@@ -717,6 +776,29 @@ def add_version(db: Session, entity_type: str, entity_id: int, data: dict):
     v = Version(entity_type=entity_type, entity_id=entity_id, version_num=next_ver, data=data)
     db.add(v)
     db.commit()
+
+
+def record_changelog(db: Session, project_id: int, branch_id: int, action: str, input_payload: Dict[str, Any], output_payload: Dict[str, Any]):
+    """Persist a changelog entry and try to LLM-summarize it. Best-effort; stores even if summary fails.
+    """
+    summary = _llm_summarize_action(action, input_payload, output_payload)
+    try:
+        entry = ChangelogEntry(
+            project_id=project_id,
+            branch_id=branch_id,
+            action=action,
+            input_json=input_payload,
+            output_json=output_payload,
+            summary_text=summary,
+        )
+        db.add(entry)
+        db.commit()
+    except Exception as e:
+        try:
+            print(f"[changelog-error] {type(e).__name__}: {e}")
+        except Exception:
+            pass
+        db.rollback()
 
 
 def escape(s: str) -> str:
@@ -2405,6 +2487,10 @@ def merge_to_main(project_id: int, request: Request, db: Session = Depends(get_p
         pass
 
     msg = f"Merged files={merged_counts['files']}, threads={merged_counts['threads']}, datasets={merged_counts['datasets']}, tables={merged_counts['tables']}"
+    try:
+        record_changelog(db, project.id, main_b.id, "branch.merge_to_main", {"from_branch": current_b.name}, {"merged_counts": merged_counts})
+    except Exception:
+        pass
     return RedirectResponse(f"/project/{project.id}?branch_id={main_b.id}&msg=" + html.escape(msg), status_code=303)
 
 # -------------------- Delete all files in branch --------------------
@@ -2431,6 +2517,10 @@ def delete_all_files(project_id: int, request: Request, db: Session = Depends(ge
             pass
         db.delete(f)
     db.commit()
+    try:
+        record_changelog(db, project.id, current_b.id, "files.delete_all", {}, {"deleted_count": len(files)})
+    except Exception:
+        pass
     return RedirectResponse(f"/project/{project.id}?branch_id={current_b.id}&msg=Files+deleted", status_code=303)
 
 # -------------------- Make existing table branch-aware (SQLite) --------------------
@@ -2494,8 +2584,16 @@ def make_table_branch_aware(project_id: int, request: Request, table: str = Form
             # Drop old
             conn.exec_driver_sql(f"DROP TABLE {tmp}")
     except Exception as e:
+        try:
+            record_changelog(db, project.id, current_b.id, "sql.make_branch_aware", {"table": tbl}, {"error": str(e)})
+        except Exception:
+            pass
         return RedirectResponse(f"/project/{project.id}?branch_id={current_b.id}&msg=Error:+{html.escape(str(e))}", status_code=303)
 
+    try:
+        record_changelog(db, project.id, current_b.id, "sql.make_branch_aware", {"table": tbl}, {"ok": True})
+    except Exception:
+        pass
     return RedirectResponse(f"/project/{project.id}?branch_id={current_b.id}&msg=Converted+{tbl}+to+branch-aware", status_code=303)
 
 BRANCH_AWARE_SQL_DEFAULT = os.getenv("CEDARPY_SQL_BRANCH_MODE", "1") == "1"
@@ -2550,6 +2648,10 @@ def undo_last_sql(project_id: int, request: Request, db: Session = Depends(get_p
                     if sets and conds:
                         conn.exec_driver_sql(f"UPDATE {table} SET " + ", ".join(sets) + " WHERE " + " AND ".join(conds))
     except Exception as e:
+        try:
+            record_changelog(db, project.id, current_b.id, "sql.undo_last", {"undo_log_id": getattr(log, 'id', None)}, {"error": str(e)})
+        except Exception:
+            pass
         return RedirectResponse(f"/project/{project.id}?branch_id={current_b.id}&msg=Undo+failed:+{html.escape(str(e))}", status_code=303)
 
     # Remove the log entry we just undid
@@ -2558,6 +2660,11 @@ def undo_last_sql(project_id: int, request: Request, db: Session = Depends(get_p
         db.commit()
     except Exception:
         db.rollback()
+
+    try:
+        record_changelog(db, project.id, current_b.id, "sql.undo_last", {"undo_log_id": getattr(log, 'id', None)}, {"ok": True})
+    except Exception:
+        pass
 
     return RedirectResponse(f"/project/{project.id}?branch_id={current_b.id}&msg=Undone", status_code=303)
 
@@ -2665,6 +2772,14 @@ def execute_sql(project_id: int, request: Request, sql: str = Form(...), db: Ses
         transformed_sql, transformed = _preprocess_sql_branch_aware(conn, sql, project.id, current.id, main.id)
     result = _execute_sql_with_undo(db, transformed_sql, project.id, current.id, max_rows=max_rows)
     sql_block = _render_sql_result_html(result)
+
+    # Changelog entry for this SQL action
+    try:
+        input_payload = {"sql": sql, "transformed_sql": transformed_sql}
+        output_payload = {k: v for k, v in result.items() if k not in ("rows",)}
+        record_changelog(db, project.id, current.id, "sql.execute", input_payload, output_payload)
+    except Exception:
+        pass
 
     return layout(project.title, project_page_html(project, branches, current, files, threads, datasets, selected_file=None, msg="Per-project database is active", sql_result_block=sql_block))
 
@@ -3222,6 +3337,14 @@ def thread_chat(project_id: int, request: Request, content: str = Form(...), thr
     except Exception:
         db.rollback()
 
+    # Changelog for chat with full prompts and raw result
+    try:
+        input_payload = {"messages": messages, "file_context_id": (fctx.id if fctx else None)}
+        output_payload = {"assistant_title": reply_title, "assistant_raw": reply_text, "assistant_payload": reply_payload}
+        record_changelog(db, project.id, branch.id, "thread.chat", input_payload, output_payload)
+    except Exception:
+        pass
+
     # Redirect back focusing this thread
     return RedirectResponse(f"/project/{project.id}?branch_id={branch.id}&thread_id={thr.id}" + (f"&file_id={file_id}" if file_id else ""), status_code=303)
 
@@ -3339,6 +3462,14 @@ def upload_file(project_id: int, request: Request, file: UploadFile = File(...),
         "mime_type": record.mime_type, "size_bytes": record.size_bytes,
         "metadata": meta,
     })
+
+    # Changelog for file upload + classification
+    try:
+        input_payload = {"action": "classify_file", "metadata_for_llm": meta_for_llm}
+        output_payload = {"ai": ai, "thread_id": thr.id}
+        record_changelog(db, project.id, branch.id, "file.upload+classify", input_payload, output_payload)
+    except Exception:
+        pass
 
     # Redirect focusing the uploaded file and processing thread, so the user sees the steps
     return RedirectResponse(f"/project/{project.id}?branch_id={branch.id}&file_id={record.id}&thread_id={thr.id}&msg=File+uploaded", status_code=303)
