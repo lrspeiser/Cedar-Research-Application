@@ -14,7 +14,7 @@ import signal
 import time
 import platform
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any, Tuple
 
 from fastapi import FastAPI, Request, UploadFile, File, Form, Depends, Header, HTTPException, Body, WebSocket, WebSocketDisconnect
@@ -281,7 +281,7 @@ class Project(Base):
     __tablename__ = "projects"  # Central registry only
     id = Column(Integer, primary_key=True)
     title = Column(String(255), nullable=False, unique=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     branches = relationship("Branch", back_populates="project", cascade="all, delete-orphan")
 
@@ -292,7 +292,7 @@ class Branch(Base):
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
     name = Column(String(100), nullable=False)
     is_default = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     project = relationship("Project", back_populates="branches")
 
@@ -307,7 +307,7 @@ class Thread(Base):
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
     branch_id = Column(Integer, ForeignKey("branches.id"), nullable=False, index=True)
     title = Column(String(255), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     project = relationship("Project")
     branch = relationship("Branch")
@@ -323,7 +323,7 @@ class ThreadMessage(Base):
     content = Column(Text, nullable=False)
     display_title = Column(String(255))  # short title for the bubble
     payload_json = Column(JSON)          # structured prompt/result payload
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     thread = relationship("Thread")
 
@@ -344,7 +344,7 @@ class FileEntry(Base):
     mime_type = Column(String(100))
     size_bytes = Column(Integer)
     storage_path = Column(String(1024))  # absolute/relative path on disk
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     metadata_json = Column(JSON)  # extracted metadata from interpreter
     # AI classification outputs
     ai_title = Column(String(255))
@@ -366,7 +366,7 @@ class Dataset(Base):
     branch_id = Column(Integer, ForeignKey("branches.id"), nullable=False, index=True)
     name = Column(String(255), nullable=False)
     description = Column(Text)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     project = relationship("Project")
     branch = relationship("Branch")
@@ -376,7 +376,7 @@ class Setting(Base):
     __tablename__ = "settings"
     key = Column(String(255), primary_key=True)
     value = Column(Text, nullable=True)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class Version(Base):
@@ -386,7 +386,7 @@ class Version(Base):
     entity_id = Column(Integer, nullable=False)
     version_num = Column(Integer, nullable=False)
     data = Column(JSON)  # snapshot of entity data (lightweight for now)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (
         UniqueConstraint("entity_type", "entity_id", "version_num", name="uq_version_key"),
@@ -405,7 +405,7 @@ class SQLUndoLog(Base):
     pk_columns = Column(JSON)  # list of PK column names
     rows_before = Column(JSON)  # list of row dicts
     rows_after = Column(JSON)   # list of row dicts
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (
         Index("ix_undo_project_branch", "project_id", "branch_id", "created_at"),
@@ -584,8 +584,8 @@ def interpret_file(path: str, original_name: str) -> Dict[str, Any]:
     try:
         stat = os.stat(path)
         meta["size_bytes"] = stat.st_size
-        meta["mtime"] = datetime.utcfromtimestamp(stat.st_mtime).isoformat() + "Z"
-        meta["ctime"] = datetime.utcfromtimestamp(stat.st_ctime).isoformat() + "Z"
+        meta["mtime"] = datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat()
+        meta["ctime"] = datetime.fromtimestamp(stat.st_ctime, timezone.utc).isoformat()
     except Exception:
         pass
 
@@ -807,7 +807,45 @@ def serve_project_upload(project_id: int, path: str):
 # HTML helpers (all inline; no external templates)
 # ----------------------------------------------------------------------------------
 
+# Cached LLM reachability indicator for UI (TTL seconds)
+_LLM_READY_CACHE = {"ts": 0.0, "ready": False, "reason": "init", "model": None}
+
+
+def _llm_reachability(ttl_seconds: int = 300) -> tuple[bool, str, str]:
+    """Best-effort reachability check for UI. Returns (ready, reason, model).
+    Cached to avoid per-request network calls.
+    """
+    now = time.time()
+    try:
+        if (now - float(_LLM_READY_CACHE.get("ts") or 0)) <= max(5, ttl_seconds):
+            return bool(_LLM_READY_CACHE.get("ready")), str(_LLM_READY_CACHE.get("reason") or ""), str(_LLM_READY_CACHE.get("model") or "")
+    except Exception:
+        pass
+    client, model = _llm_client_config()
+    if not client:
+        _LLM_READY_CACHE.update({"ts": now, "ready": False, "reason": "missing key", "model": model or ""})
+        return False, "missing key", model or ""
+    try:
+        # Cheap probe: retrieve the model
+        client.models.retrieve(model)
+        _LLM_READY_CACHE.update({"ts": now, "ready": True, "reason": "ok", "model": model})
+        return True, "ok", model
+    except Exception as e:
+        _LLM_READY_CACHE.update({"ts": now, "ready": False, "reason": f"{type(e).__name__}", "model": model or ""})
+        return False, f"{type(e).__name__}", model or ""
+
+
 def layout(title: str, body: str) -> HTMLResponse:
+    # LLM status for header (best-effort; cached)
+    try:
+        ready, reason, model = _llm_reachability()
+        if ready:
+            llm_status = f" <span class='pill' title='LLM connected'>LLM: {escape(model)}</span>"
+        else:
+            llm_status = f" <span class='pill' style='background:#fef2f2; color:#991b1b' title='LLM unavailable'>LLM unavailable ({escape(reason)})</span>"
+    except Exception:
+        llm_status = ""
+
     # Inject a lightweight client logging hook so console messages and JS errors are POSTed to the server.
     # See README.md (section "Client-side logging") for details and troubleshooting.
     client_log_js = """
@@ -887,7 +925,7 @@ def layout(title: str, body: str) -> HTMLResponse:
   <header>
     <div class="topbar">
       <div><strong>Cedar</strong></div>
-      <div style=\"margin-left:auto\"><a href=\"/\">Projects</a> | <a href=\"/shell\">Shell</a></div>
+      <div style=\"margin-left:auto\"><a href=\"/\">Projects</a> | <a href=\"/shell\">Shell</a>{llm_status}</div>
     </div>
   </header>
   <main>
@@ -1263,7 +1301,7 @@ class ShellJob:
         self.shell_path = shell_path or os.environ.get("SHELL")
         self.trace_x = bool(trace_x)
         self.workdir = workdir or SHELL_DEFAULT_WORKDIR
-        self.start_time = datetime.utcnow()
+        self.start_time = datetime.now(timezone.utc)
         self.end_time: Optional[datetime] = None
         self.status = "starting"  # starting|running|finished|error|killed
         self.return_code: Optional[int] = None
@@ -3185,7 +3223,7 @@ def upload_file(project_id: int, request: Request, file: UploadFile = File(...),
     os.makedirs(project_dir, exist_ok=True)
 
     original_name = file.filename or "upload.bin"
-    ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     safe_base = os.path.basename(original_name)
     storage_name = f"{ts}__{safe_base}"
     disk_path = os.path.join(project_dir, storage_name)

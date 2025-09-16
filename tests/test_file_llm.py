@@ -7,6 +7,7 @@ import importlib
 import pytest
 
 from starlette.testclient import TestClient
+from urllib.parse import urlparse, parse_qs
 
 
 def _reload_app_with_temp_env_llm():
@@ -126,6 +127,51 @@ def test_upload_sets_ai_fields_via_llm():
                 assert any((m[0] == "assistant" and (m[1] or "").lower().startswith("file analyzed")) for m in msgs)
     finally:
         # Best-effort cleanup
+        try:
+            import shutil
+            shutil.rmtree(tmp, ignore_errors=True)
+        except Exception:
+            pass
+
+
+def test_thread_chat_llm_generates_assistant_message():
+    if os.getenv("CEDARPY_TEST_LLM_READY") != "1":
+        pytest.skip("OpenAI key not working or missing; LLM tests were not run.")
+
+    main, tmp = _reload_app_with_temp_env_llm()
+    try:
+        with TestClient(main.app) as client:
+            pid = _create_project(client)
+            main_id = _resolve_branch_ids(client, pid)
+
+            # Post a chat message; allow thread auto-creation
+            r = client.post(f"/project/{pid}/threads/chat?branch_id={main_id}", data={"content": "Say hello in one sentence."})
+            assert r.status_code in (200, 303)
+
+            # Extract thread_id from redirect Location, or fallback to latest thread if redirects were followed
+            thr_id = 0
+            loc = r.headers.get("location") or ""
+            if loc:
+                q = parse_qs(urlparse(loc).query)
+                thr_id = int((q.get("thread_id") or ["0"])[0])
+            token_q = "?token=testtoken"
+            with client.websocket_connect(f"/ws/sql/{pid}{token_q}") as ws:
+                if thr_id <= 0:
+                    ws.send_text(json.dumps({"sql": "SELECT id FROM threads ORDER BY id DESC LIMIT 1"}))
+                    out_thr = json.loads(ws.receive_text()); assert out_thr.get("ok") is True
+                    thr_id = int(out_thr.get("rows")[0][0])
+                assert thr_id > 0
+
+                # Verify we have a user and an assistant message persisted
+                ws.send_text(json.dumps({"sql": f"SELECT role, display_title, content FROM thread_messages WHERE thread_id = {thr_id} ORDER BY id"}))
+                out = json.loads(ws.receive_text()); assert out.get("ok") is True
+                rows = out.get("rows") or []
+                roles = [r[0] for r in rows]
+                assert "user" in roles and "assistant" in roles
+                # Ensure assistant has a title (either parsed or default)
+                asst = [r for r in rows if r[0] == "assistant"][-1]
+                assert (asst[1] or "").strip() != ""
+    finally:
         try:
             import shutil
             shutil.rmtree(tmp, ignore_errors=True)
