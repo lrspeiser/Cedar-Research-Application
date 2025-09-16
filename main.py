@@ -1024,7 +1024,7 @@ def layout(title: str, body: str) -> HTMLResponse:
   <header>
     <div class="topbar">
       <div><strong>Cedar</strong></div>
-      <div style=\"margin-left:auto\"><a href=\"/\">Projects</a> | <a href=\"/shell\">Shell</a>{llm_status}</div>
+      <div style=\"margin-left:auto\"><a href=\"/\">Projects</a> | <a href=\"/shell\">Shell</a> | <a href=\"/merge\">Merge</a>{llm_status}</div>
     </div>
   </header>
   <main>
@@ -2486,6 +2486,31 @@ def merge_to_main(project_id: int, request: Request, db: Session = Depends(get_p
     except Exception:
         pass
 
+    # After merging data rows, also adopt unique changelog entries from the branch into Main
+    try:
+        main_entries = db.query(ChangelogEntry).filter(ChangelogEntry.project_id==project.id, ChangelogEntry.branch_id==main_b.id).order_by(ChangelogEntry.created_at.desc()).limit(500).all()
+        seen = set((ce.action, _hash_payload(ce.input_json)) for ce in main_entries)
+        branch_entries = db.query(ChangelogEntry).filter(ChangelogEntry.project_id==project.id, ChangelogEntry.branch_id==current_b.id).order_by(ChangelogEntry.created_at.asc()).all()
+        adopted = 0
+        for ce in branch_entries:
+            key = (ce.action, _hash_payload(ce.input_json))
+            if key in seen:
+                continue
+            ne = ChangelogEntry(
+                project_id=project.id,
+                branch_id=main_b.id,
+                action=ce.action,
+                input_json=ce.input_json,
+                output_json={"merged_from_branch_id": current_b.id, "merged_from_branch": current_b.name, "original_output": ce.output_json},
+                summary_text=(ce.summary_text or f"Adopted from {current_b.name}: {ce.action}"),
+            )
+            db.add(ne)
+            adopted += 1
+        if adopted:
+            db.commit()
+    except Exception:
+        db.rollback()
+
     msg = f"Merged files={merged_counts['files']}, threads={merged_counts['threads']}, datasets={merged_counts['datasets']}, tables={merged_counts['tables']}"
     try:
         record_changelog(db, project.id, main_b.id, "branch.merge_to_main", {"from_branch": current_b.name}, {"merged_counts": merged_counts})
@@ -3070,6 +3095,110 @@ def home(request: Request, db: Session = Depends(get_registry_db)):
     # Central registry for list of projects
     projects = db.query(Project).order_by(Project.created_at.desc()).all()
     return layout("Cedar", projects_list_html(projects))
+
+
+# ----------------------------------------------------------------------------------
+# Merge dashboard pages
+# ----------------------------------------------------------------------------------
+
+def merge_index_html(projects: List[Project]) -> str:
+    rows = []
+    for p in projects:
+        rows.append(f"<tr><td>{escape(p.title)}</td><td><a class='pill' href='/merge/{p.id}'>Open</a></td></tr>")
+    body = f"""
+      <h1>Merge</h1>
+      <div class='card' style='max-width:720px'>
+        <h3>Projects</h3>
+        <table class='table'>
+          <thead><tr><th>Title</th><th>Actions</th></tr></thead>
+          <tbody>{''.join(rows) or '<tr><td colspan="2" class="muted">No projects yet.</td></tr>'}</tbody>
+        </table>
+      </div>
+    """
+    return body
+
+
+def _hash_payload(obj: Any) -> str:
+    try:
+        import json as _json
+        s = _json.dumps(obj, ensure_ascii=False, sort_keys=True)
+    except Exception:
+        s = str(obj)
+    h = hashlib.sha256(s.encode('utf-8', errors='ignore')).hexdigest()
+    return h
+
+
+@app.get("/merge", response_class=HTMLResponse)
+def merge_index(request: Request, db: Session = Depends(get_registry_db)):
+    projects = db.query(Project).order_by(Project.created_at.desc()).all()
+    return layout("Merge", merge_index_html(projects))
+
+
+@app.get("/merge/{project_id}", response_class=HTMLResponse)
+def merge_project_view(project_id: int, db: Session = Depends(get_project_db)):
+    ensure_project_initialized(project_id)
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        return layout("Not found", "<h1>Project not found</h1>")
+    # Branches
+    branches = db.query(Branch).filter(Branch.project_id == project.id).order_by(Branch.created_at.asc()).all()
+    if not branches:
+        ensure_main_branch(db, project.id)
+        branches = db.query(Branch).filter(Branch.project_id == project.id).order_by(Branch.created_at.asc()).all()
+    main_b = ensure_main_branch(db, project.id)
+
+    # Build main changelog hash set
+    main_entries = db.query(ChangelogEntry).filter(ChangelogEntry.project_id==project.id, ChangelogEntry.branch_id==main_b.id).order_by(ChangelogEntry.created_at.desc()).limit(500).all()
+    seen = set((ce.action, _hash_payload(ce.input_json)) for ce in main_entries)
+
+    # For each branch, compute unique entries (not present in main by action+input)
+    cards = []
+    for b in branches:
+        if b.id == main_b.id:
+            # Render main summary card
+            cards.append(f"""
+              <div class='card'>
+                <h3>Main</h3>
+                <div class='small muted'>Branch ID: {b.id}</div>
+                <div class='small muted'>Changelog entries: {len(main_entries)}</div>
+              </div>
+            """)
+            continue
+        entries = db.query(ChangelogEntry).filter(ChangelogEntry.project_id==project.id, ChangelogEntry.branch_id==b.id).order_by(ChangelogEntry.created_at.desc()).limit(200).all()
+        unique = []
+        for ce in entries:
+            key = (ce.action, _hash_payload(ce.input_json))
+            if key not in seen:
+                unique.append(ce)
+        # Render card with unique entries and a merge button
+        ul_items = []
+        for ce in unique[:20]:
+            summ = escape((ce.summary_text or ce.action or '').strip() or '(no summary)')
+            ul_items.append(f"<li class='small'>{summ}</li>")
+        unique_html = "<ul class='small'>" + ("".join(ul_items) or "<li class='muted small'>(no unique items found)</li>") + "</ul>"
+        merge_form = f"""
+          <form method='post' action='/project/{project.id}/merge_to_main?branch_id={b.id}' class='inline'>
+            <button type='submit' data-testid='merge-branch-{b.id}'>Merge {escape(b.name)} → Main</button>
+          </form>
+        """
+        cards.append(f"""
+          <div class='card'>
+            <h3>Branch: {escape(b.name)}</h3>
+            <div class='small muted'>Branch ID: {b.id}</div>
+            <div>{merge_form}</div>
+            <div style='height:8px'></div>
+            <div><strong>Unique vs Main</strong></div>
+            {unique_html}
+          </div>
+        """)
+
+    body = f"""
+      <h1>Merge: {escape(project.title)}</h1>
+      <div class='row'>
+        {''.join(cards)}
+      </div>
+    """
+    return layout(f"Merge • {project.title}", body)
 
 
 @app.post("/projects/create")
