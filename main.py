@@ -16,6 +16,7 @@ import platform
 import sys
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any, Tuple
+from collections import deque
 
 from fastapi import FastAPI, Request, UploadFile, File, Form, Depends, Header, HTTPException, Body, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse, FileResponse
@@ -1024,7 +1025,7 @@ def layout(title: str, body: str) -> HTMLResponse:
   <header>
     <div class="topbar">
       <div><strong>Cedar</strong></div>
-      <div style=\"margin-left:auto\"><a href=\"/\">Projects</a> | <a href=\"/shell\">Shell</a> | <a href=\"/merge\">Merge</a>{llm_status}</div>
+      <div style=\"margin-left:auto\"><a href=\"/\">Projects</a> | <a href=\"/shell\">Shell</a> | <a href=\"/merge\">Merge</a> | <a href=\"/log\">Log</a>{llm_status}</div>
     </div>
   </header>
   <main>
@@ -1046,43 +1047,44 @@ def projects_list_html(projects: List[Project]) -> str:
     if not projects:
         return f"""
         <h1>Projects</h1>
-        <p class="muted">No projects yet. Create one:</p>
-        <form method="post" action="/projects/create" class="card" style="max-width:520px">
+        <p class=\"muted\">No projects yet. Create one:</p>
+        <form method=\"post\" action=\"/projects/create\" class=\"card\" style=\"max-width:520px\">
             <label>Project title</label>
-            <input type="text" name="title" placeholder="My First Project" required />
-            <div style="height:10px"></div>
-            <button type="submit">Create Project</button>
+            <input type=\"text\" name=\"title\" placeholder=\"My First Project\" required />
+            <div style=\"height:10px\"></div>
+            <button type=\"submit\">Create Project</button>
         </form>
         """
     rows = []
     for p in projects:
         rows.append(f"""
             <tr>
-              <td><a href="/project/{p.id}">{escape(p.title)}</a></td>
-              <td class="small muted">{p.created_at.strftime("%Y-%m-%d %H:%M:%S")} UTC</td>
+              <td><a href=\"/project/{p.id}\">{escape(p.title)}</a></td>
+              <td class=\"small muted\">{p.created_at.strftime(\"%Y-%m-%d %H:%M:%S\")} UTC</td>
+              <td>
+                <form method=\"post\" action=\"/project/{p.id}/delete\" class=\"inline\" onsubmit=\"return confirm('Delete project {escape(p.title)} and all its data?');\">
+                  <button type=\"submit\" class=\"secondary\">Delete</button>
+                </form>
+              </td>
             </tr>
         """)
     return f"""
         <h1>Projects</h1>
-        <div class="row">
-          <div class="card" style="flex:2">
-            <table class="table">
-              <thead><tr><th>Title</th><th>Created</th></tr></thead>
+        <div class=\"row\">
+          <div class=\"card\" style=\"flex:2\">
+            <table class=\"table\">
+              <thead><tr><th>Title</th><th>Created</th><th>Actions</th></tr></thead>
               <tbody>
                 {''.join(rows)}
               </tbody>
             </table>
           </div>
-          <div class="card" style="flex:1">
+          <div class=\"card\" style=\"flex:1\">
             <h3>Create a new project</h3>
-            <form method="post" action="/projects/create">
-              <input type="text" name="title" placeholder="Project title" required />
-              <div style="height:10px"></div>
-              <button type="submit">Create</button>
-            </form>
-          </div>
-        </div>
-    """
+            <form method=\"post\" action=\"/projects/create\">
+              <input type=\"text\" name=\"title\" placeholder=\"Project title\" required />
+              <div style=\"height:10px\"></div>
+              <button type=\"submit\">Create</button>
 
 
 def project_page_html(
@@ -1345,17 +1347,14 @@ SELECT * FROM demo LIMIT 10;""")
       <div style=\"height:10px\"></div>
       <div>Branches: {tabs_html}</div>
 
-      <div class='row' style='margin-top:8px'>
+      <div style=\"margin-top:8px; display:flex; gap:8px; align-items:center\">\n        <form method=\"post\" action=\"/project/{project.id}/delete\" class=\"inline\" onsubmit=\"return confirm('Delete project {escape(project.title)} and all its data?');\">\n          <button type=\"submit\" class=\"secondary\">Delete Project</button>\n        </form>\n      </div>\n      <div class=\"row\" style='margin-top:8px'>
         <div class='card' style='flex:2'>
           <div style='margin-bottom:8px'>{thr_tabs_html}</div>
-          <h3>File Details</h3>
+          <h3>Chat</h3>
           {flash_html}
-          {left_details}
-          <div style='height:8px'></div>
-          <h3>Thread</h3>
           <div>{msgs_html}</div>
           {chat_form}
-        </div>
+        </div
 
         <div style=\"flex:1; display:flex; flex-direction:column; gap:8px\">\n          <div class=\"card\" style=\"max-height:220px; overflow:auto; padding:12px\">\n            <h3 style='margin-bottom:6px'>Files</h3>\n            {file_list_html}\n          </div>\n          <div class=\"card\" style='padding:12px'>\n            <h3 style='margin-bottom:6px'>Upload a file</h3>\n            <form method=\"post\" action=\"/project/{project.id}/files/upload?branch_id={current.id}\" enctype=\"multipart/form-data\" data-testid=\"upload-form\">\n              <input type=\"file\" name=\"file\" required data-testid=\"upload-input\" />\n              <div style=\"height:6px\"></div>\n              <div class=\"small muted\">LLM classification runs automatically on upload. See README for API key setup.</div>\n              <div style=\"height:6px\"></div>\n              <button type=\"submit\" data-testid=\"upload-submit\">Upload</button>\n            </form>\n          </div>\n          {sql_card}\n        </div>
       </div>
@@ -2334,6 +2333,9 @@ def api_shell_status(job_id: str, request: Request, x_api_token: Optional[str] =
 # Client log ingestion API
 # This endpoint receives client-side console/error logs sent by the injected script in layout().
 # See README.md (section "Client-side logging") for details and troubleshooting.
+# In-memory ring buffer of recent client logs (latest first when rendered)
+_CLIENT_LOG_BUFFER: deque = deque(maxlen=1000)
+
 class ClientLogEntry(BaseModel):
     when: Optional[str] = None
     level: str
@@ -2354,6 +2356,21 @@ def api_client_log(entry: ClientLogEntry, request: Request):
     lc = f"{entry.line or ''}:{entry.column or ''}" if (entry.line or entry.column) else ""
     ua = entry.userAgent or ""
     origin = entry.origin or ""
+    # Append to in-memory buffer for viewing in /log
+    try:
+        _CLIENT_LOG_BUFFER.append({
+            "ts": ts,
+            "level": lvl,
+            "host": host,
+            "origin": origin,
+            "url": url,
+            "loc": lc,
+            "ua": ua,
+            "message": entry.message,
+            "stack": entry.stack or None,
+        })
+    except Exception:
+        pass
     try:
         print(f"[client-log] ts={ts} level={lvl} host={host} origin={origin} url={url} loc={lc} ua={ua} msg={entry.message}")
         if entry.stack:
@@ -2622,6 +2639,39 @@ def make_table_branch_aware(project_id: int, request: Request, table: str = Form
     return RedirectResponse(f"/project/{project.id}?branch_id={current_b.id}&msg=Converted+{tbl}+to+branch-aware", status_code=303)
 
 BRANCH_AWARE_SQL_DEFAULT = os.getenv("CEDARPY_SQL_BRANCH_MODE", "1") == "1"
+
+# -------------------- Delete project (registry + files + per-project DB dir) --------------------
+
+@app.post("/project/{project_id}/delete")
+def delete_project(project_id: int):
+    # Remove from central registry
+    try:
+        with RegistrySessionLocal() as reg:
+            proj = reg.query(Project).filter(Project.id == project_id).first()
+            if proj:
+                reg.delete(proj)
+                reg.commit()
+    except Exception:
+        pass
+    # Dispose cached engine if present
+    try:
+        with _project_engines_lock:
+            eng = _project_engines.pop(project_id, None)
+        if eng is not None:
+            try:
+                eng.dispose()
+            except Exception:
+                pass
+    except Exception:
+        pass
+    # Remove project storage directory (DB + files)
+    try:
+        base = _project_dirs(project_id)["base"]
+        if os.path.isdir(base):
+            shutil.rmtree(base, ignore_errors=True)
+    except Exception:
+        pass
+    return RedirectResponse("/", status_code=303)
 
 # -------------------- Undo last SQL --------------------
 
@@ -3098,6 +3148,41 @@ def home(request: Request, db: Session = Depends(get_registry_db)):
 
 
 # ----------------------------------------------------------------------------------
+# Log page
+# ----------------------------------------------------------------------------------
+
+@app.get("/log", response_class=HTMLResponse)
+def view_logs():
+    # Render recent client logs (newest last for readability)
+    rows = []
+    try:
+        logs = list(_CLIENT_LOG_BUFFER)
+    except Exception:
+        logs = []
+    if logs:
+        for e in logs:
+            ts = escape(str(e.get("ts") or ""))
+            lvl = escape(str(e.get("level") or ""))
+            url = escape(str(e.get("url") or ""))
+            origin = escape(str(e.get("origin") or ""))
+            msg = escape(str(e.get("message") or ""))
+            loc = escape(str(e.get("loc") or ""))
+            stack = escape(str(e.get("stack") or ""))
+            ua = escape(str(e.get("ua") or ""))
+            rows.append(f"<tr><td class='small'>{ts}</td><td class='small'>{lvl}</td><td class='small'>{origin}</td><td class='small'>{loc}</td><td>{msg}</td><td class='small'>{url}</td></tr>" + (f"<tr><td colspan='6'><pre class='small' style='white-space:pre-wrap'>{stack}</pre></td></tr>" if stack else ""))
+    body = f"""
+      <h1>Client Log</h1>
+      <div class='card'>
+        <div class='small muted'>Most recent {len(logs)} entries.</div>
+        <table class='table'>
+          <thead><tr><th>When</th><th>Level</th><th>Origin</th><th>Loc</th><th>Message</th><th>URL</th></tr></thead>
+          <tbody>{''.join(rows) or "<tr><td colspan='6' class='muted'>(no entries)</td></tr>"}</tbody>
+        </table>
+      </div>
+    """
+    return layout("Log", body)
+
+# ----------------------------------------------------------------------------------
 # Merge dashboard pages
 # ----------------------------------------------------------------------------------
 
@@ -3534,7 +3619,8 @@ def upload_file(project_id: int, request: Request, file: UploadFile = File(...),
     db.refresh(record)
 
     # Create a processing thread entry so the user can see steps
-    thr = Thread(project_id=project.id, branch_id=branch.id, title="New Thread")
+    thr_title = (f"File: {original_name}")[:100]
+    thr = Thread(project_id=project.id, branch_id=branch.id, title=thr_title)
     db.add(thr); db.commit(); db.refresh(thr)
     try:
         import json as _json
