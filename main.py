@@ -1354,6 +1354,9 @@ SELECT * FROM demo LIMIT 10;""")
       <div style=\"margin-top:8px; display:flex; gap:8px; align-items:center\">\n        <form method=\"post\" action=\"/project/{project.id}/delete\" class=\"inline\" onsubmit=\"return confirm('Delete project {escape(project.title)} and all its data?');\">\n          <button type=\"submit\" class=\"secondary\">Delete Project</button>\n        </form>\n      </div>\n      <div class=\"row\" style='margin-top:8px'>
         <div class='card' style='flex:2'>
           <div style='margin-bottom:8px'>{thr_tabs_html}</div>
+          <div style='margin:8px 0'>
+            {left_details}
+          </div>
           <h3>Chat</h3>
           {flash_html}
           <div>{msgs_html}</div>
