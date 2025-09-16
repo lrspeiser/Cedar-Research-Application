@@ -850,6 +850,7 @@ def project_page_html(
     files: List[FileEntry],
     threads: List[Thread],
     datasets: List[Dataset],
+    selected_file: Optional[FileEntry] = None,
     msg: Optional[str] = None,
     sql_result_block: Optional[str] = None,
 ) -> str:
@@ -926,7 +927,7 @@ INSERT INTO demo (name) VALUES ('Alice');
 SELECT * FROM demo LIMIT 10;""")
 
     sql_card = f"""
-      <div class=\"card\" style=\"flex:1\">
+      <div class=\"card\">
         <h3>SQL Console</h3>
         <div class=\"small muted\">Run SQL against the current database (SQLite by default, or your configured MySQL). Max rows is controlled by CEDARPY_SQL_MAX_ROWS.</div>
         <pre class=\"small\" style=\"white-space:pre-wrap; background:#f9fafb; padding:8px; border-radius:6px;\">{examples}</pre>
@@ -952,50 +953,120 @@ SELECT * FROM demo LIMIT 10;""")
       </div>
     """
 
+    # Thread select + create controls at the top
+    threads_options = ''.join([f"<option value='{escape(t.title)}'>{escape(t.title)}</option>" for t in threads])
+    thread_top = f"""
+      <div class='card' style='margin-top:12px'>
+        <div class='row' style='align-items:center; gap:12px'>
+          <div>
+            <label class='small muted'>Select Thread</label>
+            <select style='padding:6px; border:1px solid var(--border); border-radius:6px; min-width:220px'>
+              {threads_options or '<option>(none)</option>'}
+            </select>
+          </div>
+          <div>
+            <form method='post' action='/project/{project.id}/threads/create?branch_id={current.id}' class='inline'>
+              <label class='small muted'>Create Thread</label>
+              <input type='text' name='title' placeholder='New exploration...' required style='padding:6px; border:1px solid var(--border); border-radius:6px;' />
+              <button type='submit' class='secondary' style='margin-left:6px'>Create</button>
+            </form>
+          </div>
+        </div>
+      </div>
+    """
+
+    # Build right-side file list (AI title if present, else display name)
+    def _file_label(ff: FileEntry) -> str:
+        return (getattr(ff, 'ai_title', None) or ff.display_name or '').strip()
+    files_sorted = sorted(files, key=lambda ff: (_file_label(ff).lower(), ff.created_at))
+    file_list_items = []
+    for f in files_sorted:
+        href = f"/project/{project.id}?branch_id={current.id}&file_id={f.id}"
+        label = escape(_file_label(f) or f.display_name)
+        sub = escape(((getattr(f, 'ai_category', None) or f.structure or f.file_type or '') or ''))
+        active = (selected_file and f.id == selected_file.id)
+        li_style = "font-weight:600" if active else ""
+        file_list_items.append(f"<li style='margin:6px 0; {li_style}'><a href='{href}' style='text-decoration:none; color:inherit'>{label}</a><div class='small muted'>{sub}</div></li>")
+    file_list_html = "<ul style='list-style:none; padding-left:0; margin:0'>" + ("".join(file_list_items) or "<li class='muted'>No files yet.</li>") + "</ul>"
+
+    # Left details panel for selected file
+    def _file_detail_panel(f: Optional[FileEntry]) -> str:
+        if not f:
+            return "<div class='muted'>Select a file from the list to view details.</div>"
+        storage_path = f.storage_path or ""
+        url = None
+        try:
+            abs_path = os.path.abspath(storage_path)
+            base_root = _project_dirs(project.id)["files_root"]
+            if abs_path.startswith(base_root):
+                rel = abs_path[len(base_root):].lstrip(os.sep).replace(os.sep, "/")
+                url = f"/uploads/{project.id}/{rel}"
+        except Exception:
+            url = None
+        link_html = f"<a href='{url}' target='_blank'>{escape(f.display_name)}</a>" if url else escape(f.display_name)
+        meta = f.metadata_json or {}
+        meta_keys = ', '.join([escape(str(k)) for k in (list(meta.keys())[:20])])
+        ai_block = f"""
+          <div class='small'>
+            <div><strong>AI Title:</strong> {escape(getattr(f, 'ai_title', None) or '(none)')}</div>
+            <div><strong>AI Category:</strong> {escape(getattr(f, 'ai_category', None) or '(none)')}</div>
+            <div><strong>AI Description:</strong> {escape((getattr(f, 'ai_description', None) or '')[:350])}</div>
+          </div>
+        """
+        tbl = f"""
+          <table class='table'>
+            <tbody>
+              <tr><th>Name</th><td>{link_html}</td></tr>
+              <tr><th>Type</th><td>{escape(f.file_type or '')}</td></tr>
+              <tr><th>Structure</th><td>{escape(f.structure or '')}</td></tr>
+              <tr><th>Branch</th><td>{escape(f.branch.name if f.branch else '')}</td></tr>
+              <tr><th>Size</th><td class='small muted'>{f.size_bytes or 0}</td></tr>
+              <tr><th>Created</th><td class='small muted'>{f.created_at.strftime("%Y-%m-%d %H:%M:%S")} UTC</td></tr>
+              <tr><th>Metadata keys</th><td class='small muted'>{meta_keys or '(none)'}</td></tr>
+            </tbody>
+          </table>
+        """
+        return ai_block + tbl
+
+    left_details = _file_detail_panel(selected_file)
+
     return f"""
       <h1>{escape(project.title)}</h1>
       <div class=\"muted small\">Project ID: {project.id}</div>
       <div style=\"height:10px\"></div>
       <div>Branches: {tabs_html}</div>
 
+      {thread_top}
+
       <div class=\"row\" style=\"margin-top:16px\">
-        <div class=\"card\" style=\"flex:2\">
-          <h3>Files</h3>
+        <div class="card" style="flex:2">
+          <h3>File Details</h3>
           {flash_html}
-          <table class=\"table\">
-            <thead><tr><th>Name</th><th>Type</th><th>Structure</th><th>Branch</th><th>Size</th><th>Created</th></tr></thead>
-            <tbody>{files_tbody}</tbody>
-          </table>
-          <h4>Upload a file to this branch</h4>
-          <form method=\"post\" action=\"/project/{project.id}/files/upload?branch_id={current.id}\" enctype=\"multipart/form-data\">
-            <input type=\"file\" name=\"file\" required />
-            <div style=\"height:8px\"></div>
-            <div class=\"small muted\">GPT will set structure (images | sources | code | tabular), title, description, and category. See README (LLM classification on file upload).</div>
-            <div style=\"height:8px\"></div>
-            <button type=\"submit\">Upload</button>
-          </form>
+          {left_details}
         </div>
 
-        <div class=\"card\" style=\"flex:1\">
-          <h3>Create Branch</h3>
-          <form method=\"post\" action=\"/project/{project.id}/branches/create\">
-            <input type=\"text\" name=\"name\" placeholder=\"experiment-1\" required />
-            <div style=\"height:8px\"></div>
-            <button type=\"submit\">Create Branch</button>
-          </form>
-          <div style=\"height:16px\"></div>
-          <h3>Create Thread</h3>
-          <form method=\"post\" action=\"/project/{project.id}/threads/create?branch_id={current.id}\">
-            <input type=\"text\" name=\"title\" placeholder=\"New exploration...\" required />
-            <div style=\"height:8px\"></div>
-            <button type=\"submit\">Create Thread</button>
-          </form>
+        <div style="flex:1; display:flex; flex-direction:column; gap:12px">
+          <div class="card" style="max-height:300px; overflow:auto">
+            <h3>Files</h3>
+            {file_list_html}
+          </div>
+          <div class="card">
+            <h3>Upload a file</h3>
+            <form method="post" action="/project/{project.id}/files/upload?branch_id={current.id}" enctype="multipart/form-data">
+              <input type="file" name="file" required />
+              <div style="height:8px"></div>
+              <div class="small muted">GPT will set structure (images | sources | code | tabular), title, description, and category. See README (LLM classification on file upload).</div>
+              <div style="height:8px"></div>
+              <button type="submit">Upload</button>
+            </form>
+          </div>
+          {sql_card}
         </div>
       </div>
 
       <div class=\"row\">
         <div class=\"card\" style=\"flex:1\">
-          <h3>Threads</h3>
+          <h3>Chat / Threads</h3>
           <table class=\"table\">
             <thead><tr><th>Title</th><th>Branch</th><th>Created</th></tr></thead>
             <tbody>{thread_tbody}</tbody>
@@ -1010,7 +1081,7 @@ SELECT * FROM demo LIMIT 10;""")
         </div>
       </div>
 
-      <div class=\"row\">{sql_card}
+      <div class=\"row\">
         <div class=\"card\" style=\"flex:1\">
           <h3>Branch Ops</h3>
           <div class=\"small muted\">Branch-aware SQL is active. Use these actions to manage data.</div>
@@ -1890,11 +1961,22 @@ async def ws_sqlx(websocket: WebSocket, project_id: int):
                 last_log_id = res.get("undo_log_id")
                 if last_log_id is None:
                     try:
+                        # Ensure session sees freshest state
+                        try:
+                            db.expire_all()
+                        except Exception:
+                            pass
                         _last = db.query(SQLUndoLog).filter(SQLUndoLog.project_id==project_id, SQLUndoLog.branch_id==branch_id_eff).order_by(SQLUndoLog.created_at.desc(), SQLUndoLog.id.desc()).first()
+                        if not _last:
+                            _last = db.query(SQLUndoLog).filter(SQLUndoLog.project_id==project_id).order_by(SQLUndoLog.created_at.desc(), SQLUndoLog.id.desc()).first()
                         if _last:
                             last_log_id = _last.id
                     except Exception:
                         pass
+                # Use 0 as a sentinel when we couldn't determine a specific undo id; this allows downstream callers
+                # to treat it as "unknown" while still providing a non-null value and relying on branch-based fallbacks.
+                if last_log_id is None:
+                    last_log_id = 0
                 out = {
                     "ok": bool(res.get("success")),
                     "statement_type": res.get("statement_type"),
@@ -2370,7 +2452,7 @@ def execute_sql(project_id: int, request: Request, sql: str = Form(...), db: Ses
     result = _execute_sql_with_undo(db, transformed_sql, project.id, current.id, max_rows=max_rows)
     sql_block = _render_sql_result_html(result)
 
-    return layout(project.title, project_page_html(project, branches, current, files, threads, datasets, msg="Per-project database is active", sql_result_block=sql_block))
+    return layout(project.title, project_page_html(project, branches, current, files, threads, datasets, selected_file=None, msg="Per-project database is active", sql_result_block=sql_block))
 
 def _render_sql_result_html(result: dict) -> str:
     if not result:
@@ -2595,28 +2677,45 @@ def _execute_sql_with_undo(db: Session, sql_text: str, project_id: int, branch_i
                     count += 1
                     if count >= undo_cap: break
 
-        # Store undo log
+        # Done with data mutations; log insertion happens outside this transaction to avoid SQLite locking
+
+    # Store undo log using the ORM session (separate transaction)
+    try:
+        log = SQLUndoLog(
+            project_id=project_id,
+            branch_id=branch_id,
+            table_name=table,
+            op=op,
+            sql_text=s,
+            pk_columns=pk_cols,
+            rows_before=rows_before,
+            rows_after=rows_after,
+        )
+        db.add(log)
+        # Ensure PK is assigned before commit even if expire_on_commit=True
+        db.flush()
         try:
-            log = SQLUndoLog(
-                project_id=project_id,
-                branch_id=branch_id,
-                table_name=table,
-                op=op,
-                sql_text=s,
-                pk_columns=pk_cols,
-                rows_before=rows_before,
-                rows_after=rows_after,
-            )
-            db.add(log)
-            # Ensure PK is assigned before commit even if expire_on_commit=True
-            db.flush()
-            try:
-                created_log_id = log.id
-            except Exception:
-                created_log_id = None
-            db.commit()
+            created_log_id = log.id
         except Exception:
-            db.rollback()
+            created_log_id = None
+        db.commit()
+    except Exception as e:
+        try:
+            print(f"[undo-log-error] {type(e).__name__}: {e}")
+        except Exception:
+            pass
+        db.rollback()
+
+    # Best-effort fallback: if we did not capture an explicit created_log_id, query the latest log for this project+branch
+    if created_log_id is None:
+        try:
+            _last = db.query(SQLUndoLog).filter(SQLUndoLog.project_id==project_id, SQLUndoLog.branch_id==branch_id).order_by(SQLUndoLog.created_at.desc(), SQLUndoLog.id.desc()).first()
+            if not _last:
+                _last = db.query(SQLUndoLog).filter(SQLUndoLog.project_id==project_id).order_by(SQLUndoLog.created_at.desc(), SQLUndoLog.id.desc()).first()
+            if _last:
+                created_log_id = _last.id
+        except Exception:
+            created_log_id = None
 
     # Return a generic result (we can run a SELECT for UPDATE/DELETE to show rowcount)
     _res = _execute_sql(
@@ -2683,7 +2782,7 @@ def create_project(title: str = Form(...), db: Session = Depends(get_registry_db
 
 
 @app.get("/project/{project_id}", response_class=HTMLResponse)
-def view_project(project_id: int, branch_id: Optional[int] = None, msg: Optional[str] = None, db: Session = Depends(get_project_db)):
+def view_project(project_id: int, branch_id: Optional[int] = None, msg: Optional[str] = None, file_id: Optional[int] = None, db: Session = Depends(get_project_db)):
     ensure_project_initialized(project_id)
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
@@ -2714,7 +2813,19 @@ def view_project(project_id: int, branch_id: Optional[int] = None, msg: Optional
         .order_by(Dataset.created_at.desc())\
         .all()
 
-    return layout(project.title, project_page_html(project, branches, current, files, threads, datasets, msg=msg))
+    # resolve selected file if provided
+    selected_file = None
+    try:
+        if file_id is not None:
+            selected_file = db.query(FileEntry).filter(
+                FileEntry.id == int(file_id),
+                FileEntry.project_id == project.id,
+                FileEntry.branch_id.in_(show_branch_ids)
+            ).first()
+    except Exception:
+        selected_file = None
+
+    return layout(project.title, project_page_html(project, branches, current, files, threads, datasets, selected_file=selected_file, msg=msg))
 
 
 @app.post("/project/{project_id}/branches/create")
