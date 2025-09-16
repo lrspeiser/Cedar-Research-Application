@@ -13,6 +13,7 @@ import queue
 import signal
 import time
 import platform
+import sys
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Tuple
 
@@ -31,6 +32,46 @@ import re
 # ----------------------------------------------------------------------------------
 # Configuration
 # ----------------------------------------------------------------------------------
+
+# Lightweight .env loader (no external deps). This is intentionally minimal and does not print values.
+# It loads KEY=VALUE pairs, ignoring lines starting with # and blank lines. Quotes around values are trimmed.
+# See README for more details about secret handling.
+
+def _load_dotenv_files(paths: List[str]) -> None:
+    def _parse_line(line: str) -> Optional[tuple]:
+        s = line.strip()
+        if not s or s.startswith('#'):
+            return None
+        if '=' not in s:
+            return None
+        k, v = s.split('=', 1)
+        k = k.strip()
+        v = v.strip().strip('"').strip("'")
+        if not k:
+            return None
+        return (k, v)
+    for p in paths:
+        try:
+            if not p or not os.path.isfile(p):
+                continue
+            with open(p, 'r', encoding='utf-8', errors='ignore') as f:
+                for line in f:
+                    kv = _parse_line(line)
+                    if not kv:
+                        continue
+                    k, v = kv
+                    # Do not override if already set in the environment
+                    if os.getenv(k) is None:
+                        os.environ[k] = v
+        except Exception:
+            # Best-effort; ignore parse errors
+            pass
+
+# First pass: load from current working directory (.env) so early config can pick it up
+try:
+    _load_dotenv_files([os.path.join(os.getcwd(), '.env')])
+except Exception:
+    pass
 
 # Prefer a generic CEDARPY_DATABASE_URL for the central registry only; otherwise use SQLite in ~/CedarPyData/cedarpy.db
 # See PROJECT_SEPARATION_README.md for architecture details.
@@ -72,6 +113,26 @@ except Exception:
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(PROJECTS_ROOT, exist_ok=True)
 os.makedirs(os.path.dirname(DEFAULT_SQLITE_PATH), exist_ok=True)
+
+# Second pass: load .env from DATA_DIR and from app Resources (for packaged app)
+try:
+    candidates: List[str] = [os.path.join(DATA_DIR, '.env')]
+    # If running from an app bundle or PyInstaller, try Resources or _MEIPASS
+    try:
+        if getattr(sys, 'frozen', False):
+            app_dir = os.path.dirname(sys.executable)
+            res_dir = os.path.abspath(os.path.join(app_dir, '..', 'Resources'))
+            candidates.append(os.path.join(res_dir, '.env'))
+        else:
+            # PyInstaller one-file (_MEIPASS)
+            meipass = getattr(sys, '_MEIPASS', None)
+            if meipass:
+                candidates.append(os.path.join(meipass, '.env'))
+    except Exception:
+        pass
+    _load_dotenv_files(candidates)
+except Exception:
+    pass
 
 # ----------------------------------------------------------------------------------
 # Database setup
@@ -161,6 +222,23 @@ def _migrate_project_files_ai_columns(engine_obj):
         pass
 
 
+def _migrate_thread_messages_columns(engine_obj):
+    try:
+        with engine_obj.begin() as conn:
+            if engine_obj.dialect.name == "sqlite":
+                res = conn.exec_driver_sql("PRAGMA table_info(thread_messages)")
+                cols = [row[1] for row in res.fetchall()]
+                if "display_title" not in cols:
+                    conn.exec_driver_sql("ALTER TABLE thread_messages ADD COLUMN display_title TEXT")
+                if "payload_json" not in cols:
+                    conn.exec_driver_sql("ALTER TABLE thread_messages ADD COLUMN payload_json JSON")
+            elif engine_obj.dialect.name == "mysql":
+                conn.exec_driver_sql("ALTER TABLE thread_messages ADD COLUMN IF NOT EXISTS display_title VARCHAR(255)")
+                conn.exec_driver_sql("ALTER TABLE thread_messages ADD COLUMN IF NOT EXISTS payload_json JSON")
+    except Exception:
+        pass
+
+
 def ensure_project_initialized(project_id: int) -> None:
     """Ensure the per-project database and storage exist and are seeded.
     See PROJECT_SEPARATION_README.md
@@ -191,6 +269,7 @@ def ensure_project_initialized(project_id: int) -> None:
             pdb.close()
         _ensure_project_storage(project_id)
         _migrate_project_files_ai_columns(eng)
+        _migrate_thread_messages_columns(eng)
     except Exception:
         pass
 
@@ -240,8 +319,10 @@ class ThreadMessage(Base):
     project_id = Column(Integer, nullable=False, index=True)
     branch_id = Column(Integer, nullable=False, index=True)
     thread_id = Column(Integer, ForeignKey("threads.id"), nullable=False, index=True)
-    role = Column(String(20), nullable=False)  # 'user' | 'assistant'
+    role = Column(String(20), nullable=False)  # 'user' | 'assistant' | 'system'
     content = Column(Text, nullable=False)
+    display_title = Column(String(255))  # short title for the bubble
+    payload_json = Column(JSON)          # structured prompt/result payload
     created_at = Column(DateTime, default=datetime.utcnow)
 
     thread = relationship("Thread")
@@ -1072,10 +1153,29 @@ SELECT * FROM demo LIMIT 10;""")
     msgs = thread_messages or []
     msg_rows = []
     if msgs:
+        idx = 0
         for m in msgs:
+            idx += 1
             role = escape(m.role)
-            body = escape(m.content)
-            msg_rows.append(f"<div class='small' style='margin:6px 0'><span class='pill'>{role}</span> <span>{body}</span></div>")
+            title_txt = escape(getattr(m, 'display_title', None) or (role.upper()))
+            details_id = f"msgd_{idx}"
+            # Prefer payload_json when available; else show content
+            details = ''
+            try:
+                import json as _json
+                if getattr(m, 'payload_json', None) is not None:
+                    details = f"<pre class='small' style='white-space:pre-wrap; background:#f8fafc; padding:8px; border-radius:6px; display:none' id='{details_id}'>" + escape(_json.dumps(m.payload_json, ensure_ascii=False, indent=2)) + "</pre>"
+                else:
+                    details = f"<pre class='small' style='white-space:pre-wrap; background:#f8fafc; padding:8px; border-radius:6px; display:none' id='{details_id}'>" + escape(m.content) + "</pre>"
+            except Exception:
+                details = f"<pre class='small' style='white-space:pre-wrap; background:#f8fafc; padding:8px; border-radius:6px; display:none' id='{details_id}'>" + escape(m.content) + "</pre>"
+            msg_rows.append(
+                f"<div class='small' style='margin:6px 0'>"
+                f"<span class='pill'>{role}</span> "
+                f"<a href='#' onclick=\"var e=document.getElementById('{details_id}'); if(e){{ e.style.display = (e.style.display==='none'?'block':'none'); }} return false;\" style='font-weight:600'>{title_txt}</a>"
+                f"{details}"
+                f"</div>"
+            )
     else:
         msg_rows.append("<div class='muted small'>(No messages yet)</div>")
     msgs_html = "".join(msg_rows)
@@ -2543,7 +2643,12 @@ def _render_sql_result_html(result: dict) -> str:
     # Table for rows
     rows_html = ""
     if result.get("columns") and result.get("rows") is not None:
-        headers = ''.join(f"<th>{escape(str(c))}</th>" for c in result["columns"])
+        # Deduplicate headers to avoid showing duplicate column names (observed in some drivers)
+        cols_unique = []
+        for c in (result["columns"] or []):
+            if c not in cols_unique:
+                cols_unique.append(c)
+        headers = ''.join(f"<th>{escape(str(c))}</th>" for c in cols_unique)
         body_rows = []
         for row in result["rows"]:
             tds = []
@@ -3011,12 +3116,29 @@ def thread_chat(project_id: int, request: Request, content: str = Form(...), thr
 
     # LLM call (OpenAI). See README for keys setup. No fallbacks; verbose errors.
     reply_text = None
+    reply_title = None
+    reply_payload = None
     client, model = _llm_client_config()
     if not client:
         reply_text = "[llm-missing-key] Set CEDARPY_OPENAI_API_KEY or OPENAI_API_KEY."
     else:
         try:
-            sys_prompt = "You are Cedar's assistant. Answer succinctly using provided file context when relevant."
+            sys_prompt = (
+                "You are Cedar's assistant. Always respond with strict JSON containing keys: title (string) and data (object).\n"
+                "title should be a short human-friendly heading summarizing the result.\n"
+                "data should be structured and parsable. Do not include anything outside JSON."
+            )
+            # Provide an example to enforce structure
+            example = {
+                "title": "Extracted insights for Project Risks",
+                "data": {
+                    "summary": "Three key risks identified",
+                    "items": [
+                        {"risk": "Budget overrun", "severity": "high"},
+                        {"risk": "Scope creep", "severity": "medium"}
+                    ]
+                }
+            }
             ctx = {}
             if fctx:
                 ctx = {
@@ -3034,14 +3156,25 @@ def thread_chat(project_id: int, request: Request, content: str = Form(...), thr
                 {"role": "system", "content": sys_prompt},
                 {"role": "user", "content": "Context:"},
                 {"role": "user", "content": _json.dumps(ctx, ensure_ascii=False)},
+                {"role": "user", "content": "Follow this response schema strictly (example):"},
+                {"role": "user", "content": _json.dumps(example, ensure_ascii=False)},
                 {"role": "user", "content": content},
             ]
             resp = client.chat.completions.create(model=model, messages=messages, temperature=0)
-            reply_text = (resp.choices[0].message.content or "").strip()
+            raw = (resp.choices[0].message.content or "").strip()
+            try:
+                parsed = _json.loads(raw)
+                reply_title = str(parsed.get("title") or "Assistant")
+                reply_payload = parsed.get("data")
+                reply_text = raw
+            except Exception:
+                reply_title = "Assistant"
+                reply_text = raw
         except Exception as e:
             reply_text = f"[llm-error] {type(e).__name__}: {e}"
-    # Persist assistant message
-    am = ThreadMessage(project_id=project.id, branch_id=branch.id, thread_id=thr.id, role="assistant", content=reply_text or "")
+            reply_title = "LLM Error"
+    # Persist assistant message (with title/payload if available)
+    am = ThreadMessage(project_id=project.id, branch_id=branch.id, thread_id=thr.id, role="assistant", content=reply_text or "", display_title=reply_title, payload_json=reply_payload)
     try:
         db.add(am); db.commit()
     except Exception:
@@ -3105,6 +3238,25 @@ def upload_file(project_id: int, request: Request, file: UploadFile = File(...),
     db.commit()
     db.refresh(record)
 
+    # Create a processing thread entry so the user can see steps
+    thr = Thread(project_id=project.id, branch_id=branch.id, title="New Thread")
+    db.add(thr); db.commit(); db.refresh(thr)
+    try:
+        import json as _json
+        # Add a 'system' message with the planned classification prompt payload
+        payload = {
+            "action": "classify_file",
+            "metadata_sample": {
+                k: meta.get(k) for k in [
+                    "extension","mime_guess","format","language","is_text","size_bytes","line_count","json_valid","json_top_level_keys","csv_dialect"] if k in meta
+            },
+            "display_name": original_name
+        }
+        tm = ThreadMessage(project_id=project.id, branch_id=branch.id, thread_id=thr.id, role="system", display_title="Submitting file to LLM to analyze...", content=_json.dumps(payload, ensure_ascii=False), payload_json=payload)
+        db.add(tm); db.commit()
+    except Exception:
+        db.rollback()
+
     # LLM classification (best-effort, no fallbacks). See README for details.
     try:
         meta_for_llm = dict(meta)
@@ -3117,6 +3269,12 @@ def upload_file(project_id: int, request: Request, file: UploadFile = File(...),
             record.ai_description = ai.get("ai_description")
             record.ai_category = ai.get("ai_category")
             db.commit(); db.refresh(record)
+            # Persist assistant message with result
+            tm2 = ThreadMessage(project_id=project.id, branch_id=branch.id, thread_id=thr.id, role="assistant", display_title="File analyzed", content=json.dumps(ai), payload_json=ai)
+            db.add(tm2); db.commit()
+        else:
+            tm2 = ThreadMessage(project_id=project.id, branch_id=branch.id, thread_id=thr.id, role="assistant", display_title="File analysis skipped", content="LLM classification disabled or missing key")
+            db.add(tm2); db.commit()
     except Exception as e:
         try:
             print(f"[llm-exec-error] {type(e).__name__}: {e}")
@@ -3131,4 +3289,5 @@ def upload_file(project_id: int, request: Request, file: UploadFile = File(...),
         "metadata": meta,
     })
 
-    return RedirectResponse(f"/project/{project.id}?branch_id={branch.id}&msg=File+uploaded", status_code=303)
+    # Redirect focusing the uploaded file and processing thread, so the user sees the steps
+    return RedirectResponse(f"/project/{project.id}?branch_id={branch.id}&file_id={record.id}&thread_id={thr.id}&msg=File+uploaded", status_code=303)
