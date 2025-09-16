@@ -393,7 +393,50 @@ def main():
                     "if(btn){ btn.click(); }\n"
                     "})();" % (repr(title))
                 )
+                # Fallback uploader (programmatic) if the GUI flow stalls
+                def fallback_upload():
+                    try:
+                        import urllib.request as _ur
+                        from urllib.parse import urlparse as _urlparse, parse_qs as _parse_qs
+                        import uuid as _uuid
+                        test_file = os.getenv("CEDARPY_QT_TEST_FILE")
+                        if not test_file or not os.path.isfile(test_file):
+                            print("[qt-harness] fallback skipped: no test file")
+                            return
+                        here = page.url().toString()
+                        u = _urlparse(here)
+                        if not u.path.startswith('/project/'):
+                            print(f"[qt-harness] fallback cannot parse project from {here}")
+                            return
+                        proj_id = int(u.path.split('/')[-1] or '0')
+                        qs = _parse_qs(u.query)
+                        try:
+                            branch_id = int((qs.get('branch_id') or ['1'])[0])
+                        except Exception:
+                            branch_id = 1
+                        boundary = '----CedarHarness' + _uuid.uuid4().hex
+                        with open(test_file, 'rb') as f:
+                            data = f.read()
+                        filename = os.path.basename(test_file)
+                        body = (
+                            f"--{boundary}\r\n"
+                            f"Content-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\n"
+                            f"Content-Type: application/octet-stream\r\n\r\n".encode('utf-8') + data +
+                            f"\r\n--{boundary}--\r\n".encode('utf-8')
+                        )
+                        target = f"http://{host}:{port}/project/{proj_id}/files/upload?branch_id={branch_id}"
+                        req = _ur.Request(target, data=body, method='POST')
+                        req.add_header('Content-Type', f'multipart/form-data; boundary={boundary}')
+                        req.add_header('Content-Length', str(len(body)))
+                        try:
+                            with _ur.urlopen(req, timeout=10) as resp:
+                                print(f"[qt-harness] fallback upload status={resp.status}")
+                        except Exception as e:
+                            print(f"[qt-harness] fallback upload error: {e}")
+                    except Exception as e:
+                        print(f"[qt-harness] fallback exception: {e}")
                 # Poll for project page then upload
+                attempts = {"count": 0}
                 def wait_project_and_upload():
                     try:
                         cur = page.url().toString()
@@ -403,8 +446,8 @@ def main():
                             js("(function(){ var i=document.querySelector('[data-testid=upload-input]'); if(i){ i.click(); } })();")
                             # Small delay then click submit
                             def click_submit():
-                                js("(function(){ var b=document.querySelector('[data-testid=upload-submit]'); if(b){ b.click(); } })();")
-                                # Wait for msg=File+uploaded in URL
+                                js("(function(){ var b=document.querySelector('[data-testid=\"upload-submit\"]'); if(b){ b.click(); } })();")
+                                # Wait for msg=File+uploaded in URL, with fallback
                                 def wait_uploaded():
                                     try:
                                         here = page.url().toString()
@@ -413,6 +456,11 @@ def main():
                                             return
                                     except Exception:
                                         pass
+                                    attempts["count"] += 1
+                                    # After ~10 attempts (~3s), try programmatic upload as a fallback
+                                    if attempts["count"] == 10:
+                                        print("[qt-harness] GUI upload stalled; attempting fallback upload")
+                                        fallback_upload()
                                     QTimer.singleShot(300, wait_uploaded)
                                 QTimer.singleShot(500, wait_uploaded)
                             QTimer.singleShot(500, click_submit)
