@@ -61,6 +61,13 @@ SHELL_API_TOKEN = os.getenv("CEDARPY_SHELL_API_TOKEN")
 LOGS_DIR = os.path.join(DATA_DIR, "logs", "shell")
 os.makedirs(LOGS_DIR, exist_ok=True)
 
+# Default working directory for shell jobs (scoped, safe by default)
+SHELL_DEFAULT_WORKDIR = os.getenv("CEDARPY_SHELL_WORKDIR") or DATA_DIR
+try:
+    os.makedirs(SHELL_DEFAULT_WORKDIR, exist_ok=True)
+except Exception:
+    pass
+
 # Ensure writable dirs exist (important when running from a read-only DMG)
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(PROJECTS_ROOT, exist_ok=True)
@@ -892,12 +899,13 @@ SELECT * FROM demo LIMIT 10;""")
 # ----------------------------------------------------------------------------------
 
 class ShellJob:
-    def __init__(self, script: str, shell_path: Optional[str] = None, trace_x: bool = False):
+    def __init__(self, script: str, shell_path: Optional[str] = None, trace_x: bool = False, workdir: Optional[str] = None):
         self.id = uuid.uuid4().hex
         self.script = script
         # Preserve requested shell_path if provided; resolution and fallbacks happen at run-time
         self.shell_path = shell_path or os.environ.get("SHELL")
         self.trace_x = bool(trace_x)
+        self.workdir = workdir or SHELL_DEFAULT_WORKDIR
         self.start_time = datetime.utcnow()
         self.end_time: Optional[datetime] = None
         self.status = "starting"  # starting|running|finished|error|killed
@@ -1002,10 +1010,15 @@ def _run_job(job: ShellJob):
     job.append_line(f"[using-shell] path={resolved} args={' '.join(args[:-1])} (script length={len(job.script)} chars)\n")
     if job.trace_x:
         job.append_line("[trace] set -x enabled\n")
-    job.append_line(f"[cwd] {os.getcwd()}\n")
+    job.append_line(f"[cwd] {job.workdir}\n")
     job.append_line(f"[log] {job.log_path}\n")
 
     try:
+        # Ensure workdir exists
+        try:
+            os.makedirs(job.workdir, exist_ok=True)
+        except Exception:
+            pass
         job.proc = subprocess.Popen(
             [resolved] + args,
             stdout=subprocess.PIPE,
@@ -1015,6 +1028,7 @@ def _run_job(job: ShellJob):
             bufsize=1,
             preexec_fn=os.setsid,
             env=os.environ.copy(),
+            cwd=job.workdir,
         )
     except Exception as e:
         job.status = "error"
@@ -1051,8 +1065,8 @@ _shell_jobs: Dict[str, ShellJob] = {}
 _shell_jobs_lock = threading.Lock()
 
 
-def start_shell_job(script: str, shell_path: Optional[str] = None, trace_x: bool = False) -> ShellJob:
-    job = ShellJob(script=script, shell_path=shell_path, trace_x=trace_x)
+def start_shell_job(script: str, shell_path: Optional[str] = None, trace_x: bool = False, workdir: Optional[str] = None) -> ShellJob:
+    job = ShellJob(script=script, shell_path=shell_path, trace_x=trace_x, workdir=workdir)
     with _shell_jobs_lock:
         _shell_jobs[job.id] = job
     t = threading.Thread(target=_run_job, args=(job,), daemon=True)
@@ -1098,6 +1112,8 @@ class ShellRunRequest(BaseModel):
     script: str
     shell_path: Optional[str] = None
     trace_x: Optional[bool] = None
+    workdir_mode: Optional[str] = None  # 'data' (default) | 'root'
+    workdir: Optional[str] = None       # explicit path (optional)
 
 @app.get("/shell", response_class=HTMLResponse)
 def shell_ui(request: Request):
@@ -1110,6 +1126,7 @@ def shell_ui(request: Request):
         return layout("Shell – disabled", body)
 
     default_shell = html.escape(os.environ.get("SHELL", "/bin/zsh"))
+    default_data_dir = html.escape(SHELL_DEFAULT_WORKDIR)
     body = """
       <h1>Shell</h1>
       <p class='muted small'>Minimal shell UI. Proves WebSocket handshake on load and runs a simple script.</p>
@@ -1126,6 +1143,15 @@ def shell_ui(request: Request):
             <label class='small muted'>X-API-Token (optional)</label>
             <input id='apiToken' type='text' placeholder='{{set if required}}' style='width:100%; padding:8px; border:1px solid var(--border); border-radius:6px;' />
           </div>
+        </div>
+        <div style='height:10px'></div>
+        <label class='small muted'>Working directory</label>
+        <div>
+          <select id='workdirMode' style='padding:6px; border:1px solid var(--border); border-radius:6px;'>
+            <option value='data' selected>User Data (__DATA_DIR__)</option>
+            <option value='root'>Entire Disk (/)</option>
+          </select>
+          <div class='small muted'>User data path: __DATA_DIR__</div>
         </div>
         <div style='height:10px'></div>
         <label class='small'><input id='traceX' type='checkbox' checked /> Trace commands (-x)</label>
@@ -1157,6 +1183,7 @@ def shell_ui(request: Request):
         const output = document.getElementById('output');
         const statusEl = document.getElementById('status');
         const historyList = document.getElementById('historyList');
+        const workdirModeEl = document.getElementById('workdirMode');
         let currentJob = null;
         let lastHistoryItem = null;
         let ws = null;
@@ -1207,6 +1234,7 @@ def shell_ui(request: Request):
           const shellPath = (shellPathRaw && shellPathRaw.trim()) ? shellPathRaw.trim() : null;
           const traceEl = document.getElementById('traceX');
           const trace_x = !!(traceEl && traceEl.checked);
+          const workdir_mode = workdirModeEl ? workdirModeEl.value : 'data';
           var tokenEl = document.getElementById('apiToken');
           const token = tokenEl ? tokenEl.value : null;
           setStatus('starting...');
@@ -1220,7 +1248,7 @@ def shell_ui(request: Request):
             const resp = await fetch('/api/shell/run', {
               method: 'POST',
               headers: Object.assign({'Content-Type': 'application/json'}, token ? {'X-API-Token': token} : {}),
-              body: JSON.stringify({ script, shell_path: shellPath, trace_x }),
+              body: JSON.stringify({ script, shell_path: shellPath, trace_x, workdir_mode }),
             });
             if (!resp.ok) { const t = await resp.text(); throw new Error(t || ('HTTP '+resp.status)); }
             const data = await resp.json();
@@ -1295,13 +1323,14 @@ def shell_ui(request: Request):
               const token = tokenEl ? tokenEl.value : null;
               const traceEl = document.getElementById('traceX');
               const trace_x = !!(traceEl && traceEl.checked);
+              const workdir_mode = workdirModeEl ? workdirModeEl.value : 'data';
               addHistory('echo hello world', null);
               append('>>> echo hello world');
               append(String.fromCharCode(10));
               const resp = await fetch('/api/shell/run', {
                 method: 'POST',
                 headers: Object.assign({'Content-Type': 'application/json'}, token ? {'X-API-Token': token} : {}),
-                body: JSON.stringify({ script: 'echo hello world', trace_x }),
+                body: JSON.stringify({ script: 'echo hello world', trace_x, workdir_mode }),
               });
               if (!resp.ok) { append('[error] ' + (await resp.text())); return; }
               const data = await resp.json();
@@ -1331,6 +1360,7 @@ def shell_ui(request: Request):
       </script>
     """
     body = body.replace("__DEFAULT_SHELL__", default_shell)
+    body = body.replace("__DATA_DIR__", default_data_dir)
     return layout("Shell", body)
 
 
@@ -1340,17 +1370,30 @@ def api_shell_run(request: Request, body: ShellRunRequest, x_api_token: Optional
     script = body.script
     shell_path = body.shell_path
     trace_x = bool(body.trace_x) if body.trace_x is not None else False
+    # Resolve working directory
+    workdir_eff = None
+    try:
+        if body.workdir and isinstance(body.workdir, str) and body.workdir.strip():
+            workdir_eff = os.path.abspath(os.path.expanduser(body.workdir.strip()))
+        else:
+            mode = (body.workdir_mode or "data").strip().lower()
+            if mode == "root":
+                workdir_eff = "/"
+            else:
+                workdir_eff = SHELL_DEFAULT_WORKDIR
+    except Exception:
+        workdir_eff = SHELL_DEFAULT_WORKDIR
     # Server-side trace for UI clicks
     try:
         host = request.client.host if request and request.client else "?"
         cookie_tok = request.cookies.get("Cedar-Shell-Token") if hasattr(request, "cookies") else None
         tok_src = "hdr" if x_api_token else ("cookie" if cookie_tok else "no")
-        print(f"[shell-api] RUN click from={host} token={tok_src} shell_path={(shell_path or os.environ.get('SHELL') or '')} script_len={len(script or '')} trace_x={trace_x}")
+        print(f"[shell-api] RUN click from={host} token={tok_src} shell_path={(shell_path or os.environ.get('SHELL') or '')} script_len={len(script or '')} trace_x={trace_x} workdir={workdir_eff}")
     except Exception:
         pass
     if not script or not isinstance(script, str):
         raise HTTPException(status_code=400, detail="script is required")
-    job = start_shell_job(script=script, shell_path=shell_path, trace_x=trace_x)
+    job = start_shell_job(script=script, shell_path=shell_path, trace_x=trace_x, workdir=workdir_eff)
     pid = job.proc.pid if job.proc else None
     try:
         print(f"[shell-api] job started id={job.id} pid={pid}")
