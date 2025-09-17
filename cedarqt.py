@@ -7,6 +7,8 @@ import time
 import urllib.request
 import urllib.error
 import errno
+import socket
+import re
 from datetime import datetime, timezone
 from threading import Thread
 
@@ -186,6 +188,89 @@ def _wait_for_server(url: str, timeout_sec: float = 20.0) -> bool:
     return False
 
 
+def _find_pids_listening_on(port: int) -> list[int]:
+    """Best-effort: find PIDs listening on a TCP port (macOS). Uses lsof when available."""
+    try:
+        proc = subprocess.run(["/usr/sbin/lsof", "-i", f"tcp:{port}", "-sTCP:LISTEN", "-t"], capture_output=True, text=True)  # nosec - lsof for diagnostics
+        if proc.returncode == 0:
+            pids = []
+            for line in (proc.stdout or "").splitlines():
+                try:
+                    pids.append(int(line.strip()))
+                except Exception:
+                    pass
+            return pids
+    except FileNotFoundError:
+        # Try PATH lsof
+        try:
+            proc = subprocess.run(["lsof", "-i", f"tcp:{port}", "-sTCP:LISTEN", "-t"], capture_output=True, text=True)  # nosec
+            if proc.returncode == 0:
+                pids = []
+                for line in (proc.stdout or "").splitlines():
+                    try:
+                        pids.append(int(line.strip()))
+                    except Exception:
+                        pass
+                return pids
+        except Exception:
+            pass
+    except Exception:
+        pass
+    return []
+
+
+def _http_get(url: str, timeout: float = 1.5) -> tuple[int, str]:
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            status = resp.status
+            body = resp.read(4096).decode("utf-8", errors="ignore")
+            return status, body
+    except Exception as e:
+        return -1, str(e)
+
+
+def _preflight_cleanup_existing_server(host: str, desired_port: int, max_wait: float = 5.0) -> None:
+    """On app launch, attempt to gracefully terminate any stale server bound to desired_port.
+    We detect CedarPy by fetching '/' and checking for 'Cedar' in the HTML.
+    If detected, we attempt to kill the owning PID(s) using lsof.
+    """
+    try:
+        kill_ok = os.getenv("CEDARPY_KILL_STALE", "1").strip().lower() not in {"0","false","no","off"}
+        if not kill_ok:
+            return
+        url = f"http://{host}:{desired_port}/"
+        status, body = _http_get(url, timeout=1.0)
+        if status > 0 and ("Cedar" in (body or "")):
+            print(f"[cedarqt] preflight: found server at {url} (status={status}); attempting to terminate")
+            pids = _find_pids_listening_on(desired_port)
+            for pid in pids:
+                if pid != os.getpid():
+                    try:
+                        print(f"[cedarqt] sending SIGTERM to pid {pid} (port {desired_port})")
+                        os.kill(pid, signal.SIGTERM)
+                    except Exception as e:
+                        print(f"[cedarqt] kill error pid={pid}: {e}")
+            # wait for port to close
+            start = time.time()
+            while time.time() - start < max_wait:
+                try:
+                    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    s.settimeout(0.5)
+                    err = s.connect_ex((host, desired_port))
+                    s.close()
+                    if err != 0:
+                        print(f"[cedarqt] port {desired_port} is now free")
+                        break
+                except Exception:
+                    break
+                time.sleep(0.2)
+        else:
+            # Not our server; do nothing
+            return
+    except Exception as e:
+        print(f"[cedarqt] preflight cleanup error: {e}")
+
+
 def _launch_server_inprocess(host: str, port: int):
     # Run uvicorn in-process so PyInstaller bundles work without relying on -m
     os.environ.setdefault("CEDARPY_OPEN_BROWSER", "0")
@@ -319,6 +404,10 @@ def main():
         desired = int(port_env)
     except Exception:
         desired = 8000
+
+    # Best-effort: terminate any stale CedarPy server on the desired port before we start a new one
+    _preflight_cleanup_existing_server(host, desired)
+
     port = _choose_listen_port(host, desired)
     # Propagate the effective port to child pieces that might read env again
     os.environ["CEDARPY_PORT"] = str(port)
@@ -368,6 +457,57 @@ def main():
             win.raise_()
             win.activateWindow()
             app.setActiveWindow(win)
+        except Exception:
+            pass
+
+    # Graceful shutdown on app quit and OS signals
+    def _graceful_shutdown():
+        try:
+            print("[cedarqt] shutting down server...")
+            if server is not None:
+                try:
+                    server.should_exit = True
+                except Exception:
+                    pass
+            if server_thread is not None:
+                try:
+                    server_thread.join(timeout=5)
+                except Exception:
+                    pass
+            # Release single-instance lock
+            try:
+                if _single_lock_fh is not None:
+                    os.close(_single_lock_fh)
+                    os.remove(LOCK_PATH)
+            except Exception:
+                pass
+            print("[cedarqt] shutdown complete")
+        except Exception as e:
+            try:
+                print(f"[cedarqt] shutdown error: {e}")
+            except Exception:
+                pass
+
+    try:
+        app.aboutToQuit.connect(_graceful_shutdown)  # type: ignore
+    except Exception:
+        pass
+
+    def _sig_handler(signum, frame):
+        try:
+            print(f"[cedarqt] signal {signum} received; quitting")
+        except Exception:
+            pass
+        try:
+            _graceful_shutdown()
+        finally:
+            try:
+                app.quit()
+            except Exception:
+                os._exit(0)
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            signal.signal(sig, _sig_handler)
         except Exception:
             pass
 
