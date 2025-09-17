@@ -165,25 +165,39 @@ try:
             os.makedirs(DATA_DIR, exist_ok=True)
             data_vals = _parse_env_file(data_env) if os.path.isfile(data_env) else {}
             res_vals = _parse_env_file(res_env_path)
+
+            # Add this print statement for debugging:
+            try:
+                print(f"[DEBUG] Seeding check. Bundled keys: {list(res_vals.keys())}, User keys: {list(data_vals.keys())}")
+            except Exception:
+                pass
+
             to_merge: Dict[str, str] = {}
             for key_name in ("OPENAI_API_KEY", "CEDARPY_OPENAI_API_KEY"):
                 if key_name in res_vals and key_name not in data_vals:
                     to_merge[key_name] = res_vals[key_name]
+
+            # Add this print statement for debugging:
+            try:
+                print(f"[DEBUG] Keys to merge into user .env: {list(to_merge.keys())}")
+            except Exception:
+                pass
+
             if (not os.path.isfile(data_env)) or to_merge:
                 try:
                     with open(data_env, 'a', encoding='utf-8', errors='ignore') as f:
-                        # If creating new file, ensure exists
-                        if not os.path.isfile(data_env):
-                            pass
                         for k, v in to_merge.items():
                             f.write(f"{k}={v}\n")
                     try:
-                        merged_keys = ','.join(to_merge.keys()) if to_merge else '(all from Resources)'
-                        print(f"[env] seeded/merged keys into {data_env}: {merged_keys} (values masked)")
+                        print(f"[DEBUG] Successfully wrote keys to {data_env}")
                     except Exception:
                         pass
-                except Exception:
-                    pass
+                except Exception as e:
+                    # Replace 'pass' with actual error logging
+                    try:
+                        print(f"[ERROR] Failed to write to user .env file at {data_env}: {e}")
+                    except Exception:
+                        pass
     except Exception:
         pass
 
@@ -1336,9 +1350,9 @@ def layout(title: str, body: str, header_label: Optional[str] = None, header_lin
     try:
         ready, reason, model = _llm_reachability()
         if ready:
-            llm_status = f" <span class='pill' title='LLM connected'>LLM: {escape(model)}</span>"
+            llm_status = f" <a href='/settings' class='pill' title='LLM connected — click to manage key'>LLM: {escape(model)}</a>"
         else:
-            llm_status = f" <span class='pill' style='background:#fef2f2; color:#991b1b' title='LLM unavailable'>LLM unavailable ({escape(reason)})</span>"
+            llm_status = f" <a href='/settings' class='pill' style='background:#fef2f2; color:#991b1b' title='LLM unavailable — click to paste your key'>LLM unavailable ({escape(reason)})</a>"
     except Exception:
         llm_status = ""
 
@@ -1482,6 +1496,49 @@ def layout(title: str, body: str, header_label: Optional[str] = None, header_lin
       try { base('error', 'upload instrumentation error', 'client-log', { stack: e && e.stack ? String(e.stack) : null }); } catch(_) {}
     }
   }, { once: true });
+
+  // Global button click feedback: show a brief 'Received' toast near the clicked button (no-op for non-buttons)
+  (function initButtonClickFeedback(){
+    try {
+      function showReceived(btn){
+        try {
+          var t = document.createElement('div');
+          t.className = 'click-received';
+          t.textContent = 'Received';
+          document.body.appendChild(t);
+          var r = btn.getBoundingClientRect();
+          var tw = t.offsetWidth || 60;
+          var th = t.offsetHeight || 18;
+          var left = Math.max(6, Math.min((window.innerWidth - tw - 6), r.left + (r.width/2) - (tw/2)));
+          var top = Math.max(6, Math.min((window.innerHeight - th - 6), r.bottom + 6));
+          t.style.left = left + 'px';
+          t.style.top = top + 'px';
+          setTimeout(function(){ if (t && t.parentNode) { t.parentNode.removeChild(t); } }, 1300);
+          // Screen reader announcement
+          try {
+            var sr = document.getElementById('sr-live');
+            if (!sr) {
+              sr = document.createElement('div');
+              sr.id = 'sr-live';
+              sr.setAttribute('aria-live', 'polite');
+              sr.style.position = 'absolute'; sr.style.width='1px'; sr.style.height='1px'; sr.style.overflow='hidden'; sr.style.clip='rect(1px,1px,1px,1px)'; sr.style.clipPath='inset(50%)'; sr.style.whiteSpace='nowrap'; sr.style.border='0';
+              document.body.appendChild(sr);
+            }
+            sr.textContent = 'Received';
+          } catch(_) {}
+        } catch(_) {}
+      }
+      document.addEventListener('click', function(ev){
+        try {
+          var el = ev.target && ev.target.closest ? ev.target.closest('button') : null;
+          if (!el) return;
+          // Buttons already get a press animation via CSS :active; add a toast as confirmation
+          showReceived(el);
+        } catch(_) {}
+      }, true);
+    } catch(_) {}
+  })();
+
 })();
 </script>
 """
@@ -1509,12 +1566,16 @@ def layout(title: str, body: str, header_label: Optional[str] = None, header_lin
     form.inline * {{ vertical-align: middle; }}
     input[type=\"text\"], select {{ padding: 8px; border: 1px solid var(--border); border-radius: 6px; width: 100%; }}
     input[type=\"file\"] {{ padding: 6px; border: 1px dashed var(--border); border-radius: 6px; width: 100%; position: relative; z-index: 1; display: block; }}
-    button {{ padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--accent); color: white; cursor: pointer; position: relative; z-index: 2; pointer-events: auto; }}
+    button {{ padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--accent); color: white; cursor: pointer; position: relative; z-index: 2; pointer-events: auto; transition: transform 80ms ease, filter 120ms ease, box-shadow 120ms ease; will-change: transform; user-select: none; }}
+    button:active {{ transform: scale(0.98); filter: brightness(0.98); }}
     button.secondary {{ background: #f3f4f6; color: #111; }}
     .small {{ font-size: 12px; }}
     .topbar {{ display:flex; align-items:center; gap:12px; }}
     .spinner {{ display:inline-block; width:12px; height:12px; border:2px solid #cbd5e1; border-top-color:#334155; border-radius:50%; animation: spin 1s linear infinite; }}
     @keyframes spin {{ from {{ transform: rotate(0deg);}} to {{ transform: rotate(360deg);}} }}
+    /* Click feedback toast */
+    .click-received {{ position: fixed; background: #f1f5f9; color: #111; border: 1px solid var(--border); border-radius: 9999px; padding: 2px 8px; font-size: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.08); pointer-events: none; opacity: 0; transform: translateY(-4px); animation: crFade 1200ms ease forwards; }}
+    @keyframes crFade {{ 0% {{ opacity: 0; transform: translateY(-4px); }} 15% {{ opacity: 1; transform: translateY(0); }} 85% {{ opacity: 1; }} 100% {{ opacity: 0; transform: translateY(-6px); }} }}
   </style>
   {client_log_js}
 </head>

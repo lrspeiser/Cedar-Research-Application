@@ -33,6 +33,21 @@ cp "$PROJ_ROOT/main_mini.py" "$RES/main_mini.py"
 cp "$PROJ_ROOT/run_cedarpy.py" "$RES/run_cedarpy.py"
 cp "$PROJ_ROOT/PROJECT_SEPARATION_README.md" "$RES/PROJECT_SEPARATION_README.md" || true
 cp "$PROJ_ROOT/BRANCH_SQL_POLICY.md" "$RES/BRANCH_SQL_POLICY.md" || true
+# Include .env into Resources preferring project .env, then user data .env (keys masked)
+PROJ_ENV="$PROJ_ROOT/.env"
+USER_ENV="$HOME/CedarPyData/.env"
+if [ -f "$PROJ_ENV" ]; then
+  cp -f "$PROJ_ENV" "$RES/.env"
+  echo "[build] Bundled project .env into embedded app Resources (keys masked):"
+  { grep -E '^(OPENAI_API_KEY|CEDARPY_OPENAI_API_KEY)=' "$RES/.env" || echo "  (no OpenAI keys found)"; } | sed -E 's/(OPENAI_API_KEY|CEDARPY_OPENAI_API_KEY)=.*/\1=***MASKED***/'
+elif [ -f "$USER_ENV" ]; then
+  cp -f "$USER_ENV" "$RES/.env"
+  echo "[build] Bundled user data .env into embedded app Resources (keys masked):"
+  { grep -E '^(OPENAI_API_KEY|CEDARPY_OPENAI_API_KEY)=' "$RES/.env" || echo "  (no OpenAI keys found)"; } | sed -E 's/(OPENAI_API_KEY|CEDARPY_OPENAI_API_KEY)=.*/\1=***MASKED***/'
+else
+  echo "[build] WARNING: No .env found in project or user data; creating empty Resources/.env" >&2
+  : > "$RES/.env"
+fi
 
 # 3) Create launcher that runs the embedded python
 cat > "$MACOS/$APP_NAME" << 'SH'
