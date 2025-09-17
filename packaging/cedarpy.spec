@@ -30,6 +30,31 @@ datas += shib_d
 binaries += shib_b
 hiddenimports += shib_h
 
+# Ensure server framework dependencies are included in the bundle even when main.py is loaded via fallback
+for pkg in [
+    'fastapi',
+    'starlette',
+    'pydantic',
+    'pydantic_core',
+    'typing_extensions',
+    'anyio',
+    'sqlalchemy',
+    'uvicorn',
+    'websockets',
+    'httpx',
+    'certifi',
+    'sniffio',
+    'h11',
+    'click',
+]:
+    try:
+        d, b, h = collect_all(pkg)
+        datas += d
+        binaries += b
+        hiddenimports += h
+    except Exception:
+        pass
+
 hiddenimports = list(set(hiddenimports + ['main']))
 
 # Resolve repo root relative to current working directory when PyInstaller runs
