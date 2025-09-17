@@ -27,6 +27,8 @@ python3 -m venv "$VENV_DIR"
 
 # 2) Copy application sources into Resources
 cp "$PROJ_ROOT/main.py" "$RES/main.py"
+# IMPORTANT: Do not remove this copy; mini module is required for minimal launches and fallback.
+# See README postmortem for rationale.
 cp "$PROJ_ROOT/main_mini.py" "$RES/main_mini.py"
 cp "$PROJ_ROOT/run_cedarpy.py" "$RES/run_cedarpy.py"
 cp "$PROJ_ROOT/PROJECT_SEPARATION_README.md" "$RES/PROJECT_SEPARATION_README.md" || true

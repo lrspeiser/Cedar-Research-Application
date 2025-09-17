@@ -37,8 +37,10 @@ pushd "$ROOT_DIR" >/dev/null
   --workpath "$BUILD" \
   --specpath "$BUILD" \
   --hidden-import main \
+  # IMPORTANT: Keep main_mini as a hidden import for packaged fallback (see README postmortem).
   --hidden-import main_mini \
   --add-data "$ROOT_DIR/main.py:." \
+  # IMPORTANT: Ship main_mini.py in the bundle data so file-based fallback can find it.
   --add-data "$ROOT_DIR/main_mini.py:." \
   run_cedarpy.py
 popd >/dev/null

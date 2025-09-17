@@ -45,6 +45,9 @@ def _init_logging() -> str:
 _log_path = _init_logging()
 
 # Early mode flags
+# IMPORTANT: Do not move backend imports above this section.
+# Frontend-only (CEDARPY_NO_SERVER=1) must avoid importing backend frameworks entirely.
+# See README: "Mini/no-server modes and the packaged FastAPI import error — what happened and the durable fix".
 _no_server_early = os.getenv("CEDARPY_NO_SERVER", "").strip().lower() in {"1", "true", "yes"}
 _mini_early = os.getenv("CEDARPY_MINI", "").strip().lower() in {"1", "true", "yes"}
 print(f"[cedarqt] startup flags: NO_SERVER={int(_no_server_early)} MINI={int(_mini_early)} APP_MODULE={os.getenv('CEDARPY_APP_MODULE','')}")
@@ -53,6 +56,8 @@ if _no_server_early:
 
 # Force include of backend frameworks in PyInstaller analysis (no-ops at runtime)
 # Skip these imports when running in no-server mode to avoid any unnecessary ImportErrors in logs.
+# IMPORTANT: Do not force these imports when CEDARPY_NO_SERVER=1.
+# This ensures frontend-only mode remains dependency-free for the backend.
 if not _no_server_early:
     try:
         import fastapi  # type: ignore

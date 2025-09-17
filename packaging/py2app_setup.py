@@ -6,7 +6,7 @@ OPTIONS = {
     'argv_emulation': False,
     'includes': [
         'main',
-        'main_mini',
+'main_mini',  # IMPORTANT: Do not remove; mini module enables minimal launches and packaged fallback (see README postmortem)
         'sqlite3',
         'typing_extensions', 
         'certifi',
@@ -45,6 +45,6 @@ OPTIONS = {
 setup(
     app=APP,
     options={'py2app': OPTIONS},
-    data_files=['main.py', 'main_mini.py', 'PROJECT_SEPARATION_README.md'],
+data_files=['main.py', 'main_mini.py', 'PROJECT_SEPARATION_README.md'],  # Keep main_mini.py shipped; see README postmortem
     setup_requires=['py2app'],
 )

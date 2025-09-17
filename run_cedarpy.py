@@ -42,6 +42,9 @@ print(f"[cedarpy] cwd={os.getcwd()}")
 print(f"[cedarpy] _MEIPASS={getattr(sys, '_MEIPASS', None)}")
 
 # Try to import the ASGI app from a preferred module, defaulting to 'main'.
+# IMPORTANT: Do not collapse this back to always load 'main'.
+# We rely on main_mini for minimal launches (no FastAPI) and for packaged fallback.
+# See README: "Mini/no-server modes and the packaged FastAPI import error — what happened and the durable fix".
 _app_module = os.getenv("CEDARPY_APP_MODULE") or ("main_mini" if os.getenv("CEDARPY_MINI", "").strip().lower() in {"1","true","yes"} else "main")
 print(f"[cedarpy] loading app module: {_app_module}")
 try:
@@ -55,6 +58,9 @@ except Exception:
         base_dir = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(__file__)
     resources_dir = os.path.abspath(os.path.join(os.path.dirname(base_dir), "Resources")) if base_dir else None
     # Try known locations for both main and main_mini
+    # IMPORTANT: Keep main_mini candidates in this list; do not remove.
+    # Packaging ships both files explicitly so fallback can succeed even if imports fail.
+    # See README postmortem for rationale.
     file_candidates = [
         ("main", os.path.join(base_dir, "main.py") if base_dir else None),
         ("main", os.path.join(resources_dir, "main.py") if resources_dir and os.path.isdir(resources_dir) else None),
