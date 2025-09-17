@@ -509,6 +509,8 @@ except Exception:
 # LLM classification utilities (See README: "LLM classification on file upload")
 # When calling web services, configure keys via env. Do not hardcode secrets.
 # See README for setup and troubleshooting; verbose logs are emitted on error.
+# IMPORTANT (packaged app): keys are loaded from ~/CedarPyData/.env; see README: "Where to put your OpenAI key (.env) when packaged"
+# and Postmortem #7 "LLM key missing when launching the packaged app (Qt DMG)".
 # Also see README section "Tabular import via LLM codegen" for the second-stage processing when structure == 'tabular'.
 
 def _llm_client_config():

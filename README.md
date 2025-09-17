@@ -137,6 +137,19 @@ Notes and guardrails
 Where to look in code
 - main.py: search for "Tabular import via LLM codegen" and _tabular_import_via_llm(). Comments in code link back to this section.
 
+Where to put your OpenAI key (.env) when packaged
+- For the Qt DMG and embedded builds, environment variables from your shell are not inherited when launching via Finder.
+- The app loads .env in this order:
+  1) .env in the current working directory (developer CLI only)
+  2) ~/CedarPyData/.env (preferred for packaged apps)
+  3) .env inside the app Resources (packaged fallback)
+- Recommended: create ~/CedarPyData/.env and add one of:
+  OPENAI_API_KEY={{YOUR_OPENAI_API_KEY}}
+  or
+  CEDARPY_OPENAI_API_KEY={{YOUR_OPENAI_API_KEY}}
+- Do not commit secrets to the repo. Keep .env under your home directory.
+- UI hint: The header shows "LLM unavailable (missing key)" until a key is detected; logs include [llm-skip] missing OpenAI API key.
+
 The app injects a small script into every HTML page that:
 - Proxies console.log/info/warn/error
 - Captures window.onerror and unhandledrejection
@@ -409,6 +422,18 @@ Recovery Playbook (documented attempts)
   2) If present, inspect the packaged file to locate the offending lines:
      - sed -n '1200,1360p' "/Volumes/CedarPy/CedarPy.app/Contents/Resources/main.py"
   3) Rebuild after fixing quoting issues in nav or inline HTML f-strings.
+
+7) LLM key missing when launching the packaged app (Qt DMG)
+- Symptom: The UI shows "LLM unavailable (missing key)" and upload flows log [llm-skip] missing OpenAI API key.
+- Root cause: Launching via Finder does not inherit shell exports; the packaged app does not see your terminal's OPENAI_API_KEY. Also, .env placed in the project repo is not read by the packaged app.
+- Fix: The app now loads .env from ~/CedarPyData/.env for packaged runs. Place your key there as OPENAI_API_KEY or CEDARPY_OPENAI_API_KEY. We added explicit README docs and code comments to prevent regressions.
+- Verification: After creating ~/CedarPyData/.env with the key, restart the app. The header should show "LLM: <model>" instead of "LLM unavailable" and logs will include [llm] lines.
+- Quick setup:
+  mkdir -p "$HOME/CedarPyData"
+  open -e "$HOME/CedarPyData/.env"   # paste: OPENAI_API_KEY={{YOUR_OPENAI_API_KEY}}
+- Alternative (less preferred on macOS): use launchctl to set a GUI-wide env var:
+  launchctl setenv OPENAI_API_KEY {{YOUR_OPENAI_API_KEY}}
+  Note: This persists until unset (launchctl unsetenv OPENAI_API_KEY). Prefer the .env file method above.
 
 Notes
 - Deprecation warnings for datetime.utcnow(): These do not block startup but will be addressed by migrating to timezone-aware datetime.now(timezone.utc) throughout. Some modules already use timezone-aware timestamps.
