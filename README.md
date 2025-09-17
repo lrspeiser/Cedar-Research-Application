@@ -113,6 +113,30 @@ Security and troubleshooting
 - If the key is missing or the API fails, the upload still succeeds; verbose logs show [llm-*] lines describing the cause. We do not fallback or fabricate values.
 - Code comments in main.py (search for "LLM classification") point back to this section.
 
+## Tabular import via LLM codegen
+
+If the classification step returns structure=tabular, CedarPy runs a second LLM job to generate Python code that imports the uploaded file into the per-project SQLite database.
+
+What happens
+- We prompt the model with extracted metadata (extension, mime guess, csv dialect, a small snippet) and the target DB path.
+- The model must output a Python function run_import(src_path, sqlite_path, table_name, project_id, branch_id) using ONLY the Python standard library (csv/json/sqlite3/re/io).
+- The generated code is executed in a restricted environment (no network, open() is limited to the uploaded file path, import is allowed only for whitelisted stdlib modules).
+- A branch-aware table is created: id INTEGER PRIMARY KEY AUTOINCREMENT, project_id, branch_id, plus inferred columns. Rows are inserted with project_id and branch_id set to the current context.
+- On success, we create a Dataset entry and show a thread message with the result. All steps are logged with [tabular] or [tabular-error] prefixes.
+
+Configuration
+- CEDARPY_TABULAR_IMPORT: Defaults to 1 (enabled). Set to 0/false to disable the codegen+import step.
+- CEDARPY_TABULAR_MODEL: Optional model name for codegen (defaults to CEDARPY_OPENAI_MODEL or gpt-5).
+- CEDARPY_OPENAI_API_KEY or OPENAI_API_KEY: same key used for classification.
+
+Notes and guardrails
+- No external libraries are permitted; the code must rely on the Python standard library. This avoids environment drift and packaging issues.
+- The execution sandbox blocks writing files except the SQLite database via sqlite3. It also restricts imports to csv/json/sqlite3/re/io/math/typing and replaces builtins.open with a read-only wrapper limited to the uploaded file path.
+- We do not fabricate results. If the model fails or code raises, the UI shows a detailed error and logs are attached to the thread; the file remains available.
+
+Where to look in code
+- main.py: search for "Tabular import via LLM codegen" and _tabular_import_via_llm(). Comments in code link back to this section.
+
 The app injects a small script into every HTML page that:
 - Proxies console.log/info/warn/error
 - Captures window.onerror and unhandledrejection
