@@ -274,47 +274,62 @@ def _preflight_cleanup_existing_server(host: str, desired_port: int, max_wait: f
 def _launch_server_inprocess(host: str, port: int):
     # Run uvicorn in-process so PyInstaller bundles work without relying on -m
     os.environ.setdefault("CEDARPY_OPEN_BROWSER", "0")
-    fastapi_app = None
-    try:
-        from main import app as fastapi_app  # type: ignore
-        print("[cedarqt] imported main.app via normal import")
-    except Exception as e1:
-        print(f"[cedarqt] import main failed: {e1}; trying fallback loader")
+
+    def _load_app_by_name(mod_name: str):
+        try:
+            mod = __import__(mod_name)
+            return getattr(mod, 'app', None)
+        except Exception as e:
+            print(f"[cedarqt] import {mod_name} failed: {e}")
+            return None
+
+    def _load_app_from_candidates(mod_name: str, file_name: str):
         try:
             import importlib.util as _util, sys as _sys, os as _os
             base_dir = _os.path.dirname(_sys.executable) if getattr(_sys, 'frozen', False) else _os.path.dirname(__file__)
             resources_dir = _os.path.abspath(_os.path.join(base_dir, '..', 'Resources'))
             candidates = [
-                _os.path.join(base_dir, 'main.py'),
-                _os.path.join(resources_dir, 'main.py'),
-                _os.path.abspath(_os.path.join(_os.path.dirname(__file__), 'main.py')),
+                _os.path.join(base_dir, file_name),
+                _os.path.join(resources_dir, file_name),
+                _os.path.abspath(_os.path.join(_os.path.dirname(__file__), file_name)),
             ]
-            loaded = False
             for cand in candidates:
                 try:
                     if _os.path.isfile(cand):
-                        spec = _util.spec_from_file_location('main', cand)
+                        spec = _util.spec_from_file_location(mod_name, cand)
                         if spec and spec.loader:
                             mod = _util.module_from_spec(spec)  # type: ignore
                             spec.loader.exec_module(mod)  # type: ignore
-                            fastapi_app = getattr(mod, 'app', None)
-                            if fastapi_app is not None:
-                                print(f"[cedarqt] loaded main.app from {cand}")
-                                loaded = True
-                                break
+                            app_obj = getattr(mod, 'app', None)
+                            if app_obj is not None:
+                                print(f"[cedarqt] loaded {mod_name}.app from {cand}")
+                                return app_obj
                 except Exception as e2:
                     print(f"[cedarqt] fallback load error from {cand}: {e2}")
-            if not loaded:
-                print("[cedarqt] failed to locate main.py in fallback paths")
-                return None, None
-            from uvicorn import Config, Server  # type: ignore
         except Exception as e3:
-            print(f"[cedarqt] failed to import server app via fallback: {e3}")
-            return None, None
+            print(f"[cedarqt] fallback loader init failed: {e3}")
+        return None
+
+    fastapi_app = None
+    # Prefer minimal app when requested
+    use_mini = os.getenv("CEDARPY_MINI", "").strip().lower() in {"1", "true", "yes"}
+    if use_mini:
+        print("[cedarqt] CEDARPY_MINI=1: attempting to load main_mini")
+        fastapi_app = _load_app_by_name('main_mini') or _load_app_from_candidates('main_mini', 'main_mini.py')
+    if fastapi_app is None:
+        # Try full app
+        fastapi_app = _load_app_by_name('main') or _load_app_from_candidates('main', 'main.py')
+    if fastapi_app is None:
+        # As a last resort, try minimal app to at least boot the UI
+        print("[cedarqt] falling back to minimal app")
+        fastapi_app = _load_app_by_name('main_mini') or _load_app_from_candidates('main_mini', 'main_mini.py')
+    if fastapi_app is None:
+        print("[cedarqt] ERROR: could not load any app (main or main_mini)")
+        return None, None
+
     from uvicorn import Config, Server
     log_dir = os.getenv("CEDARPY_LOG_DIR", LOG_DIR_DEFAULT)
     os.makedirs(log_dir, exist_ok=True)
-    server_log_path = os.path.join(log_dir, "uvicorn_from_qt.log")
     # uvicorn logs will go to stdout/stderr; they are captured by our redirected f in _init_logging
     config = Config(app=fastapi_app, host=host, port=port, log_level="info")
     server = Server(config)

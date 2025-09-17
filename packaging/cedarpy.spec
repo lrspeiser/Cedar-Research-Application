@@ -55,16 +55,17 @@ for pkg in [
     except Exception:
         pass
 
-hiddenimports = list(set(hiddenimports + ['main']))
+hiddenimports = list(set(hiddenimports + ['main', 'main_mini']))
 
 # Resolve repo root relative to current working directory when PyInstaller runs
 repo_root = os.path.abspath(os.getcwd())
 
-# Ensure main.py is present as a data file so cedarqt fallback can load it even if hiddenimport resolution fails
-try:
-    datas.append((os.path.join(repo_root, 'main.py'), '.'))
-except Exception:
-    pass
+# Ensure main.py and main_mini.py are present as data files for cedarqt fallback
+for fname in ['main.py', 'main_mini.py']:
+    try:
+        datas.append((os.path.join(repo_root, fname), '.'))
+    except Exception:
+        pass
 
 a = Analysis([
     os.path.join(repo_root, 'cedarqt.py'),
