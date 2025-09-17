@@ -44,6 +44,19 @@ def _init_logging() -> str:
 
 _log_path = _init_logging()
 
+# Force include of backend frameworks in PyInstaller analysis (no-ops at runtime)
+try:
+    import fastapi  # type: ignore
+    import starlette  # type: ignore
+    import pydantic  # type: ignore
+    import anyio  # type: ignore
+    import sqlalchemy  # type: ignore
+    import uvicorn  # type: ignore
+    import websockets  # type: ignore
+    import httpx  # type: ignore
+except Exception:
+    pass
+
 # Single-instance guard using a lock file, with stale-lock recovery (single retry to avoid loops)
 # See README.md for rationale and troubleshooting steps.
 
