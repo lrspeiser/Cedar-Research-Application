@@ -55,7 +55,12 @@ for pkg in [
     except Exception:
         pass
 
-hiddenimports = list(set(hiddenimports + ['main', 'main_mini']))
+# Explicitly include backend framework modules as hidden imports
+_backend_hidden = [
+    'fastapi', 'starlette', 'pydantic', 'pydantic_core', 'typing_extensions',
+    'anyio', 'sqlalchemy', 'uvicorn', 'websockets', 'httpx', 'certifi', 'sniffio', 'h11', 'click'
+]
+hiddenimports = list(set(hiddenimports + ['main', 'main_mini'] + _backend_hidden))
 
 # Resolve repo root relative to current working directory when PyInstaller runs
 repo_root = os.path.abspath(os.getcwd())
