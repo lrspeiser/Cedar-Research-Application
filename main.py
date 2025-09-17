@@ -985,6 +985,33 @@ def layout(title: str, body: str) -> HTMLResponse:
   window.addEventListener('unhandledrejection', function(ev){
     try { var r = ev && ev.reason; base('error', (r && (r.message || r.toString())) || 'unhandledrejection', 'unhandledrejection', { stack: r && r.stack ? String(r.stack) : null }); } catch(e){}
   });
+  // Client-side upload UI instrumentation (logs to console -> forwarded to /api/client-log). See README: Client-side logging.
+  document.addEventListener('DOMContentLoaded', function(){
+    try {
+      var form = document.querySelector('[data-testid=upload-form]');
+      var input = document.querySelector('[data-testid=upload-input]');
+      var button = document.querySelector('[data-testid=upload-submit]');
+      if (input) {
+        input.addEventListener('click', function(){ console.log('[ui] upload input clicked'); });
+        input.addEventListener('change', function(ev){
+          try {
+            var f = (ev && ev.target && ev.target.files && ev.target.files[0]) || null;
+            var name = f ? f.name : '(none)';
+            var size = f ? String(f.size) : '';
+            console.log('[ui] file selected', name, size);
+          } catch(e) { console.error('[ui] file select error', e); }
+        });
+      }
+      if (button) {
+        button.addEventListener('click', function(){ console.log('[ui] upload clicked'); });
+      }
+      if (form) {
+        form.addEventListener('submit', function(){ console.log('[ui] upload submit'); });
+      }
+    } catch(e) {
+      try { base('error', 'upload instrumentation error', 'client-log', { stack: e && e.stack ? String(e.stack) : null }); } catch(_) {}
+    }
+  }, { once: true });
 })();
 </script>
 """
@@ -1187,8 +1214,6 @@ SELECT * FROM demo LIMIT 10;""")
     sql_card = f"""
       <div class=\"card\" style=\"padding:12px\">
         <h3>SQL Console</h3>
-        <div class=\"small muted\">Run SQL against the current database (SQLite by default, or your configured MySQL). Max rows is controlled by CEDARPY_SQL_MAX_ROWS.</div>
-        <pre class=\"small\" style=\"white-space:pre-wrap; background:#f9fafb; padding:8px; border-radius:6px;\">{examples}</pre>
         <form method=\"post\" action=\"/project/{project.id}/sql?branch_id={current.id}\" class=\"inline\" onsubmit=\"return cedarSqlConfirm(this)\"> 
           <textarea name=\"sql\" rows=\"6\" placeholder=\"WRITE SQL HERE\" style=\"width:100%; font-family: ui-monospace, Menlo, Monaco, 'Courier New', monospace;\"></textarea>
           <div style=\"height:8px\"></div>
@@ -1352,7 +1377,7 @@ SELECT * FROM demo LIMIT 10;""")
       <div>Branches: {tabs_html}</div>
 
       <div style=\"margin-top:8px; display:flex; gap:8px; align-items:center\">\n        <form method=\"post\" action=\"/project/{project.id}/delete\" class=\"inline\" onsubmit=\"return confirm('Delete project {escape(project.title)} and all its data?');\">\n          <button type=\"submit\" class=\"secondary\">Delete Project</button>\n        </form>\n      </div>\n      <div class=\"row\" style='margin-top:8px'>
-        <div class='card' style='flex:2'>
+        <div class='card' style='flex:1 1 100%'>
           <div style='margin-bottom:8px'>{thr_tabs_html}</div>
           <div style='margin:8px 0'>
             {left_details}
@@ -1363,45 +1388,10 @@ SELECT * FROM demo LIMIT 10;""")
           {chat_form}
         </div
 
-        <div style=\"flex:1; display:flex; flex-direction:column; gap:8px\">\n          <div class=\"card\" style=\"max-height:220px; overflow:auto; padding:12px\">\n            <h3 style='margin-bottom:6px'>Files</h3>\n            {file_list_html}\n          </div>\n          <div class=\"card\" style='padding:12px'>\n            <h3 style='margin-bottom:6px'>Upload a file</h3>\n            <form method=\"post\" action=\"/project/{project.id}/files/upload?branch_id={current.id}\" enctype=\"multipart/form-data\" data-testid=\"upload-form\">\n              <input type=\"file\" name=\"file\" required data-testid=\"upload-input\" />\n              <div style=\"height:6px\"></div>\n              <div class=\"small muted\">LLM classification runs automatically on upload. See README for API key setup.</div>\n              <div style=\"height:6px\"></div>\n              <button type=\"submit\" data-testid=\"upload-submit\">Upload</button>\n            </form>\n          </div>\n          {sql_card}\n        </div>
+        <div style=\"flex:1; display:flex; flex-direction:column; gap:8px\">\n          <div class=\"card\" style='padding:12px'>\n            <h3 style='margin-bottom:6px'>Upload a file</h3>\n            <form method=\"post\" action=\"/project/{project.id}/files/upload?branch_id={current.id}\" enctype=\"multipart/form-data\" data-testid=\"upload-form\">\n              <input type=\"file\" name=\"file\" required data-testid=\"upload-input\" />\n              <div style=\"height:6px\"></div>\n              <div class=\"small muted\">LLM classification runs automatically on upload. See README for API key setup.</div>\n              <div style=\"height:6px\"></div>\n              <button type=\"submit\" data-testid=\"upload-submit\">Upload</button>\n            </form>\n          </div>\n          <div class=\"card\" style=\"max-height:220px; overflow:auto; padding:12px\">\n            <h3 style='margin-bottom:6px'>Files</h3>\n            {file_list_html}\n          </div>\n          {sql_card}\n          <div class=\"card\" style=\"padding:12px\">\n            <h3>Databases</h3>\n            <table class=\"table\">\n              <thead><tr><th>Name</th><th>Branch</th><th>Created</th></tr></thead>\n              <tbody>{dataset_tbody}</tbody>\n            </table>\n          </div>\n        </div>
       </div>
 
-      <div class=\"row\">
-        <div class=\"card\" style=\"flex:1\">
-          <h3>Chat / Threads</h3>
-          <table class=\"table\">
-            <thead><tr><th>Title</th><th>Branch</th><th>Created</th></tr></thead>
-            <tbody>{thread_tbody}</tbody>
-          </table>
-        </div>
-        <div class=\"card\" style=\"flex:1\">
-          <h3>Databases</h3>
-          <table class=\"table\">
-            <thead><tr><th>Name</th><th>Branch</th><th>Created</th></tr></thead>
-            <tbody>{dataset_tbody}</tbody>
-          </table>
-        </div>
-      </div>
 
-      <div class=\"row\">
-        <div class=\"card\" style=\"flex:1\">
-          <h3>Branch Ops</h3>
-          <div class=\"small muted\">Branch-aware SQL is active. Use these actions to manage data.</div>
-          <form method=\"post\" action=\"/project/{project.id}/merge_to_main?branch_id={current.id}\" class=\"inline\" style=\"margin-bottom:6px\">
-            <button type=\"submit\">Merge Branch → Main</button>
-          </form>
-          <form method=\"post\" action=\"/project/{project.id}/files/delete_all?branch_id={current.id}\" class=\"inline\" style=\"margin-bottom:6px\">
-            <button type=\"submit\" class=\"secondary\" onclick=\"return confirm('Delete all files in this branch?');\">Delete All Files (this branch)</button>
-          </form>
-          <h4>Make Table Branch-aware (SQLite)</h4>
-          <div class=\"small muted\">Adds project_id and branch_id, moving existing rows to Main.</div>
-          <form method=\"post\" action=\"/project/{project.id}/sql/make_branch_aware?branch_id={current.id}\" class=\"inline\">
-            <input type=\"text\" name=\"table\" placeholder=\"demo\" required />
-            <div style=\"height:6px\"></div>
-            <button type=\"submit\">Convert Table</button>
-          </form>
-        </div>
-      </div>
     """
 
 # ----------------------------------------------------------------------------------
@@ -3594,6 +3584,12 @@ def upload_file(project_id: int, request: Request, file: UploadFile = File(...),
     os.makedirs(project_dir, exist_ok=True)
 
     original_name = file.filename or "upload.bin"
+    # Verbose request logging for uploads; see README (Client-side logging)
+    try:
+        host = request.client.host if request and request.client else "?"
+        print(f"[upload-api] from={host} project_id={project.id} branch={branch.name} filename={original_name} ctype={getattr(file, 'content_type', '')}")
+    except Exception:
+        pass
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     safe_base = os.path.basename(original_name)
     storage_name = f"{ts}__{safe_base}"
@@ -3605,6 +3601,11 @@ def upload_file(project_id: int, request: Request, file: UploadFile = File(...),
     size = os.path.getsize(disk_path)
     mime, _ = mimetypes.guess_type(original_name)
     ftype = file_extension_to_type(original_name)
+
+    try:
+        print(f"[upload-api] saved project_id={project.id} branch={branch.name} path={disk_path} size={size} mime={mime or file.content_type or ''} ftype={ftype}")
+    except Exception:
+        pass
 
     meta = interpret_file(disk_path, original_name)
 
@@ -3658,12 +3659,20 @@ def upload_file(project_id: int, request: Request, file: UploadFile = File(...),
             record.ai_category = ai.get("ai_category")
             record.ai_processing = False
             db.commit(); db.refresh(record)
+            try:
+                print(f"[upload-api] classified structure={record.structure or ''} ai_title={(record.ai_title or '')[:80]}")
+            except Exception:
+                pass
             # Persist assistant message with result
             tm2 = ThreadMessage(project_id=project.id, branch_id=branch.id, thread_id=thr.id, role="assistant", display_title="File analyzed", content=json.dumps(ai), payload_json=ai)
             db.add(tm2); db.commit()
         else:
             record.ai_processing = False
             db.commit()
+            try:
+                print("[upload-api] classification skipped (disabled or missing key)")
+            except Exception:
+                pass
             tm2 = ThreadMessage(project_id=project.id, branch_id=branch.id, thread_id=thr.id, role="assistant", display_title="File analysis skipped", content="LLM classification disabled or missing key")
             db.add(tm2); db.commit()
     except Exception as e:
