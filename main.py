@@ -935,7 +935,7 @@ def _llm_reachability(ttl_seconds: int = 300) -> tuple[bool, str, str]:
         return False, f"{type(e).__name__}", model or ""
 
 
-def layout(title: str, body: str) -> HTMLResponse:
+def layout(title: str, body: str, header_label: Optional[str] = None, header_link: Optional[str] = None) -> HTMLResponse:
     # LLM status for header (best-effort; cached)
     try:
         ready, reason, model = _llm_reachability()
@@ -945,6 +945,19 @@ def layout(title: str, body: str) -> HTMLResponse:
             llm_status = f" <span class='pill' style='background:#fef2f2; color:#991b1b' title='LLM unavailable'>LLM unavailable ({escape(reason)})</span>"
     except Exception:
         llm_status = ""
+
+    # Build header breadcrumb/label (optional)
+    try:
+        if header_label:
+            lbl = escape(header_label)
+            if header_link:
+                header_html = f"<a href='{escape(header_link)}' style='font-weight:600'>{lbl}</a>"
+            else:
+                header_html = f"<span style='font-weight:600'>{lbl}</span>"
+        else:
+            header_html = ""
+    except Exception:
+        header_html = ""
 
     # Inject a lightweight client logging hook so console messages and JS errors are POSTed to the server.
     # See README.md (section "Client-side logging") for details and troubleshooting.
@@ -1051,7 +1064,7 @@ def layout(title: str, body: str) -> HTMLResponse:
 <body>
   <header>
     <div class="topbar">
-      <div><strong>Cedar</strong></div>
+      <div><strong>Cedar</strong> <span class='muted'>•</span> {header_info}</div>
       <div style=\"margin-left:auto\"><a href=\"/\">Projects</a> | <a href=\"/shell\">Shell</a> | <a href=\"/merge\">Merge</a> | <a href=\"/log\">Log</a>{llm_status}</div>
     </div>
   </header>
@@ -1063,7 +1076,7 @@ def layout(title: str, body: str) -> HTMLResponse:
 """
     # Render header status
     try:
-        html_doc = html_doc.format(llm_status=llm_status)
+        html_doc = html_doc.format(llm_status=llm_status, header_info=header_html)
     except Exception:
         pass
     return HTMLResponse(html_doc)
@@ -3141,7 +3154,7 @@ def _execute_sql_with_undo(db: Session, sql_text: str, project_id: int, branch_i
 def home(request: Request, db: Session = Depends(get_registry_db)):
     # Central registry for list of projects
     projects = db.query(Project).order_by(Project.created_at.desc()).all()
-    return layout("Cedar", projects_list_html(projects))
+    return layout("Cedar", projects_list_html(projects), header_label="All Projects")
 
 
 # ----------------------------------------------------------------------------------
@@ -3280,7 +3293,7 @@ def merge_project_view(project_id: int, db: Session = Depends(get_project_db)):
         {''.join(cards)}
       </div>
     """
-    return layout(f"Merge • {project.title}", body)
+    return layout(f"Merge • {project.title}", body, header_label=project.title, header_link=f"/project/{project.id}?branch_id={main_b.id}")
 
 
 @app.post("/projects/create")
@@ -3381,7 +3394,7 @@ def view_project(project_id: int, branch_id: Optional[int] = None, msg: Optional
     except Exception:
         selected_thread = None
 
-    return layout(project.title, project_page_html(project, branches, current, files, threads, datasets, selected_file=selected_file, selected_thread=selected_thread, thread_messages=thread_messages, msg=msg))
+    return layout(project.title, project_page_html(project, branches, current, files, threads, datasets, selected_file=selected_file, selected_thread=selected_thread, thread_messages=thread_messages, msg=msg), header_label=project.title, header_link=f"/project/{project.id}?branch_id={current.id}")
 
 
 @app.post("/project/{project_id}/branches/create")
