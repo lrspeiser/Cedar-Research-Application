@@ -1252,6 +1252,18 @@ def layout(title: str, body: str, header_label: Optional[str] = None, header_lin
       var form = document.querySelector('[data-testid=upload-form]');
       var input = document.querySelector('[data-testid=upload-input]');
       var button = document.querySelector('[data-testid=upload-submit]');
+      function setUploadingState(){
+        try {
+          if (!button) return;
+          // Preserve original text for potential future restore (not used currently)
+          if (!button.getAttribute('data-original-text')) {
+            button.setAttribute('data-original-text', button.textContent || 'Upload');
+          }
+          button.disabled = true;
+          button.setAttribute('aria-busy', 'true');
+          button.innerHTML = "<span class='spinner' style=\"margin-right:6px\"></span> Uploading…";
+        } catch(e) { try { console.error('[ui] setUploadingState error', e); } catch(_) {} }
+      }
       if (input) {
         input.addEventListener('click', function(){ console.log('[ui] upload input clicked'); });
         input.addEventListener('change', function(ev){
@@ -1264,10 +1276,19 @@ def layout(title: str, body: str, header_label: Optional[str] = None, header_lin
         });
       }
       if (button) {
-        button.addEventListener('click', function(){ console.log('[ui] upload clicked'); });
+        button.addEventListener('click', function(){
+          console.log('[ui] upload clicked');
+          try {
+            if (input && input.files && input.files.length > 0) { setUploadingState(); }
+          } catch(e) {}
+        });
       }
       if (form) {
-        form.addEventListener('submit', function(){ console.log('[ui] upload submit'); });
+        form.addEventListener('submit', function(){
+          console.log('[ui] upload submit');
+          // Only fires if required fields are satisfied; safe to show uploading state now.
+          setUploadingState();
+        });
       }
     } catch(e) {
       try { base('error', 'upload instrumentation error', 'client-log', { stack: e && e.stack ? String(e.stack) : null }); } catch(_) {}
@@ -1620,10 +1641,12 @@ SELECT * FROM demo LIMIT 10;""")
     msgs_html = "".join(msg_rows)
 
     # Chat form (LLM keys required; see README)
+    # Only include hidden ids when present to avoid posting empty strings, which cause int parsing errors.
+    hidden_thread = f"<input type='hidden' name='thread_id' value='{selected_thread.id}' />" if selected_thread else ""
+    hidden_file = f"<input type='hidden' name='file_id' value='{selected_file.id}' />" if selected_file else ""
     chat_form = f"""
       <form method='post' action='/project/{project.id}/threads/chat?branch_id={current.id}' style='margin-top:8px'>
-        <input type='hidden' name='thread_id' value='{(selected_thread.id if selected_thread else '')}' />
-        <input type='hidden' name='file_id' value='{(selected_file.id if selected_file else '')}' />
+        {hidden_thread}{hidden_file}
         <textarea name='content' rows='3' placeholder='Ask a question about this file/context...' style='width:100%; font-family: ui-monospace, Menlo, monospace;'></textarea>
         <div style='height:6px'></div>
         <button type='submit'>Submit</button>
@@ -3855,7 +3878,7 @@ def create_thread(project_id: int, request: Request, title: Optional[str] = Form
 @app.post("/project/{project_id}/threads/chat")
 # Submit a chat message in the selected thread; includes file metadata context to LLM.
 # Requires OpenAI API key; see README for setup. Verbose errors are surfaced to the UI/log.
-def thread_chat(project_id: int, request: Request, content: str = Form(...), thread_id: Optional[int] = Form(None), file_id: Optional[int] = Form(None), db: Session = Depends(get_project_db)):
+def thread_chat(project_id: int, request: Request, content: str = Form(...), thread_id: Optional[str] = Form(None), file_id: Optional[str] = Form(None), db: Session = Depends(get_project_db)):
     ensure_project_initialized(project_id)
     # derive branch context
     branch_q = request.query_params.get("branch_id")
@@ -3870,11 +3893,25 @@ def thread_chat(project_id: int, request: Request, content: str = Form(...), thr
 
     branch = current_branch(db, project.id, branch_q)
 
+    # Parse optional ids safely (empty strings -> None)
+    thr_id_val: Optional[int] = None
+    if thread_id is not None and str(thread_id).strip() != "":
+        try:
+            thr_id_val = int(str(thread_id).strip())
+        except Exception:
+            thr_id_val = None
+    file_id_val: Optional[int] = None
+    if file_id is not None and str(file_id).strip() != "":
+        try:
+            file_id_val = int(str(file_id).strip())
+        except Exception:
+            file_id_val = None
+
     # Resolve thread; if missing, auto-create a default one
     thr = None
-    if thread_id:
+    if thr_id_val:
         try:
-            thr = db.query(Thread).filter(Thread.id == int(thread_id), Thread.project_id == project.id).first()
+            thr = db.query(Thread).filter(Thread.id == thr_id_val, Thread.project_id == project.id).first()
         except Exception:
             thr = None
     if not thr:
@@ -3888,9 +3925,9 @@ def thread_chat(project_id: int, request: Request, content: str = Form(...), thr
 
     # Build file metadata context if provided
     fctx = None
-    if file_id:
+    if file_id_val:
         try:
-            fctx = db.query(FileEntry).filter(FileEntry.id == int(file_id), FileEntry.project_id == project.id).first()
+            fctx = db.query(FileEntry).filter(FileEntry.id == file_id_val, FileEntry.project_id == project.id).first()
         except Exception:
             fctx = None
 
