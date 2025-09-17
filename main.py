@@ -124,18 +124,35 @@ os.makedirs(os.path.dirname(DEFAULT_SQLITE_PATH), exist_ok=True)
 try:
     candidates: List[str] = [os.path.join(DATA_DIR, '.env')]
     # If running from an app bundle or PyInstaller, try Resources or _MEIPASS
+    res_env_path = None
     try:
         if getattr(sys, 'frozen', False):
             app_dir = os.path.dirname(sys.executable)
             res_dir = os.path.abspath(os.path.join(app_dir, '..', 'Resources'))
-            candidates.append(os.path.join(res_dir, '.env'))
+            res_env_path = os.path.join(res_dir, '.env')
+            candidates.append(res_env_path)
         else:
             # PyInstaller one-file (_MEIPASS)
             meipass = getattr(sys, '_MEIPASS', None)
             if meipass:
-                candidates.append(os.path.join(meipass, '.env'))
+                res_env_path = os.path.join(meipass, '.env')
+                candidates.append(res_env_path)
+    except Exception:
+        res_env_path = None
+        pass
+    # FIRST: if DATA_DIR/.env is missing but Resources/.env exists, seed user data .env from Resources
+    try:
+        data_env = os.path.join(DATA_DIR, '.env')
+        if res_env_path and os.path.isfile(res_env_path) and not os.path.isfile(data_env):
+            os.makedirs(DATA_DIR, exist_ok=True)
+            shutil.copyfile(res_env_path, data_env)
+            try:
+                print(f"[env] seeded {data_env} from app Resources .env (keys masked)")
+            except Exception:
+                pass
     except Exception:
         pass
+    # THEN: load .env files (DATA_DIR takes precedence by being first)
     _load_dotenv_files(candidates)
 except Exception:
     pass
@@ -1109,6 +1126,49 @@ def current_branch(db: Session, project_id: int, branch_id: Optional[int]) -> Br
 
 app = FastAPI(title="Cedar")
 
+
+@app.get("/settings", response_class=HTMLResponse)
+def settings_page(msg: Optional[str] = None):
+    # Do not display the actual key; show presence only
+    key_present = bool(_env_get("CEDARPY_OPENAI_API_KEY") or _env_get("OPENAI_API_KEY"))
+    model = _env_get("CEDARPY_OPENAI_MODEL") or _env_get("OPENAI_API_KEY_MODEL") or _env_get("CEDARPY_OPENAI_MODEL") or "gpt-5"
+    banner = f"<div class='notice'>{html.escape(msg)}</div>" if msg else ""
+    body = f"""
+    <h1>Settings</h1>
+    {banner}
+    <p class='muted'>LLM keys are read from <code>{html.escape(SETTINGS_PATH)}</code>. We will not display keys here.</p>
+    <p>OpenAI key status: <strong>{'Present' if key_present else 'Missing'}</strong></p>
+    <form method='post' action='/settings/save'>
+      <div>
+        <label>OpenAI API Key</label><br/>
+        <input type='password' name='openai_key' placeholder='sk-...' style='width:420px' autocomplete='off' />
+      </div>
+      <div style='margin-top:8px;'>
+        <label>Model (optional)</label><br/>
+        <input type='text' name='model' value='{html.escape(str(model))}' style='width:420px' />
+      </div>
+      <div style='margin-top:12px;'>
+        <button type='submit'>Save</button>
+      </div>
+    </form>
+    """
+    return layout("Settings", body)
+
+
+@app.post("/settings/save")
+def settings_save(openai_key: str = Form("") , model: str = Form("")):
+    # Persist to ~/CedarPyData/.env; do not print the key
+    updates: Dict[str, str] = {}
+    if openai_key and str(openai_key).strip():
+        updates["OPENAI_API_KEY"] = str(openai_key).strip()
+    if model and str(model).strip():
+        updates["CEDARPY_OPENAI_MODEL"] = str(model).strip()
+    if updates:
+        _env_set_many(updates)
+        return RedirectResponse("/settings?msg=Saved", status_code=303)
+    else:
+        return RedirectResponse("/settings?msg=No+changes", status_code=303)
+
 # Serve uploaded files for convenience
 # Serve uploaded files (legacy path no longer used). We mount a dynamic per-project files app below.
 # See PROJECT_SEPARATION_README.md
@@ -1141,6 +1201,72 @@ def serve_project_upload(project_id: int, path: str):
 # ----------------------------------------------------------------------------------
 # HTML helpers (all inline; no external templates)
 # ----------------------------------------------------------------------------------
+
+SETTINGS_PATH = os.path.join(DATA_DIR, ".env")
+
+
+def _env_get(k: str) -> Optional[str]:
+    try:
+        v = os.getenv(k)
+        if v is None and os.path.isfile(SETTINGS_PATH):
+            # Fallback: try file parse
+            with open(SETTINGS_PATH, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    s = line.strip()
+                    if not s or s.startswith("#") or "=" not in s:
+                        continue
+                    kk, vv = s.split("=", 1)
+                    if kk.strip() == k:
+                        return vv.strip().strip('"').strip("'")
+        return v
+    except Exception:
+        return None
+
+
+def _env_set_many(updates: Dict[str, str]) -> None:
+    """Update ~/CedarPyData/.env with provided key=value pairs, preserving other lines.
+    Keys are also set in-process via os.environ. We avoid printing secret values.
+    See README: Settings and Postmortem #7 for details.
+    """
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        # Read existing lines
+        existing: Dict[str, str] = {}
+        order: list[str] = []
+        if os.path.isfile(SETTINGS_PATH):
+            with open(SETTINGS_PATH, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    if "=" in line and not line.strip().startswith("#"):
+                        k, v = line.split("=", 1)
+                        k = k.strip()
+                        if k and k not in existing:
+                            existing[k] = v.rstrip("\n")
+                            order.append(k)
+        # Apply updates
+        for k, v in updates.items():
+            existing[k] = v
+            if k not in order:
+                order.append(k)
+            # set in-process
+            try:
+                os.environ[k] = v
+            except Exception:
+                pass
+        # Write back, one VAR=VALUE per line
+        with open(SETTINGS_PATH, "w", encoding="utf-8", errors="ignore") as f:
+            for k in order:
+                val = existing.get(k)
+                if val is None:
+                    continue
+                # Write raw; we do not quote to avoid surprises
+                f.write(f"{k}={val}\n")
+        # Invalidate LLM reachability cache so header updates quickly
+        try:
+            _LLM_READY_CACHE.update({"ts": 0.0})
+        except Exception:
+            pass
+    except Exception:
+        pass
 
 # Cached LLM reachability indicator for UI (TTL seconds)
 _LLM_READY_CACHE = {"ts": 0.0, "ready": False, "reason": "init", "model": None}
@@ -1230,7 +1356,8 @@ def layout(title: str, body: str, header_label: Optional[str] = None, header_lin
         f"<a href='/shell{nav_qs}'>Shell</a> | "
         f"<a href='/merge{nav_qs}'>Merge</a> | "
         f"<a href='/changelog{nav_qs}'>Changelog</a> | "
-        f"<a href='/log{nav_qs}'>Log</a>"
+        f"<a href='/log{nav_qs}'>Log</a> | "
+        f"<a href='/settings'>Settings</a>"
     )
 
     # Inject a lightweight client logging hook so console messages and JS errors are POSTed to the server.
