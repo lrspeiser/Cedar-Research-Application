@@ -1168,7 +1168,7 @@ def _llm_reachability(ttl_seconds: int = 300) -> tuple[bool, str, str]:
         return False, f"{type(e).__name__}", model or ""
 
 
-def layout(title: str, body: str, header_label: Optional[str] = None, header_link: Optional[str] = None) -> HTMLResponse:
+def layout(title: str, body: str, header_label: Optional[str] = None, header_link: Optional[str] = None, nav_query: Optional[str] = None) -> HTMLResponse:
     # LLM status for header (best-effort; cached)
     try:
         ready, reason, model = _llm_reachability()
@@ -1192,6 +1192,19 @@ def layout(title: str, body: str, header_label: Optional[str] = None, header_lin
         header_info = header_html  # alias used in HTML template f-string
     except Exception:
         header_html = ""
+
+    # Build right-side navigation with optional project context (propagates ?project_id=&branch_id=)
+    try:
+        nav_qs = ("?" + nav_query.strip()) if (nav_query and nav_query.strip()) else ""
+    except Exception:
+        nav_qs = ""
+    nav_html = (
+        f"<a href='/'">Projects</a> | "
+        f"<a href='/shell{nav_qs}'>Shell</a> | "
+        f"<a href='/merge{nav_qs}'>Merge</a> | "
+        f"<a href='/changelog{nav_qs}'>Changelog</a> | "
+        f"<a href='/log{nav_qs}'>Log</a>"
+    )
         header_info = ""
 
     # Inject a lightweight client logging hook so console messages and JS errors are POSTed to the server.
@@ -1300,7 +1313,7 @@ def layout(title: str, body: str, header_label: Optional[str] = None, header_lin
   <header>
     <div class="topbar">
       <div><strong>Cedar</strong> <span class='muted'>•</span> {header_info}</div>
-      <div style=\"margin-left:auto\"><a href=\"/\">Projects</a> | <a href=\"/shell\">Shell</a> | <a href=\"/merge\">Merge</a> | <a href=\"/changelog\">Changelog</a> | <a href=\"/log\">Log</a>{llm_status}</div>
+      <div style=\"margin-left:auto\">{nav_html}{llm_status}</div>
     </div>
   </header>
   <main>
@@ -1311,7 +1324,7 @@ def layout(title: str, body: str, header_label: Optional[str] = None, header_lin
 """
     # Render header status
     try:
-        html_doc = html_doc.format(llm_status=llm_status, header_info=header_info)
+        html_doc = html_doc.format(llm_status=llm_status, header_info=header_html, nav_html=nav_html)
     except Exception:
         pass
     return HTMLResponse(html_doc)
@@ -1865,13 +1878,49 @@ class ShellRunRequest(BaseModel):
 
 @app.get("/shell", response_class=HTMLResponse)
 def shell_ui(request: Request):
+    # Optional project context (for header + nav context)
+    header_lbl = None
+    header_lnk = None
+    nav_q = None
+    try:
+        pid_q = request.query_params.get("project_id")
+        bid_q = request.query_params.get("branch_id")
+        if pid_q:
+            pid = int(pid_q)
+            # Resolve project title from registry
+            try:
+                with RegistrySessionLocal() as reg:
+                    p = reg.query(Project).filter(Project.id == pid).first()
+                    if p:
+                        header_lbl = p.title
+            except Exception:
+                pass
+            # Determine branch for link (prefer query, else Main)
+            bid = None
+            try:
+                bid = int(bid_q) if bid_q is not None else None
+            except Exception:
+                bid = None
+            if bid is None:
+                try:
+                    SessionLocal = sessionmaker(bind=_get_project_engine(pid), autoflush=False, autocommit=False, future=True)
+                    with SessionLocal() as pdb:
+                        mb = ensure_main_branch(pdb, pid)
+                        bid = mb.id
+                except Exception:
+                    bid = 1
+            header_lnk = f"/project/{pid}?branch_id={bid}"
+            nav_q = f"project_id={pid}&branch_id={bid}"
+    except Exception:
+        pass
+
     if not SHELL_API_ENABLED:
         body = """
         <h1>Shell</h1>
         <p class='muted'>The Shell feature is disabled by configuration.</p>
         <p>To enable, set <code>CEDARPY_SHELL_API_ENABLED=1</code>. Optionally set <code>CEDARPY_SHELL_API_TOKEN</code> for API access. See README for details.</p>
         """
-        return layout("Shell – disabled", body)
+        return layout("Shell – disabled", body, header_label=header_lbl, header_link=header_lnk, nav_query=nav_q)
 
     default_shell = html.escape(os.environ.get("SHELL", "/bin/zsh"))
     default_data_dir = html.escape(SHELL_DEFAULT_WORKDIR)
@@ -2109,7 +2158,7 @@ def shell_ui(request: Request):
     """
     body = body.replace("__DEFAULT_SHELL__", default_shell)
     body = body.replace("__DATA_DIR__", default_data_dir)
-    return layout("Shell", body)
+    return layout("Shell", body, header_label=header_lbl, header_link=header_lnk, nav_query=nav_q)
 
 
 @app.post("/api/shell/run")
@@ -3397,7 +3446,7 @@ def home(request: Request, db: Session = Depends(get_registry_db)):
 # ----------------------------------------------------------------------------------
 
 @app.get("/log", response_class=HTMLResponse)
-def view_logs():
+def view_logs(project_id: Optional[int] = None, branch_id: Optional[int] = None):
     # Render recent client logs (newest last for readability)
     rows = []
     try:
@@ -3425,7 +3474,38 @@ def view_logs():
         </table>
       </div>
     """
-    return layout("Log", body)
+    # Optional project context in header
+    header_lbl = None
+    header_lnk = None
+    nav_q = None
+    try:
+        if project_id is not None:
+            pid = int(project_id)
+            try:
+                with RegistrySessionLocal() as reg:
+                    p = reg.query(Project).filter(Project.id == pid).first()
+                    if p:
+                        header_lbl = p.title
+            except Exception:
+                pass
+            bid = None
+            try:
+                bid = int(branch_id) if branch_id is not None else None
+            except Exception:
+                bid = None
+            if bid is None:
+                try:
+                    SessionLocal = sessionmaker(bind=_get_project_engine(pid), autoflush=False, autocommit=False, future=True)
+                    with SessionLocal() as pdb:
+                        mb = ensure_main_branch(pdb, pid)
+                        bid = mb.id
+                except Exception:
+                    bid = 1
+            header_lnk = f"/project/{pid}?branch_id={bid}"
+            nav_q = f"project_id={pid}&branch_id={bid}"
+    except Exception:
+        pass
+    return layout("Log", body, header_label=header_lbl, header_link=header_lnk, nav_query=nav_q)
 
 
 @app.get("/changelog", response_class=HTMLResponse)
@@ -3612,7 +3692,7 @@ def merge_project_view(project_id: int, db: Session = Depends(get_project_db)):
         {''.join(cards)}
       </div>
     """
-    return layout(f"Merge • {project.title}", body, header_label=project.title, header_link=f"/project/{project.id}?branch_id={main_b.id}")
+    return layout(f"Merge • {project.title}", body, header_label=project.title, header_link=f"/project/{project.id}?branch_id={main_b.id}", nav_query=f"project_id={project.id}&branch_id={main_b.id}")
 
 
 @app.post("/projects/create")
@@ -3713,7 +3793,7 @@ def view_project(project_id: int, branch_id: Optional[int] = None, msg: Optional
     except Exception:
         selected_thread = None
 
-    return layout(project.title, project_page_html(project, branches, current, files, threads, datasets, selected_file=selected_file, selected_thread=selected_thread, thread_messages=thread_messages, msg=msg), header_label=project.title, header_link=f"/project/{project.id}?branch_id={current.id}")
+    return layout(project.title, project_page_html(project, branches, current, files, threads, datasets, selected_file=selected_file, selected_thread=selected_thread, thread_messages=thread_messages, msg=msg), header_label=project.title, header_link=f"/project/{project.id}?branch_id={current.id}", nav_query=f"project_id={project.id}&branch_id={current.id}")
 
 
 @app.post("/project/{project_id}/branches/create")
