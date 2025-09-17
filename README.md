@@ -292,6 +292,29 @@ Notes
 
 ## Postmortem: startup failures and fixes
 
+Recovery Playbook (documented attempts)
+- Attempt A: Full Qt app DMG (CedarPy.dmg) — crashed
+  - Symptom: Popup “Server failed to start…”, cedarqt logs initially showed SyntaxError (unterminated string literal). Fix applied: corrected header nav f-string (nav_html). Rebuilt.
+  - Then: “No module named fastapi” in bundle when fallback loader imported main. Fix applied: updated cedarpy.spec to include FastAPI/Starlette/SQLAlchemy/uvicorn/websockets/httpx deps. Rebuilt.
+  - Then: App still crashed silently on some environments. Moved to isolation.
+
+- Attempt B: Server-only DMG (CedarPyServer.dmg) — backend only, no Qt
+  - Purpose: Verify FastAPI server runs cleanly under PyInstaller without Qt. This isolates whether crashes are frontend-related.
+  - Build: bash packaging/build_server_dmg.sh
+  - Run: Mount DMG, copy CedarPyServer.app to /Applications, remove quarantine, open.
+  - Outcome: Use this as a baseline — if this fails, investigate server imports and data dirs under ~/CedarPyData.
+
+- Attempt C: Minimal packaged server inside Qt (CEDARPY_MINI=1)
+  - Purpose: Remove most frontend and app logic while keeping Qt wrapper. Adds main_mini.py (serves just “Cedar (Mini)”).
+  - How to run: CEDARPY_MINI=1 open /Applications/CedarPy.app
+  - If this works: gradually re-enable features (Shell API, project pages, LLM) to find the crashing layer.
+  - If this fails: focus on Qt/WebEngine init and bundle layout issues (e.g., Resources path, permissions, sandbox).
+
+- What to record each time:
+  - The exact DMG/build used and environment variables.
+  - The most recent cedarqt_*.log and any uvicorn_from_qt.log contents.
+  - Any SyntaxError/import errors, and the component where we applied fixes.
+
 1) SyntaxError in main.py (unexpected character after line continuation) around projects list HTML
 - Mistake: Inline HTML f-string formatting mixed with escaping caused Python to parse an invalid continuation sequence inside the HTML block.
 - Fix: Rewrote the HTML string sections to use valid Python f-strings and explicit formatting. For datetime rendering we now use f"{obj.created_at:%Y-%m-%d %H:%M:%S} UTC" and ensured the blocks are triple-quoted without stray continuations.
