@@ -321,6 +321,18 @@ Notes
 - Fix/Docs: Documented removing quarantine attributes with xattr -dr com.apple.quarantine for the installed .app before first run.
 - Verification: After removing quarantine, the app launched and connected to http://127.0.0.1:PORT.
 
+6) Packaged import SyntaxError (unterminated string literal) in main.py (header nav)
+- Symptom: App shows “Server failed to start on 127.0.0.1:8000”. cedarqt_*.log contains lines like:
+  - "unterminated string literal (detected at line NNNN) (main.py, line NNNN)"
+- Root cause: A malformed header navigation f-string (nav_html) introduced a stray quote in the anchor markup which was embedded in a large triple-quoted block; in the packaged environment this produced a parse error when importing main.py.
+- Fix: Corrected the nav_html construction to ensure balanced quotes and safe anchor text. The header nav now derives project context from the header link if nav_query is not provided, and builds links as plain strings without stray quoting.
+- Verification: Rebuilt the DMG (packaging/build_macos_dmg.sh), mounted and launched CedarPy.app; logs no longer show the SyntaxError and the server starts.
+- How to diagnose quickly if it happens again:
+  1) Open ~/Library/Logs/CedarPy and inspect the newest cedarqt_*.log for "unterminated string literal".
+  2) If present, inspect the packaged file to locate the offending lines:
+     - sed -n '1200,1360p' "/Volumes/CedarPy/CedarPy.app/Contents/Resources/main.py"
+  3) Rebuild after fixing quoting issues in nav or inline HTML f-strings.
+
 Notes
 - Deprecation warnings for datetime.utcnow(): These do not block startup but will be addressed by migrating to timezone-aware datetime.now(timezone.utc) throughout. Some modules already use timezone-aware timestamps.
 
