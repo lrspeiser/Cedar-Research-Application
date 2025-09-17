@@ -508,23 +508,6 @@ def main():
     except Exception:
         pass
 
-    def _sig_handler(signum, frame):
-        try:
-            print(f"[cedarqt] signal {signum} received; quitting")
-        except Exception:
-            pass
-        try:
-            _graceful_shutdown()
-        finally:
-            try:
-                app.quit()
-            except Exception:
-                os._exit(0)
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        try:
-            signal.signal(sig, _sig_handler)
-        except Exception:
-            pass
 
     # Optional in-process UI harness for end-to-end testing of the embedded browser.
     # Set CEDARPY_QT_HARNESS=1 to enable. Provide CEDARPY_QT_TEST_FILE for the file to upload.
