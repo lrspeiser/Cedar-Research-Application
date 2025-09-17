@@ -1224,7 +1224,7 @@ def layout(title: str, body: str, header_label: Optional[str] = None, header_lin
         nav_qs = ""
 
     nav_html = (
-        f"<a href='/'">Projects</a> | "
+        f"<a href='/'>&#8203;Projects</a> | "
         f"<a href='/shell{nav_qs}'>Shell</a> | "
         f"<a href='/merge{nav_qs}'>Merge</a> | "
         f"<a href='/changelog{nav_qs}'>Changelog</a> | "
