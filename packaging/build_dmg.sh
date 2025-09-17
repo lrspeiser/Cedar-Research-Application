@@ -37,7 +37,9 @@ pushd "$ROOT_DIR" >/dev/null
   --workpath "$BUILD" \
   --specpath "$BUILD" \
   --hidden-import main \
+  --hidden-import main_mini \
   --add-data "$ROOT_DIR/main.py:." \
+  --add-data "$ROOT_DIR/main_mini.py:." \
   run_cedarpy.py
 popd >/dev/null
 

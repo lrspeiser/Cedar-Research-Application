@@ -6,6 +6,7 @@ OPTIONS = {
     'argv_emulation': False,
     'includes': [
         'main',
+        'main_mini',
         'sqlite3',
         'typing_extensions', 
         'certifi',
@@ -44,6 +45,6 @@ OPTIONS = {
 setup(
     app=APP,
     options={'py2app': OPTIONS},
-    data_files=['main.py', 'PROJECT_SEPARATION_README.md'],
+    data_files=['main.py', 'main_mini.py', 'PROJECT_SEPARATION_README.md'],
     setup_requires=['py2app'],
 )

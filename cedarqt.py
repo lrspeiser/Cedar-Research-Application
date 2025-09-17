@@ -44,18 +44,27 @@ def _init_logging() -> str:
 
 _log_path = _init_logging()
 
+# Early mode flags
+_no_server_early = os.getenv("CEDARPY_NO_SERVER", "").strip().lower() in {"1", "true", "yes"}
+_mini_early = os.getenv("CEDARPY_MINI", "").strip().lower() in {"1", "true", "yes"}
+print(f"[cedarqt] startup flags: NO_SERVER={int(_no_server_early)} MINI={int(_mini_early)} APP_MODULE={os.getenv('CEDARPY_APP_MODULE','')}")
+if _no_server_early:
+    print("[cedarqt] no_server=1: running frontend-only (will not import backend frameworks)")
+
 # Force include of backend frameworks in PyInstaller analysis (no-ops at runtime)
-try:
-    import fastapi  # type: ignore
-    import starlette  # type: ignore
-    import pydantic  # type: ignore
-    import anyio  # type: ignore
-    import sqlalchemy  # type: ignore
-    import uvicorn  # type: ignore
-    import websockets  # type: ignore
-    import httpx  # type: ignore
-except Exception:
-    pass
+# Skip these imports when running in no-server mode to avoid any unnecessary ImportErrors in logs.
+if not _no_server_early:
+    try:
+        import fastapi  # type: ignore
+        import starlette  # type: ignore
+        import pydantic  # type: ignore
+        import anyio  # type: ignore
+        import sqlalchemy  # type: ignore
+        import uvicorn  # type: ignore
+        import websockets  # type: ignore
+        import httpx  # type: ignore
+    except Exception:
+        pass
 
 # Single-instance guard using a lock file, with stale-lock recovery (single retry to avoid loops)
 # See README.md for rationale and troubleshooting steps.
@@ -441,8 +450,15 @@ def main():
     os.environ["CEDARPY_PORT"] = str(port)
     url = f"http://{host}:{port}/"
 
-    # Start server (in-process)
-    server, server_thread = _launch_server_inprocess(host, port)
+    # Optionally skip starting the server entirely (frontend-only diagnostic mode)
+    no_server = os.getenv("CEDARPY_NO_SERVER", "").strip().lower() in {"1","true","yes"}
+    server = None
+    server_thread = None
+    if not no_server:
+        # Start server (in-process)
+        server, server_thread = _launch_server_inprocess(host, port)
+    else:
+        print("[cedarqt] CEDARPY_NO_SERVER=1: skipping backend launch and serving static HTML")
 
     # Prepare Qt app and view
     app = QApplication(sys.argv)
@@ -463,20 +479,29 @@ def main():
     win.setCentralWidget(view)
     win.resize(1200, 800)
 
-    # Poll server before showing; otherwise quit with a helpful dialog
-    if not _wait_for_server(url, timeout_sec=25.0):
-        try:
-            QMessageBox.critical(None, "CedarPy", "Server failed to start on 127.0.0.1:" + str(port) + "\nCheck logs in ~/Library/Logs/CedarPy.")
-        except Exception:
-            pass
-        # Clean up lock and exit
-        try:
-            if _single_lock_fh is not None:
-                os.close(_single_lock_fh)
-                os.remove(LOCK_PATH)
-        except Exception:
-            pass
-        sys.exit(1)
+    # If we skipped the server, just load a static in-memory HTML to verify Qt shell works.
+    if no_server:
+        from PySide6.QtCore import QByteArray
+        html = """
+        <!doctype html><html><head><meta charset='utf-8'><title>Cedar (Frontend-only)</title></head>
+        <body><h1>Cedar (Frontend-only)</h1><p class='muted'>No server running (CEDARPY_NO_SERVER=1). This verifies the Qt shell runs.</p></body></html>
+        """
+        page.setHtml(html)
+    else:
+        # Poll server before showing; otherwise quit with a helpful dialog
+        if not _wait_for_server(url, timeout_sec=25.0):
+            try:
+                QMessageBox.critical(None, "CedarPy", "Server failed to start on 127.0.0.1:" + str(port) + "\nCheck logs in ~/Library/Logs/CedarPy.")
+            except Exception:
+                pass
+            # Clean up lock and exit
+            try:
+                if _single_lock_fh is not None:
+                    os.close(_single_lock_fh)
+                    os.remove(LOCK_PATH)
+            except Exception:
+                pass
+            sys.exit(1)
 
     win.show()
     # Only attempt to raise/activate when not in headless/offscreen mode

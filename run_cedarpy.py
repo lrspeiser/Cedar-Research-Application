@@ -41,44 +41,50 @@ print(f"[cedarpy] sys.frozen={getattr(sys, 'frozen', False)}")
 print(f"[cedarpy] cwd={os.getcwd()}")
 print(f"[cedarpy] _MEIPASS={getattr(sys, '_MEIPASS', None)}")
 
-# Try to import the FastAPI app from main, with a fallback loader for PyInstaller bundles.
+# Try to import the ASGI app from a preferred module, defaulting to 'main'.
+_app_module = os.getenv("CEDARPY_APP_MODULE") or ("main_mini" if os.getenv("CEDARPY_MINI", "").strip().lower() in {"1","true","yes"} else "main")
+print(f"[cedarpy] loading app module: {_app_module}")
 try:
-    from main import app  # type: ignore
-    print("[cedarpy] imported app from main")
+    mod = __import__(_app_module)
+    app = getattr(mod, 'app')  # type: ignore
+    print(f"[cedarpy] imported app from module '{_app_module}'")
 except Exception:
-    print("[cedarpy] direct import failed, attempting fallback load for main.py")
+    print(f"[cedarpy] direct import of '{_app_module}' failed, attempting fallback load from files")
     base_dir = getattr(sys, "_MEIPASS", None)
     if not base_dir:
         base_dir = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(__file__)
     resources_dir = os.path.abspath(os.path.join(os.path.dirname(base_dir), "Resources")) if base_dir else None
-    # Try known locations
-    candidates = [
-        os.path.join(base_dir, "main.py") if base_dir else None,
-        os.path.join(resources_dir, "main.py") if resources_dir and os.path.isdir(resources_dir) else None,
-        os.path.abspath(os.path.join(os.path.dirname(__file__), "main.py")),
+    # Try known locations for both main and main_mini
+    file_candidates = [
+        ("main", os.path.join(base_dir, "main.py") if base_dir else None),
+        ("main", os.path.join(resources_dir, "main.py") if resources_dir and os.path.isdir(resources_dir) else None),
+        ("main", os.path.abspath(os.path.join(os.path.dirname(__file__), "main.py"))),
+        ("main_mini", os.path.join(base_dir, "main_mini.py") if base_dir else None),
+        ("main_mini", os.path.join(resources_dir, "main_mini.py") if resources_dir and os.path.isdir(resources_dir) else None),
+        ("main_mini", os.path.abspath(os.path.join(os.path.dirname(__file__), "main_mini.py"))),
     ]
-    candidates = [c for c in candidates if c]
+    file_candidates = [(n, p) for (n, p) in file_candidates if p]
     print("[cedarpy] search candidates:")
-    for c in candidates:
-        print(f"  - {c} exists={os.path.exists(c)}")
+    for name, path in file_candidates:
+        print(f"  - {path} as {name} exists={os.path.exists(path)}")
     app = None  # type: ignore
     last_err = None
-    for candidate in candidates:
+    for name, path in file_candidates:
         try:
-            if os.path.exists(candidate):
-                spec = importlib.util.spec_from_file_location("main", candidate)
+            if os.path.exists(path):
+                spec = importlib.util.spec_from_file_location(name, path)
                 if spec and spec.loader:
-                    mod = importlib.util.module_from_spec(spec)  # type: ignore
-                    spec.loader.exec_module(mod)  # type: ignore
-                    app = getattr(mod, "app", None)  # type: ignore
+                    mod2 = importlib.util.module_from_spec(spec)  # type: ignore
+                    spec.loader.exec_module(mod2)  # type: ignore
+                    app = getattr(mod2, "app", None)  # type: ignore
                     if app is not None:
-                        print(f"[cedarpy] loaded app from {candidate}")
+                        print(f"[cedarpy] loaded app from {path} ({name})")
                         break
         except Exception as e:
             last_err = e
             print("[cedarpy] load error:\n" + traceback.format_exc())
     if app is None:
-        raise ModuleNotFoundError(f"Could not locate main.app in packaged bundle; last_err={last_err}")
+        raise ModuleNotFoundError(f"Could not locate ASGI app (main or main_mini) in packaged bundle; last_err={last_err}")
 
 
 def _kill_other_instances():
@@ -297,6 +303,10 @@ def main():
         os.makedirs(data_dir, exist_ok=True)
         os.environ["CEDARPY_DATABASE_URL"] = f"sqlite:///{os.path.join(data_dir, 'cedarpy.db')}"
     print(f"[cedarpy] DB_URL={_mask_dsn(os.getenv('CEDARPY_DATABASE_URL') or os.getenv('CEDARPY_MYSQL_URL') or 'sqlite default')}")
+    try:
+        print(f"[cedarpy] mode: MINI={os.getenv('CEDARPY_MINI','')} APP_MODULE={os.getenv('CEDARPY_APP_MODULE','')}")
+    except Exception:
+        pass
 
     def open_browser():
         time.sleep(1.5)
