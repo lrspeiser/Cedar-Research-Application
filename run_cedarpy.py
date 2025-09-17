@@ -129,7 +129,153 @@ def _choose_listen_port(host: str, desired: int) -> int:
         return desired
 
 
+def _doctor_log_paths():
+    try:
+        home = os.path.expanduser("~")
+        dflt = os.path.join(home, "Library", "Logs", "CedarPy")
+        os.makedirs(dflt, exist_ok=True)
+        ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+        primary = os.path.join(dflt, f"doctor_{ts}.log")
+    except Exception:
+        primary = None
+    try:
+        ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+        tmp = os.path.join("/tmp", f"CedarPyDoctor_{ts}.log")
+    except Exception:
+        tmp = None
+    return primary, tmp
+
+
+def _doctor_write(lines: list[str]):
+    primary, tmp = _doctor_log_paths()
+    payload = "\n".join(lines) + "\n"
+    wrote = False
+    for p in [primary, tmp]:
+        if not p:
+            continue
+        try:
+            with open(p, "a", encoding="utf-8", errors="replace") as f:
+                f.write(payload)
+            wrote = True
+        except Exception:
+            pass
+    return wrote
+
+
+def run_doctor() -> int:
+    lines = []
+    lines.append("[doctor] starting")
+    try:
+        lines.append(f"[doctor] sys.executable={sys.executable}")
+        lines.append(f"[doctor] sys.version={sys.version.split()[0]}")
+        lines.append(f"[doctor] cwd={os.getcwd()}")
+        lines.append(f"[doctor] PATH={os.environ.get('PATH','')}")
+        lines.append(f"[doctor] SHELL={os.environ.get('SHELL','')}")
+    except Exception:
+        pass
+    _doctor_write(lines)
+
+    # Try import app
+    last_err = None
+    try:
+        _doctor_write(["[doctor] attempting direct import: from main import app"])
+        from main import app as _app  # type: ignore
+        app_obj = _app
+        _doctor_write(["[doctor] direct import OK"])
+    except Exception as e:
+        last_err = traceback.format_exc()
+        _doctor_write(["[doctor] direct import failed:", last_err or "(no tb)", "[doctor] trying fallback loader"])
+        # Fallback loader (same strategy used above)
+        try:
+            base_dir = getattr(sys, "_MEIPASS", None)
+            if not base_dir:
+                base_dir = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(__file__)
+            resources_dir = os.path.abspath(os.path.join(os.path.dirname(base_dir), "Resources")) if base_dir else None
+            candidates = [
+                os.path.join(base_dir, "main.py") if base_dir else None,
+                os.path.join(resources_dir, "main.py") if resources_dir and os.path.isdir(resources_dir) else None,
+                os.path.abspath(os.path.join(os.path.dirname(__file__), "main.py")),
+            ]
+            candidates = [c for c in candidates if c]
+            _doctor_write(["[doctor] candidates:"] + [f"  - {c} exists={os.path.exists(c)}" for c in candidates])
+            app_obj = None
+            import importlib.util as _util
+            for cand in candidates:
+                try:
+                    if os.path.exists(cand):
+                        spec = _util.spec_from_file_location("main", cand)
+                        if spec and spec.loader:
+                            mod = _util.module_from_spec(spec)  # type: ignore
+                            spec.loader.exec_module(mod)  # type: ignore
+                            app_obj = getattr(mod, "app", None)
+                            if app_obj is not None:
+                                _doctor_write([f"[doctor] loaded app from {cand}"])
+                                break
+                except Exception:
+                    _doctor_write([f"[doctor] load error for {cand}:", traceback.format_exc()])
+            if app_obj is None:
+                _doctor_write(["[doctor] ERROR: could not load app via fallback"])
+                return 2
+        except Exception:
+            _doctor_write(["[doctor] ERROR in fallback loader:", traceback.format_exc()])
+            return 2
+
+    # Start uvicorn on a free port and probe
+    try:
+        host = os.getenv("CEDARPY_HOST", "127.0.0.1")
+        port = 0
+        from uvicorn import Config, Server
+        cfg = Config(app=app_obj, host=host, port=port, log_level="info")
+        server = Server(cfg)
+        t = threading.Thread(target=server.run, daemon=True)
+        t.start()
+        _doctor_write(["[doctor] uvicorn thread started; waiting for readiness..."])
+        # Probe up to 20s
+        ok = False
+        addr = None
+        for i in range(40):
+            time.sleep(0.5)
+            # Try to infer bound port from server config
+            try:
+                # Config stores port; if 0, uvicorn decides; we can try common ports
+                for p in (8000, 8001, 8002, 8080):
+                    try:
+                        import urllib.request as _ur
+                        with _ur.urlopen(f"http://{host}:{p}/", timeout=0.5) as r:
+                            if r.status < 500:
+                                ok = True; addr = f"http://{host}:{p}/"; break
+                    except Exception:
+                        pass
+                if ok:
+                    break
+            except Exception:
+                pass
+        if not ok:
+            _doctor_write(["[doctor] ERROR: server did not respond within 20s"])
+            try:
+                server.should_exit = True
+            except Exception:
+                pass
+            return 3
+        _doctor_write([f"[doctor] OK: server responded at {addr}"])
+        try:
+            server.should_exit = True
+        except Exception:
+            pass
+        return 0
+    except Exception:
+        _doctor_write(["[doctor] FATAL:", traceback.format_exc()])
+        return 4
+
+
 def main():
+    # Doctor mode: minimal diagnostics without opening the UI
+    if os.getenv("CEDARPY_DOCTOR", "").strip() in ("1", "true", "yes"):
+        rc = run_doctor()
+        # Also print to stdout so GUI wrappers can detect
+        print(f"[doctor] exit_code={rc}")
+        sys.exit(rc)
+
     log_path = _init_logging()
     print("[cedarpy] starting CedarPy ...")
 
