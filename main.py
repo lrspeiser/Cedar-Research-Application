@@ -1195,9 +1195,34 @@ def layout(title: str, body: str, header_label: Optional[str] = None, header_lin
 
     # Build right-side navigation with optional project context (propagates ?project_id=&branch_id=)
     try:
+        # If nav_query missing but header_link points to a project URL, derive context from it
+        if (not nav_query) and header_link and header_link.startswith("/project/"):
+            try:
+                from urllib.parse import urlparse, parse_qs
+                u = urlparse(header_link)
+                pid = None
+                try:
+                    parts = [p for p in u.path.split("/") if p]
+                    if len(parts) >= 2 and parts[0] == "project":
+                        pid = int(parts[1])
+                except Exception:
+                    pid = None
+                bid = None
+                try:
+                    q = parse_qs(u.query)
+                    bvals = q.get("branch_id")
+                    if bvals:
+                        bid = int(bvals[0])
+                except Exception:
+                    bid = None
+                if pid is not None:
+                    nav_query = f"project_id={pid}" + (f"&branch_id={bid}" if bid is not None else "")
+            except Exception:
+                pass
         nav_qs = ("?" + nav_query.strip()) if (nav_query and nav_query.strip()) else ""
     except Exception:
         nav_qs = ""
+
     nav_html = (
         f"<a href='/'">Projects</a> | "
         f"<a href='/shell{nav_qs}'>Shell</a> | "
@@ -1205,7 +1230,6 @@ def layout(title: str, body: str, header_label: Optional[str] = None, header_lin
         f"<a href='/changelog{nav_qs}'>Changelog</a> | "
         f"<a href='/log{nav_qs}'>Log</a>"
     )
-        header_info = ""
 
     # Inject a lightweight client logging hook so console messages and JS errors are POSTed to the server.
     # See README.md (section "Client-side logging") for details and troubleshooting.
@@ -3532,7 +3556,32 @@ def view_logs(project_id: Optional[int] = None, branch_id: Optional[int] = None)
 
 
 @app.get("/changelog", response_class=HTMLResponse)
-def view_changelog(project_id: Optional[int] = None, branch_id: Optional[int] = None):
+def view_changelog(request: Request, project_id: Optional[int] = None, branch_id: Optional[int] = None):
+    # Prefer project-specific context. If missing, try to infer from Referer header.
+    if project_id is None:
+        try:
+            ref = request.headers.get("referer") or ""
+            if ref:
+                from urllib.parse import urlparse, parse_qs
+                u = urlparse(ref)
+                pid = None
+                try:
+                    parts = [p for p in u.path.split("/") if p]
+                    if len(parts) >= 2 and parts[0] == "project":
+                        pid = int(parts[1])
+                except Exception:
+                    pid = None
+                bid = None
+                try:
+                    bvals = parse_qs(u.query).get("branch_id")
+                    if bvals:
+                        bid = int(bvals[0])
+                except Exception:
+                    bid = None
+                if pid is not None:
+                    return RedirectResponse(f"/changelog?project_id={pid}" + (f"&branch_id={bid}" if bid is not None else ""), status_code=303)
+        except Exception:
+            pass
     # Global index (no project selected): list projects with links to their changelog
     if project_id is None:
         try:
@@ -3612,7 +3661,7 @@ def view_changelog(project_id: Optional[int] = None, branch_id: Optional[int] = 
             </table>
           </div>
         """
-        return layout(f"Changelog • {project.title}", body, header_label=project.title, header_link=f"/project/{project.id}?branch_id={branch_id_eff}")
+        return layout(f"Changelog • {project.title}", body, header_label=project.title, header_link=f"/project/{project.id}?branch_id={branch_id_eff}", nav_query=f"project_id={project.id}&branch_id={branch_id_eff}")
 
 # ----------------------------------------------------------------------------------
 # Merge dashboard pages
