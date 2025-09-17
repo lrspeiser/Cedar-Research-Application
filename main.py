@@ -140,18 +140,53 @@ try:
     except Exception:
         res_env_path = None
         pass
-    # FIRST: if DATA_DIR/.env is missing but Resources/.env exists, seed user data .env from Resources
+    # Helper to parse a simple KEY=VALUE .env
+    def _parse_env_file(path: str) -> Dict[str, str]:
+        out: Dict[str, str] = {}
+        try:
+            with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                for line in f:
+                    s = line.strip()
+                    if not s or s.startswith('#') or '=' not in s:
+                        continue
+                    k, v = s.split('=', 1)
+                    k = k.strip()
+                    v = v.strip().strip('"').strip("'")
+                    if k:
+                        out[k] = v
+        except Exception:
+            pass
+        return out
+
+    # FIRST: if DATA_DIR/.env is missing, or present but missing keys found in Resources/.env, seed/merge into user data .env
     try:
         data_env = os.path.join(DATA_DIR, '.env')
-        if res_env_path and os.path.isfile(res_env_path) and not os.path.isfile(data_env):
+        if res_env_path and os.path.isfile(res_env_path):
             os.makedirs(DATA_DIR, exist_ok=True)
-            shutil.copyfile(res_env_path, data_env)
-            try:
-                print(f"[env] seeded {data_env} from app Resources .env (keys masked)")
-            except Exception:
-                pass
+            data_vals = _parse_env_file(data_env) if os.path.isfile(data_env) else {}
+            res_vals = _parse_env_file(res_env_path)
+            to_merge: Dict[str, str] = {}
+            for key_name in ("OPENAI_API_KEY", "CEDARPY_OPENAI_API_KEY"):
+                if key_name in res_vals and key_name not in data_vals:
+                    to_merge[key_name] = res_vals[key_name]
+            if (not os.path.isfile(data_env)) or to_merge:
+                try:
+                    with open(data_env, 'a', encoding='utf-8', errors='ignore') as f:
+                        # If creating new file, ensure exists
+                        if not os.path.isfile(data_env):
+                            pass
+                        for k, v in to_merge.items():
+                            f.write(f"{k}={v}\n")
+                    try:
+                        merged_keys = ','.join(to_merge.keys()) if to_merge else '(all from Resources)'
+                        print(f"[env] seeded/merged keys into {data_env}: {merged_keys} (values masked)")
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
     except Exception:
         pass
+
     # THEN: load .env files (DATA_DIR takes precedence by being first)
     _load_dotenv_files(candidates)
 except Exception:
