@@ -1,5 +1,7 @@
 # CedarPython (Stage 1)
 
+> Important: This README includes a postmortem of recent startup issues, how they were fixed, and how the app is now set up. It also links to tests we added to prevent regressions.
+
 Minimal FastAPI + MySQL prototype to manage **Projects**, **Branches**, **Threads**, and **Files** with
 simple roll-up behavior between Main and branches. Everything is in `main.py` as requested.
 
@@ -226,7 +228,60 @@ Notes
   - bash packaging/build_macos_dmg.sh
   - Open dist/CedarPy.dmg
 
+- Server-only bundle for isolation/debug (no Qt wrapper):
+  - bash packaging/build_server_dmg.sh
+  - Mount and run CedarPyServer.app; this starts only the FastAPI server to verify server startup independent of Qt.
+
+- Gatekeeper quarantine and first run on macOS:
+  1) Open the DMG and drag CedarPy.app (or CedarPyServer.app) to /Applications
+  2) Remove quarantine attributes so the app can launch its embedded binaries
+     macOS Terminal:
+     xattr -dr com.apple.quarantine /Applications/CedarPy.app
+     xattr -dr com.apple.quarantine /Applications/CedarPyServer.app
+  3) Open the app via Finder or:
+     open /Applications/CedarPy.app
+
+- Logs and troubleshooting on macOS:
+  - App/server logs: ~/Library/Logs/CedarPy
+  - Desktop wrapper: cedarqt_*.log
+  - Server (from Qt): uvicorn_from_qt.log
+  - Doctor logs: doctor_*.log or /tmp/CedarPyDoctor_*.log
+
 - CI builds on every push to main and on tags (v*). On tags, the DMG is attached to the GitHub Release automatically.
+
+## Postmortem: startup failures and fixes
+
+1) SyntaxError in main.py (unexpected character after line continuation) around projects list HTML
+- Mistake: Inline HTML f-string formatting mixed with escaping caused Python to parse an invalid continuation sequence inside the HTML block.
+- Fix: Rewrote the HTML string sections to use valid Python f-strings and explicit formatting. For datetime rendering we now use f"{obj.created_at:%Y-%m-%d %H:%M:%S} UTC" and ensured the blocks are triple-quoted without stray continuations.
+- Test: Added tests/test_html_rendering.py::test_projects_list_html_formats_datetime to exercise the HTML render path and assert the formatted timestamp appears with UTC.
+- Logging: Not applicable beyond standard server logs; the failure was at import time and is now covered by tests.
+
+2) No logs on failure; app seemed to die before writing logs
+- Fix: Added a "doctor mode" to run_cedarpy.py that imports the app, boots a server on an ephemeral port, probes readiness, and always writes a diagnostic log to ~/Library/Logs/CedarPy/doctor_*.log (or /tmp fallback).
+- Usage:
+  CEDARPY_DOCTOR=1 python run_cedarpy.py
+- Test: Added tests/test_doctor_mode.py::test_doctor_mode_runs which runs the doctor path and expects a 0 exit code.
+
+3) Desktop wrapper (Qt) could hang due to a stale single-instance lock
+- Mistake: On prior versions, the wrapper exited if a lock file existed, even if the PID inside was no longer running.
+- Fix: cedarqt.py now checks the PID from the lock, removes the lock if the process is not alive, and retries once. Lock path respects CEDARPY_LOG_DIR. See code comments and the "Single-instance lock and stale lock recovery" section above.
+- Test: Added tests/test_qt_stale_lock_recovery.py::test_qt_stale_lock_recovery (skipped on CI) that pre-creates a stale lock, launches cedarqt.py headless, and asserts the log contains "removed stale lock".
+- Logging: cedarqt_*.log includes entries like "removed stale lock:" and "acquired single-instance lock:" during startup.
+
+4) Isolating FastAPI vs Qt issues
+- Fix: Added a server-only PyInstaller build (packaging/cedarpy_server.spec, packaging/build_server_dmg.sh) to confirm the FastAPI server runs in a packaged context. This helped isolate that the server was fine and the problem was in the Qt wrapper.
+- Usage:
+  bash packaging/build_server_dmg.sh
+  hdiutil attach dist/CedarPyServer.dmg
+  open /Volumes/CedarPyServer/CedarPyServer.app
+
+5) macOS Gatekeeper quarantine blocked launches
+- Fix/Docs: Documented removing quarantine attributes with xattr -dr com.apple.quarantine for the installed .app before first run.
+- Verification: After removing quarantine, the app launched and connected to http://127.0.0.1:PORT.
+
+Notes
+- Deprecation warnings for datetime.utcnow(): These do not block startup but will be addressed by migrating to timezone-aware datetime.now(timezone.utc) throughout. Some modules already use timezone-aware timestamps.
 
 ## Next steps (future stages)
 
