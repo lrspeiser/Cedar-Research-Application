@@ -78,6 +78,23 @@ Override with `CEDARPY_UPLOAD_DIR` if desired.
 
 ## Client-side logging
 
+What gets captured
+- console.log/info/warn/error (proxied)
+- window.onerror and unhandledrejection (with stack when available)
+- UI instrumentation for uploads: when you click the file input, select a file, click Upload, and submit the form, the page emits console logs like [ui] upload input clicked, [ui] file selected <name> <size>, [ui] upload clicked, [ui] upload submit. These flow into /api/client-log and show in the /log page.
+
+How it works
+- A small script is injected into every page that proxies console methods and posts to /api/client-log using navigator.sendBeacon when available or fetch(..., {keepalive:true}).
+- The upload page includes a tiny inline script (added centrally in the injected block) that attaches event listeners to the upload form elements. See comments in main.py around layout() and project_page_html() for the selector details.
+
+Troubleshooting
+- If you don’t see upload UI logs at /log, make sure you’re on a page rendered by layout() (it injects the logging script) and that the selectors [data-testid=upload-form|upload-input|upload-submit] exist (inspect the DOM). The inline script logs [ui] upload instrumentation error if it cannot attach.
+- The server-side will also print [upload-api] lines when an upload request arrives and after classification. Check the terminal or uvicorn logs.
+
+What was wrong and how it was fixed
+- Mistake: We weren’t emitting any console logs for file input clicks/changes or form submission, so nothing was sent to /api/client-log during the upload flow.
+- Fix: Added explicit client-side instrumentation for the upload UI and added server-side [upload-api] prints before/after save and after classification. Verified by uploading a test file and seeing both the [ui] logs in /log and [upload-api] lines in the server logs.
+
 ## LLM classification on file upload
 
 When a file is uploaded, CedarPy can call an LLM to classify and annotate it. The model returns:
