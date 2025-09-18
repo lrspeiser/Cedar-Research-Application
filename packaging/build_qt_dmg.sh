@@ -44,6 +44,39 @@ else
   echo "[build] WARNING: ~/CedarPyData/.env not found; creating an empty one in app Resources" >&2
   touch "$RES_DIR/.env"
 fi
+# Optionally enable default tracing for diagnostics in this build
+if [ "${CEDARPY_TRACE_DEFAULT:-}" = "1" ]; then
+  echo "CEDARPY_TRACE=1" >> "$RES_DIR/.env"
+  echo "[build] Enabled default trace logging (CEDARPY_TRACE=1) in app Resources/.env for this build"
+fi
+# Add a DEBUG-FIRST guide inside the app Resources
+cat > "$RES_DIR/DEBUG-FIRST.txt" <<'EOF'
+CedarPy – Debugging First Steps
+
+This build includes enhanced tracing and diagnostics.
+
+Tracing (imports + actions)
+- Tracing is controlled by the environment variable CEDARPY_TRACE.
+- In this build, tracing may be enabled by default if the packager set CEDARPY_TRACE_DEFAULT=1.
+- You can toggle it by editing CedarPy.app/Contents/Resources/.env and setting:
+    CEDARPY_TRACE=1   # enable
+    # or remove/comment the line to disable
+
+Where to find logs
+- Qt shell logs:    ~/Library/Logs/CedarPy/cedarqt_*.log
+- Server logs:      ~/Library/Logs/CedarPy/cedarpy_*.log
+- Shell API logs:   ~/CedarPyData/logs/shell/*.log
+
+Common recovery steps
+- If the server fails to start:
+  1) tail the latest cedarqt_*.log and cedarpy_*.log to see errors
+  2) remove stale lock if present: rm -f ~/Library/Logs/CedarPy/cedarqt.lock
+  3) ensure port 8000 is free or change CEDARPY_PORT
+
+Quiting the app
+- This build shows a Dock icon and supports Cmd-Q / Quit from the Dock.
+
+EOF
 
 # Stage and create DMG
 TMP_DIR="$(mktemp -d)"

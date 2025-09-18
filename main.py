@@ -1194,6 +1194,27 @@ def current_branch(db: Session, project_id: int, branch_id: Optional[int]) -> Br
 
 app = FastAPI(title="Cedar")
 
+# Minimal fallback layout to prevent runtime NameError if the full layout() is unavailable in a packaged build.
+# This ensures '/' and other pages render a basic shell instead of 500s so readiness probes succeed and logs are visible.
+# The full layout() defined later will override this stub in normal builds.
+from fastapi.responses import HTMLResponse as _HTMLResponse
+
+def layout(title: str, body: str, header_label: Optional[str] = None, header_link: Optional[str] = None, nav_query: Optional[str] = None) -> HTMLResponse:  # type: ignore[override]
+    try:
+        h = f"<div class='topbar'><strong>Cedar</strong>"
+        if header_label:
+            if header_link:
+                h += f" &middot; <a href='{escape(header_link)}'>{escape(header_label)}</a>"
+            else:
+                h += f" &middot; {escape(header_label)}"
+        h += "</div>"
+        html = f"""<!doctype html><html><head><meta charset='utf-8'/><title>{escape(title)}</title>
+        <style>body{{font-family:-apple-system,Segoe UI,Roboto,Arial;margin:16px}}a{{color:#2563eb;text-decoration:none}}</style></head>
+        <body>{h}<main>{body}</main></body></html>"""
+        return _HTMLResponse(html)
+    except Exception:
+        return _HTMLResponse(f"<html><body><h1>{escape(title)}</h1><div>{body}</div></body></html>")
+
 
 @app.get("/settings", response_class=HTMLResponse)
 def settings_page(msg: Optional[str] = None):
@@ -1382,6 +1403,21 @@ def _llm_reachability(ttl_seconds: int = 300) -> tuple[bool, str, str]:
     except Exception as e:
         _LLM_READY_CACHE.update({"ts": now, "ready": False, "reason": f"{type(e).__name__}", "model": model or ""})
         return False, f"{type(e).__name__}", model or ""
+
+# Module-level helpers used by Settings and Layout
+def _llm_reach_ok() -> bool:
+    try:
+        ok, _, _ = _llm_reachability()
+        return bool(ok)
+    except Exception:
+        return False
+
+def _llm_reach_reason() -> str:
+    try:
+        ok, reason, _ = _llm_reachability()
+        return "ok" if ok else (reason or "unknown")
+    except Exception:
+        return "unknown"
 
 
 # Helpers for Settings connectivity line

@@ -44,6 +44,44 @@ def _init_logging() -> str:
 
 _log_path = _init_logging()
 
+# Load environment overrides from app Resources/.env (for packaged builds)
+# This allows enabling tracing or other envs when launched via Finder (which does not inherit shell env).
+# We only parse a simple KEY=VALUE format; lines starting with # are ignored.
+try:
+    base = None
+    if getattr(sys, 'frozen', False):
+        app_dir = os.path.dirname(sys.executable)
+        base = os.path.abspath(os.path.join(app_dir, '..', 'Resources'))
+    else:
+        # Dev mode fallback: locate repo Resources next to this file if present
+        here = os.path.dirname(__file__)
+        cand = os.path.join(os.path.dirname(here), 'packaging', 'dist-qt', 'CedarPy.app', 'Contents', 'Resources')
+        base = cand if os.path.isdir(cand) else None
+    env_path = os.path.join(base, '.env') if base else None
+    if env_path and os.path.isfile(env_path):
+        print(f"[cedarqt] loading Resources env: {env_path}")
+        with open(env_path, 'r', encoding='utf-8', errors='ignore') as f:
+            for line in f:
+                s = line.strip()
+                if not s or s.startswith('#') or '=' not in s:
+                    continue
+                k, v = s.split('=', 1)
+                k = k.strip(); v = v.strip().strip('"').strip("'")
+                if k and (k not in os.environ):
+                    os.environ[k] = v
+        # Mask only for printing
+        try:
+            masked = []
+            for k in ('OPENAI_API_KEY','CEDARPY_OPENAI_API_KEY'):
+                if k in os.environ:
+                    masked.append(f"{k}=***MASKED***")
+            if masked:
+                print("[cedarqt] env overrides:", ", ".join(masked))
+        except Exception:
+            pass
+except Exception as e:
+    print(f"[cedarqt] env load error: {e}")
+
 # Optional ultra-verbose tracing (imports + major actions) for desktop shell. Enable with CEDARPY_TRACE=1
 if os.getenv("CEDARPY_TRACE", "").strip().lower() in {"1","true","yes"}:
     try:
