@@ -23,6 +23,7 @@ ci_gate() {
     return 0
   fi
   BRANCH="${CEDARPY_CI_BRANCH:-main}"
+  WFLOW_NAME="${CEDARPY_CI_WORKFLOW:-CI}"
   # Derive repo from git remote if not provided
   ORIGIN_URL=$(git -C "$ROOT_DIR" remote get-url origin 2>/dev/null || true)
   REPO_GUESS=$(printf "%s" "$ORIGIN_URL" | sed -E 's#.*github.com[:/]+([^/]+)/([^/]+)(\.git)?$#\1/\2#')
@@ -36,10 +37,10 @@ ci_gate() {
       return 0
     fi
   fi
-  echo "[ci] Gating on latest run for $REPO (branch=$BRANCH)"
+  echo "[ci] Gating on latest run for $REPO (branch=$BRANCH, workflow=$WFLOW_NAME)"
   if command -v gh >/dev/null 2>&1; then
-    # Use GitHub CLI
-    RUN_ID=$(gh run list --repo "$REPO" --branch "$BRANCH" --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null || true)
+    # Use GitHub CLI, constrain by workflow name
+    RUN_ID=$(gh run list --repo "$REPO" --workflow "$WFLOW_NAME" --branch "$BRANCH" --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null || true)
     if [ -z "$RUN_ID" ]; then
       if [ "${CEDARPY_REQUIRE_CI:-}" = "1" ]; then
         echo "[ci] ERROR: No recent runs found for $REPO#$BRANCH; aborting" >&2
@@ -66,7 +67,23 @@ ci_gate() {
         return 0
       fi
     fi
-    echo "[ci] Using GitHub REST API for $REPO (branch=$BRANCH)"
+    echo "[ci] Using GitHub REST API for $REPO (branch=$BRANCH, workflow=$WFLOW_NAME)"
+    # Resolve workflow id by name
+    WF_RESP=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$REPO/actions/workflows")
+    WF_ID=$(printf "%s" "$WF_RESP" | python3 - <<'PY'
+import sys,json
+w=json.load(sys.stdin).get('workflows') or []
+name = __import__('os').environ.get('WFLOW_NAME')
+for wf in w:
+    if wf.get('name')==name or wf.get('path','').endswith(name):
+        print(wf.get('id'))
+        break
+PY
+)
+    if [ -z "$WF_ID" ]; then
+      echo "[ci] ERROR: Could not resolve workflow id for '$WFLOW_NAME'" >&2
+      exit 3
+    fi
     # Poll until status=completed, then require conclusion=success
     ATTEMPTS=0
     MAX_ATTEMPTS=120 # ~10 minutes at 5s intervals
@@ -74,7 +91,7 @@ ci_gate() {
       RESP=$(curl -s \
         -H "Authorization: Bearer $GITHUB_TOKEN" \
         -H "Accept: application/vnd.github+json" \
-        "https://api.github.com/repos/$REPO/actions/runs?branch=$BRANCH&per_page=1")
+        "https://api.github.com/repos/$REPO/actions/workflows/$WF_ID/runs?branch=$BRANCH&per_page=1")
       STATUS=$(printf "%s" "$RESP" | python3 -c 'import sys,json; d=json.load(sys.stdin); r=d.get("workflow_runs",[{"status":"","conclusion":"","id":None}])[0]; print(r.get("status",""))' 2>/dev/null || true)
       CONCL=$(printf "%s" "$RESP" | python3 -c 'import sys,json; d=json.load(sys.stdin); r=d.get("workflow_runs",[{"status":"","conclusion":"","id":None}])[0]; print(r.get("conclusion",""))' 2>/dev/null || true)
       if [ "$STATUS" = "completed" ]; then
