@@ -2219,13 +2219,28 @@ SELECT * FROM demo LIMIT 10;""")
       var streamText = document.createElement('span');
       stream.appendChild(pill); stream.appendChild(document.createTextNode(' ')); stream.appendChild(streamText);
       if (msgs) msgs.appendChild(stream);
+      var lastW = null;
       var wsScheme = (location.protocol === 'https:') ? 'wss' : 'ws';
       var ws = new WebSocket(wsScheme + '://' + location.host + '/ws/chat/' + PROJECT_ID);
-      ws.onopen = function(){ try { ws.send(JSON.stringify({action:'chat', content: text, branch_id: BRANCH_ID, thread_id: threadId||null })); } catch(e){} };
+      ws.onopen = function(){
+        try {
+          // Show submitted stage immediately
+          var info = document.createElement('div'); info.className = 'small muted'; info.textContent = 'submitted'; if (msgs) msgs.appendChild(info);
+          ws.send(JSON.stringify({action:'chat', content: text, branch_id: BRANCH_ID, thread_id: threadId||null }));
+        } catch(e){}
+      };
       ws.onmessage = function(ev){
-        try { var m = JSON.parse(ev.data); } catch(_){ return; }
+        var m = null; try { m = JSON.parse(ev.data); } catch(_){ return; }
+        if (!m) return;
         if (m.type === 'token' && m.word) {
-          streamText.textContent = (streamText.textContent ? (streamText.textContent + ' ') : '') + String(m.word);
+          if (lastW !== m.word) {
+            streamText.textContent = (streamText.textContent ? (streamText.textContent + ' ') : '') + String(m.word);
+            lastW = m.word;
+          }
+        } else if (m.type === 'info') {
+          try { var inf = document.createElement('div'); inf.className = 'small muted'; inf.textContent = String(m.stage || m.message || 'info'); if (msgs) msgs.appendChild(inf); } catch(_){ }
+        } else if (m.type === 'final' && m.text) {
+          streamText.textContent = m.text;
         } else if (m.type === 'error') {
           streamText.textContent = '[error] ' + (m.error || 'unknown');
         }
@@ -2235,15 +2250,6 @@ SELECT * FROM demo LIMIT 10;""")
   }
   document.addEventListener('DOMContentLoaded', function(){
     try {
-      var askForm = document.getElementById('askForm');
-      if (askForm) {
-        askForm.addEventListener('submit', function(ev){
-          try { ev.preventDefault(); } catch(_){ }
-          var inp = askForm.querySelector('input[name=query]');
-          var text = (inp && inp.value || '').trim(); if (!text) return;
-          startWS(text, null); try { inp.value=''; } catch(_){ }
-        });
-      }
       var chatForm = document.getElementById('chatForm');
       if (chatForm) {
         chatForm.addEventListener('submit', function(ev){
@@ -2276,8 +2282,6 @@ SELECT * FROM demo LIMIT 10;""")
         <div class="pane">
           <div class="tabs" data-pane="left">
             <a href="#" class="tab active" data-target="left-chat">Chat</a>
-            <a href="#" class="tab" data-target="left-file">File</a>
-            <a href="#" class="tab" data-target="left-database">Database</a>
           </div>
           <div class="tab-panels">
             <div id="left-chat" class="panel">
@@ -2288,18 +2292,13 @@ SELECT * FROM demo LIMIT 10;""")
               {chat_form}
               {script_js}
             </div>
-            <div id="left-file" class="panel hidden">
-              {left_details}
-            </div>
-            <div id="left-database" class="panel hidden">
-              {sql_card}
-            </div>
           </div>
         </div>
 
         <div class="pane">
           <div class="tabs" data-pane="right">
             <a href="#" class="tab active" data-target="right-files">Files</a>
+            <a href="#" class="tab" data-target="right-details">Details</a>
             <a href="#" class="tab" data-target="right-upload">Upload</a>
             <a href="#" class="tab" data-target="right-sql">SQL</a>
             <a href="#" class="tab" data-target="right-datasets">Databases</a>
@@ -2310,6 +2309,9 @@ SELECT * FROM demo LIMIT 10;""")
                 <h3 style='margin-bottom:6px'>Files</h3>
                 {file_list_html}
               </div>
+            </div>
+            <div id="right-details" class="panel hidden">
+              {left_details}
             </div>
             <div id="right-upload" class="panel hidden">
               <div class="card" style='padding:12px'>
@@ -2338,13 +2340,6 @@ SELECT * FROM demo LIMIT 10;""")
           </div>
       </div>
       </div>
-
-      <div style="height:72px"></div>
-      <form id='askForm' method='post' action='/project/{project.id}/ask?branch_id={current.id}' style='position:fixed; left:0; right:0; bottom:0; z-index:50; background:#ffffffcc; backdrop-filter: saturate(180%) blur(6px); border-top:1px solid var(--border); padding:10px 16px; display:flex; gap:8px; align-items:center;'>
-        <input type='text' name='query' placeholder='Ask Cedar…' required style='flex:1; padding:10px; border:1px solid var(--border); border-radius:8px' />
-        <button type='submit'>Ask</button>
-        <span class='small muted'>Context: files, changelog, answers</span>
-      </form>
 
     """
 
@@ -5080,6 +5075,12 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
         try: db.close()
         except Exception: pass
 
+    # Inform client that the request has been submitted
+    try:
+        await websocket.send_text(json.dumps({"type": "info", "stage": "submitted"}))
+    except Exception:
+        pass
+
     client, model = _llm_client_config()
     if not client:
         db2 = SessionLocal()
@@ -5114,8 +5115,7 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
                     delta = getattr(ch, 'delta', None)
                     if delta is not None and getattr(delta, 'content', None):
                         txt = delta.content
-                    elif getattr(ch, 'message', None) and getattr(ch.message, 'content', None):
-                        txt = ch.message.content
+                    # Do NOT fall back to ch.message.content in streaming mode to avoid duplicates
                     if txt:
                         q.put(txt)
                 except Exception:
@@ -5127,6 +5127,12 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
 
     t = threading.Thread(target=_stream_worker, daemon=True)
     t.start()
+
+    # Inform client that streaming is starting
+    try:
+        await websocket.send_text(json.dumps({"type": "info", "stage": "streaming"}))
+    except Exception:
+        pass
 
     assembled = ""
     buffer = ""
@@ -5171,6 +5177,12 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
         assembled += ("" if not assembled else " ") + buffer
         await websocket.send_text(json.dumps({"type": "token", "word": buffer}))
 
+    # Inform client that we are finalizing/persisting the message
+    try:
+        await websocket.send_text(json.dumps({"type": "info", "stage": "finalizing"}))
+    except Exception:
+        pass
+
     db3 = SessionLocal()
     try:
         if error_text:
@@ -5189,6 +5201,10 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
         await websocket.send_text(json.dumps({"type": "error", "error": error_text}))
     else:
         await websocket.send_text(json.dumps({"type": "final", "text": assembled}))
+        try:
+            await websocket.send_text(json.dumps({"type": "info", "stage": "persisted"}))
+        except Exception:
+            pass
     try:
         await websocket.close()
     except Exception:
