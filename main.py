@@ -13,6 +13,7 @@ import builtins
 import hashlib
 import subprocess
 import threading
+import asyncio
 import uuid
 import queue
 import signal
@@ -1194,6 +1195,17 @@ def current_branch(db: Session, project_id: int, branch_id: Optional[int]) -> Br
 
 app = FastAPI(title="Cedar")
 
+@app.on_event("startup")
+def _cedarpy_startup_llm_probe():
+    try:
+        ok, reason, model = _llm_reachability(ttl_seconds=0)
+        if ok:
+            print(f"[startup] LLM ready (model={model})")
+        else:
+            print(f"[startup] LLM unavailable ({reason})")
+    except Exception:
+        pass
+
 # Minimal fallback layout to prevent runtime NameError if the full layout() is unavailable in a packaged build.
 # This ensures '/' and other pages render a basic shell instead of 500s so readiness probes succeed and logs are visible.
 # The full layout() defined later will override this stub in normal builds.
@@ -2177,14 +2189,76 @@ SELECT * FROM demo LIMIT 10;""")
     hidden_thread = f"<input type='hidden' name='thread_id' value='{selected_thread.id}' />" if selected_thread else ""
     hidden_file = f"<input type='hidden' name='file_id' value='{selected_file.id}' />" if selected_file else ""
     chat_form = f"""
-      <form method='post' action='/project/{project.id}/threads/chat?branch_id={current.id}' style='margin-top:8px'>
+      <form id='chatForm' data-project-id='{project.id}' data-branch-id='{current.id}' data-thread-id='{selected_thread.id if selected_thread else ''}' method='post' action='/project/{project.id}/threads/chat?branch_id={current.id}' style='margin-top:8px'>
         {hidden_thread}{hidden_file}
-        <textarea name='content' rows='3' placeholder='Ask a question about this file/context...' style='width:100%; font-family: ui-monospace, Menlo, monospace;'></textarea>
+        <textarea id='chatInput' name='content' rows='3' placeholder='Ask a question about this file/context...' style='width:100%; font-family: ui-monospace, Menlo, monospace;'></textarea>
         <div style='height:6px'></div>
         <button type='submit'>Submit</button>
         <span class='small muted'>LLM API key required; see README for setup.</span>
       </form>
     """
+
+    # Client-side WebSocket streaming script (word-by-word). Falls back to simulated by-word if server returns full text.
+    script_js = """
+<script>
+(function(){
+  var PROJECT_ID = %d;
+  var BRANCH_ID = %d;
+  function startWS(text, threadId){
+    try {
+      var msgs = document.getElementById('msgs');
+      if (msgs && text) {
+        var u = document.createElement('div');
+        u.className = 'small';
+        u.innerHTML = "<span class='pill'>user</span> " + text.replace(/</g,'&lt;');
+        msgs.appendChild(u);
+      }
+      var stream = document.createElement('div');
+      stream.className = 'small';
+      var pill = document.createElement('span'); pill.className = 'pill'; pill.textContent = 'assistant';
+      var streamText = document.createElement('span');
+      stream.appendChild(pill); stream.appendChild(document.createTextNode(' ')); stream.appendChild(streamText);
+      if (msgs) msgs.appendChild(stream);
+      var wsScheme = (location.protocol === 'https:') ? 'wss' : 'ws';
+      var ws = new WebSocket(wsScheme + '://' + location.host + '/ws/chat/' + PROJECT_ID);
+      ws.onopen = function(){ try { ws.send(JSON.stringify({action:'chat', content: text, branch_id: BRANCH_ID, thread_id: threadId||null })); } catch(e){} };
+      ws.onmessage = function(ev){
+        try { var m = JSON.parse(ev.data); } catch(_){ return; }
+        if (m.type === 'token' && m.word) {
+          streamText.textContent = (streamText.textContent ? (streamText.textContent + ' ') : '') + String(m.word);
+        } else if (m.type === 'error') {
+          streamText.textContent = '[error] ' + (m.error || 'unknown');
+        }
+      };
+      ws.onerror = function(){ try { streamText.textContent = (streamText.textContent||'') + ' [ws-error]'; } catch(_){} };
+    } catch(e) {}
+  }
+  document.addEventListener('DOMContentLoaded', function(){
+    try {
+      var askForm = document.getElementById('askForm');
+      if (askForm) {
+        askForm.addEventListener('submit', function(ev){
+          try { ev.preventDefault(); } catch(_){ }
+          var inp = askForm.querySelector('input[name=query]');
+          var text = (inp && inp.value || '').trim(); if (!text) return;
+          startWS(text, null); try { inp.value=''; } catch(_){ }
+        });
+      }
+      var chatForm = document.getElementById('chatForm');
+      if (chatForm) {
+        chatForm.addEventListener('submit', function(ev){
+          try { ev.preventDefault(); } catch(_){ }
+          var t = document.getElementById('chatInput');
+          var text = (t && t.value || '').trim(); if (!text) return;
+          var tid = chatForm.getAttribute('data-thread-id') || null;
+          startWS(text, tid); try { t.value=''; } catch(_){ }
+        });
+      }
+    } catch(_) {}
+  }, { once: true });
+})();
+</script>
+""" % (project.id, current.id)
 
     return f"""
       <h1>{escape(project.title)}</h1>
@@ -2212,6 +2286,7 @@ SELECT * FROM demo LIMIT 10;""")
               {flash_html}
               <div id='msgs'>{msgs_html}</div>
               {chat_form}
+              {script_js}
             </div>
             <div id="left-file" class="panel hidden">
               {left_details}
@@ -4958,6 +5033,166 @@ def thread_chat(project_id: int, request: Request, content: str = Form(...), thr
 
     # Redirect back focusing this thread
     return RedirectResponse(f"/project/{project.id}?branch_id={branch.id}&thread_id={thr.id}" + (f"&file_id={file_id}" if file_id else ""), status_code=303)
+
+# ----------------------------------------------------------------------------------
+# WebSocket chat streaming endpoint (word-by-word)
+# ----------------------------------------------------------------------------------
+@app.websocket("/ws/chat/{project_id}")
+async def ws_chat_stream(websocket: WebSocket, project_id: int):
+    await websocket.accept()
+    try:
+        raw = await websocket.receive_text()
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            payload = {"action": "chat", "content": raw}
+        content = (payload.get("content") or "").strip()
+        br_id = payload.get("branch_id")
+        thr_id = payload.get("thread_id")
+    except Exception:
+        await websocket.send_text(json.dumps({"type": "error", "error": "invalid payload"}))
+        await websocket.close(); return
+
+    SessionLocal = sessionmaker(bind=_get_project_engine(project_id), autoflush=False, autocommit=False, future=True)
+    branch = None
+    thr = None
+    db = SessionLocal()
+    try:
+        ensure_project_initialized(project_id)
+        branch = current_branch(db, project_id, int(br_id) if br_id is not None else None)
+        if thr_id:
+            try:
+                thr = db.query(Thread).filter(Thread.id == int(thr_id), Thread.project_id == project_id).first()
+            except Exception:
+                thr = None
+        if not thr:
+            thr = db.query(Thread).filter(Thread.project_id==project_id, Thread.branch_id==branch.id, Thread.title=="Ask").first()
+            if not thr:
+                thr = Thread(project_id=project_id, branch_id=branch.id, title="Ask")
+                db.add(thr); db.commit(); db.refresh(thr)
+        if content:
+            db.add(ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="user", content=content))
+            db.commit()
+    except Exception:
+        try: db.rollback()
+        except Exception: pass
+    finally:
+        try: db.close()
+        except Exception: pass
+
+    client, model = _llm_client_config()
+    if not client:
+        db2 = SessionLocal()
+        try:
+            am = ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="assistant", content="[llm-missing-key] Set CEDARPY_OPENAI_API_KEY or OPENAI_API_KEY.")
+            db2.add(am); db2.commit()
+        except Exception:
+            try: db2.rollback()
+            except Exception: pass
+        finally:
+            try: db2.close()
+            except Exception: pass
+        await websocket.send_text(json.dumps({"type": "error", "error": "missing_key"}))
+        await websocket.close(); return
+
+    messages = [
+        {"role": "system", "content": "You are Cedar's assistant. Respond concisely to the user's message."},
+        {"role": "user", "content": content},
+    ]
+
+    q = queue.Queue()
+    SENTINEL = object()
+    emitted = {"count": 0}
+
+    def _stream_worker():
+        try:
+            stream = client.chat.completions.create(model=model, messages=messages, stream=True)
+            for chunk in stream:
+                try:
+                    ch = chunk.choices[0]
+                    txt = ""
+                    delta = getattr(ch, 'delta', None)
+                    if delta is not None and getattr(delta, 'content', None):
+                        txt = delta.content
+                    elif getattr(ch, 'message', None) and getattr(ch.message, 'content', None):
+                        txt = ch.message.content
+                    if txt:
+                        q.put(txt)
+                except Exception:
+                    continue
+        except Exception as e:
+            q.put(json.dumps({"__error__": f"{type(e).__name__}: {e}"}))
+        finally:
+            q.put(SENTINEL)
+
+    t = threading.Thread(target=_stream_worker, daemon=True)
+    t.start()
+
+    assembled = ""
+    buffer = ""
+    error_text = None
+
+    while True:
+        item = await asyncio.to_thread(q.get)
+        if item is SENTINEL:
+            break
+        try:
+            maybe_err = json.loads(item)
+            if isinstance(maybe_err, dict) and "__error__" in maybe_err:
+                error_text = maybe_err["__error__"]
+                break
+        except Exception:
+            pass
+        buffer += item
+        parts = buffer.split()
+        if buffer and not buffer.endswith((' ', '\n', '\t')):
+            words = parts[:-1]
+            buffer = parts[-1] if parts else ""
+        else:
+            words = parts
+            buffer = ""
+        for w in words:
+            emitted["count"] += 1
+            assembled += ("" if not assembled else " ") + w
+            await websocket.send_text(json.dumps({"type": "token", "word": w}))
+
+    if emitted["count"] == 0 and not error_text:
+        try:
+            resp = client.chat.completions.create(model=model, messages=messages)
+            txt = (resp.choices[0].message.content or "").strip()
+            for w in (txt.split() if txt else []):
+                assembled += ("" if not assembled else " ") + w
+                await websocket.send_text(json.dumps({"type": "token", "word": w}))
+                await asyncio.sleep(0.02)
+        except Exception as e:
+            error_text = f"{type(e).__name__}: {e}"
+
+    if buffer and not error_text:
+        assembled += ("" if not assembled else " ") + buffer
+        await websocket.send_text(json.dumps({"type": "token", "word": buffer}))
+
+    db3 = SessionLocal()
+    try:
+        if error_text:
+            db3.add(ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="assistant", content=f"[llm-error] {error_text}", display_title="LLM Error"))
+        else:
+            db3.add(ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="assistant", content=assembled, display_title="Assistant"))
+        db3.commit()
+    except Exception:
+        try: db3.rollback()
+        except Exception: pass
+    finally:
+        try: db3.close()
+        except Exception: pass
+
+    if error_text:
+        await websocket.send_text(json.dumps({"type": "error", "error": error_text}))
+    else:
+        await websocket.send_text(json.dumps({"type": "final", "text": assembled}))
+    try:
+        await websocket.close()
+    except Exception:
+        pass
 
 
 @app.post("/project/{project_id}/files/upload")
