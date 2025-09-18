@@ -44,6 +44,22 @@ def _init_logging() -> str:
 
 _log_path = _init_logging()
 
+# Optional ultra-verbose tracing (imports + major actions) for desktop shell. Enable with CEDARPY_TRACE=1
+if os.getenv("CEDARPY_TRACE", "").strip().lower() in {"1","true","yes"}:
+    try:
+        import builtins as _bi
+        _orig_import = _bi.__import__
+        def _tr_import(name, globals=None, locals=None, fromlist=(), level=0):
+            try:
+                print(f"[trace-import] name={name} fromlist={list(fromlist) if fromlist else []} level={level}")
+            except Exception:
+                pass
+            return _orig_import(name, globals, locals, fromlist, level)
+        _bi.__import__ = _tr_import  # type: ignore
+        print("[trace] import hook installed (qt)")
+    except Exception as e:
+        print(f"[trace] failed to install import hook (qt): {e}")
+
 # Early mode flags
 # IMPORTANT: Do not move backend imports above this section.
 # Frontend-only (CEDARPY_NO_SERVER=1) must avoid importing backend frameworks entirely.

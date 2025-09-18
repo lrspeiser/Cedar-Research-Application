@@ -1,13 +1,30 @@
 #!/bin/bash
 
-# Build a self-contained CedarPy.app by embedding a Python venv and sources (no PyInstaller), then pack a DMG.
-# This avoids PyInstaller bootloader and signing complexities.
+# DEV-ONLY BUILD (No Dock icon, hard to quit)
+# ------------------------------------------------------------
+# This script builds a self-contained CedarPy-Embedded.app by embedding a Python venv and sources (no PyInstaller),
+# then packs a DMG. This avoids PyInstaller bootloader/signing complexities but DOES NOT present a standard macOS
+# Dock icon or menu bar. End-users often cannot quit cleanly from the Dock and background processes can linger.
+#
+# REQUIRED FOR DISTRIBUTION:
+#   Use packaging/build_qt_dmg.sh instead. It produces a proper macOS app (Dock icon + Cmd-Q) that can be exited safely.
+#
+# SAFETY VALVE: To proceed with this embedded dev build, you must set CEDARPY_ALLOW_EMBEDDED=1.
+# ------------------------------------------------------------
+
+if [ "${CEDARPY_ALLOW_EMBEDDED:-}" != "1" ]; then
+  echo "[build-embedded] ERROR: This build is DEV-ONLY. For distribution use: bash packaging/build_qt_dmg.sh" >&2
+  echo "[build-embedded] Set CEDARPY_ALLOW_EMBEDDED=1 to override (not recommended)." >&2
+  exit 2
+fi
+
 # The app binary is a tiny launcher that runs the embedded Python.
 
 set -euo pipefail
 
 PROJ_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-APP_NAME="CedarPy"
+# Rename the embedded app to avoid clashing with the official Qt build in /Applications
+APP_NAME="CedarPy-Embedded"
 BUILD_DIR="$PROJ_ROOT/packaging/build-embedded"
 APP_DIR="$BUILD_DIR/$APP_NAME.app"
 CONTENTS="$APP_DIR/Contents"

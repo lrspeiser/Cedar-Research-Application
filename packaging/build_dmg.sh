@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# DEPRECATED/DEV-ONLY: This build does not produce a standard macOS app with a Dock icon.
+# For user-facing distribution, ALWAYS use: bash packaging/build_qt_dmg.sh
+# To override (not recommended), set CEDARPY_ALLOW_EMBEDDED=1.
+if [ "${CEDARPY_ALLOW_EMBEDDED:-}" != "1" ]; then
+  echo "[build_dmg.sh] ERROR: Deprecated dev-only build. Use packaging/build_qt_dmg.sh for distribution." >&2
+  echo "[build_dmg.sh] Set CEDARPY_ALLOW_EMBEDDED=1 to proceed (not recommended)." >&2
+  exit 2
+fi
+
 # Build a macOS DMG containing a self-contained cedarpy server binary and a wrapper app/command.
 # Requirements: python3, virtualenv, pyinstaller, osacompile (built-in), hdiutil (built-in)
 

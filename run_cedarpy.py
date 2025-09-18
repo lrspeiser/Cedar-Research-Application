@@ -41,6 +41,22 @@ print(f"[cedarpy] sys.frozen={getattr(sys, 'frozen', False)}")
 print(f"[cedarpy] cwd={os.getcwd()}")
 print(f"[cedarpy] _MEIPASS={getattr(sys, '_MEIPASS', None)}")
 
+# Optional ultra-verbose tracing (imports + major actions). Enable with CEDARPY_TRACE=1
+if os.getenv("CEDARPY_TRACE", "").strip().lower() in {"1","true","yes"}:
+    try:
+        import builtins as _bi
+        _orig_import = _bi.__import__
+        def _tr_import(name, globals=None, locals=None, fromlist=(), level=0):
+            try:
+                print(f"[trace-import] name={name} fromlist={list(fromlist) if fromlist else []} level={level}")
+            except Exception:
+                pass
+            return _orig_import(name, globals, locals, fromlist, level)
+        _bi.__import__ = _tr_import  # type: ignore
+        print("[trace] import hook installed")
+    except Exception as e:
+        print(f"[trace] failed to install import hook: {e}")
+
 # Try to import the ASGI app from a preferred module, defaulting to 'main'.
 # IMPORTANT: Do not collapse this back to always load 'main'.
 # We rely on main_mini for minimal launches (no FastAPI) and for packaged fallback.
