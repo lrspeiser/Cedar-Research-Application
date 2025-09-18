@@ -124,18 +124,84 @@ os.makedirs(os.path.dirname(DEFAULT_SQLITE_PATH), exist_ok=True)
 try:
     candidates: List[str] = [os.path.join(DATA_DIR, '.env')]
     # If running from an app bundle or PyInstaller, try Resources or _MEIPASS
+    res_env_path = None
     try:
         if getattr(sys, 'frozen', False):
             app_dir = os.path.dirname(sys.executable)
             res_dir = os.path.abspath(os.path.join(app_dir, '..', 'Resources'))
-            candidates.append(os.path.join(res_dir, '.env'))
+            res_env_path = os.path.join(res_dir, '.env')
+            candidates.append(res_env_path)
         else:
             # PyInstaller one-file (_MEIPASS)
             meipass = getattr(sys, '_MEIPASS', None)
             if meipass:
-                candidates.append(os.path.join(meipass, '.env'))
+                res_env_path = os.path.join(meipass, '.env')
+                candidates.append(res_env_path)
+    except Exception:
+        res_env_path = None
+        pass
+    # Helper to parse a simple KEY=VALUE .env
+    def _parse_env_file(path: str) -> Dict[str, str]:
+        out: Dict[str, str] = {}
+        try:
+            with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                for line in f:
+                    s = line.strip()
+                    if not s or s.startswith('#') or '=' not in s:
+                        continue
+                    k, v = s.split('=', 1)
+                    k = k.strip()
+                    v = v.strip().strip('"').strip("'")
+                    if k:
+                        out[k] = v
+        except Exception:
+            pass
+        return out
+
+    # FIRST: if DATA_DIR/.env is missing, or present but missing keys found in Resources/.env, seed/merge into user data .env
+    try:
+        data_env = os.path.join(DATA_DIR, '.env')
+        if res_env_path and os.path.isfile(res_env_path):
+            os.makedirs(DATA_DIR, exist_ok=True)
+            data_vals = _parse_env_file(data_env) if os.path.isfile(data_env) else {}
+            res_vals = _parse_env_file(res_env_path)
+
+            # Add this print statement for debugging:
+            try:
+                print(f"[DEBUG] Seeding check. Bundled keys: {list(res_vals.keys())}, User keys: {list(data_vals.keys())}")
+            except Exception:
+                pass
+
+            to_merge: Dict[str, str] = {}
+            for key_name in ("OPENAI_API_KEY", "CEDARPY_OPENAI_API_KEY"):
+                if key_name in res_vals and key_name not in data_vals:
+                    to_merge[key_name] = res_vals[key_name]
+
+            # Add this print statement for debugging:
+            try:
+                print(f"[DEBUG] Keys to merge into user .env: {list(to_merge.keys())}")
+            except Exception:
+                pass
+
+            if (not os.path.isfile(data_env)) or to_merge:
+                try:
+                    with open(data_env, 'a', encoding='utf-8', errors='ignore') as f:
+                        for k, v in to_merge.items():
+                            f.write(f"{k}={v}\n")
+                    try:
+                        print(f"[DEBUG] Successfully wrote keys to {data_env}")
+                    except Exception:
+                        pass
+                except Exception as e:
+                    # Replace 'pass' with actual error logging
+                    try:
+                        print(f"[ERROR] Failed to write to user .env file at {data_env}: {e}")
+                    except Exception:
+                        pass
     except Exception:
         pass
+
+    # THEN: load .env files (DATA_DIR takes precedence by being first)
     _load_dotenv_files(candidates)
 except Exception:
     pass
@@ -448,6 +514,20 @@ class SQLUndoLog(Base):
 
 
 # Create central registry tables
+
+class Note(Base):
+    __tablename__ = "notes"
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, nullable=False, index=True)
+    branch_id = Column(Integer, nullable=False, index=True)
+    content = Column(Text, nullable=False)
+    tags = Column(JSON)  # optional list of strings
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        Index("ix_notes_project_branch", "project_id", "branch_id", "created_at"),
+    )
+
 Base.metadata.create_all(registry_engine)
 
 # Attempt a lightweight migration for existing DBs: add metadata_json if missing (registry only)
@@ -1109,6 +1189,49 @@ def current_branch(db: Session, project_id: int, branch_id: Optional[int]) -> Br
 
 app = FastAPI(title="Cedar")
 
+
+@app.get("/settings", response_class=HTMLResponse)
+def settings_page(msg: Optional[str] = None):
+    # Do not display the actual key; show presence only
+    key_present = bool(_env_get("CEDARPY_OPENAI_API_KEY") or _env_get("OPENAI_API_KEY"))
+    model = _env_get("CEDARPY_OPENAI_MODEL") or _env_get("OPENAI_API_KEY_MODEL") or _env_get("CEDARPY_OPENAI_MODEL") or "gpt-5"
+    banner = f"<div class='notice'>{html.escape(msg)}</div>" if msg else ""
+    body = f"""
+    <h1>Settings</h1>
+    {banner}
+    <p class='muted'>LLM keys are read from <code>{html.escape(SETTINGS_PATH)}</code>. We will not display keys here.</p>
+    <p>OpenAI key status: <strong>{'Present' if key_present else 'Missing'}</strong></p>
+    <form method='post' action='/settings/save'>
+      <div>
+        <label>OpenAI API Key</label><br/>
+        <input type='password' name='openai_key' placeholder='sk-...' style='width:420px' autocomplete='off' />
+      </div>
+      <div style='margin-top:8px;'>
+        <label>Model (optional)</label><br/>
+        <input type='text' name='model' value='{html.escape(str(model))}' style='width:420px' />
+      </div>
+      <div style='margin-top:12px;'>
+        <button type='submit'>Save</button>
+      </div>
+    </form>
+    """
+    return layout("Settings", body)
+
+
+@app.post("/settings/save")
+def settings_save(openai_key: str = Form("") , model: str = Form("")):
+    # Persist to ~/CedarPyData/.env; do not print the key
+    updates: Dict[str, str] = {}
+    if openai_key and str(openai_key).strip():
+        updates["OPENAI_API_KEY"] = str(openai_key).strip()
+    if model and str(model).strip():
+        updates["CEDARPY_OPENAI_MODEL"] = str(model).strip()
+    if updates:
+        _env_set_many(updates)
+        return RedirectResponse("/settings?msg=Saved", status_code=303)
+    else:
+        return RedirectResponse("/settings?msg=No+changes", status_code=303)
+
 # Serve uploaded files for convenience
 # Serve uploaded files (legacy path no longer used). We mount a dynamic per-project files app below.
 # See PROJECT_SEPARATION_README.md
@@ -1141,6 +1264,72 @@ def serve_project_upload(project_id: int, path: str):
 # ----------------------------------------------------------------------------------
 # HTML helpers (all inline; no external templates)
 # ----------------------------------------------------------------------------------
+
+SETTINGS_PATH = os.path.join(DATA_DIR, ".env")
+
+
+def _env_get(k: str) -> Optional[str]:
+    try:
+        v = os.getenv(k)
+        if v is None and os.path.isfile(SETTINGS_PATH):
+            # Fallback: try file parse
+            with open(SETTINGS_PATH, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    s = line.strip()
+                    if not s or s.startswith("#") or "=" not in s:
+                        continue
+                    kk, vv = s.split("=", 1)
+                    if kk.strip() == k:
+                        return vv.strip().strip('"').strip("'")
+        return v
+    except Exception:
+        return None
+
+
+def _env_set_many(updates: Dict[str, str]) -> None:
+    """Update ~/CedarPyData/.env with provided key=value pairs, preserving other lines.
+    Keys are also set in-process via os.environ. We avoid printing secret values.
+    See README: Settings and Postmortem #7 for details.
+    """
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        # Read existing lines
+        existing: Dict[str, str] = {}
+        order: list[str] = []
+        if os.path.isfile(SETTINGS_PATH):
+            with open(SETTINGS_PATH, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    if "=" in line and not line.strip().startswith("#"):
+                        k, v = line.split("=", 1)
+                        k = k.strip()
+                        if k and k not in existing:
+                            existing[k] = v.rstrip("\n")
+                            order.append(k)
+        # Apply updates
+        for k, v in updates.items():
+            existing[k] = v
+            if k not in order:
+                order.append(k)
+            # set in-process
+            try:
+                os.environ[k] = v
+            except Exception:
+                pass
+        # Write back, one VAR=VALUE per line
+        with open(SETTINGS_PATH, "w", encoding="utf-8", errors="ignore") as f:
+            for k in order:
+                val = existing.get(k)
+                if val is None:
+                    continue
+                # Write raw; we do not quote to avoid surprises
+                f.write(f"{k}={val}\n")
+        # Invalidate LLM reachability cache so header updates quickly
+        try:
+            _LLM_READY_CACHE.update({"ts": 0.0})
+        except Exception:
+            pass
+    except Exception:
+        pass
 
 # Cached LLM reachability indicator for UI (TTL seconds)
 _LLM_READY_CACHE = {"ts": 0.0, "ready": False, "reason": "init", "model": None}
@@ -1175,9 +1364,9 @@ def layout(title: str, body: str, header_label: Optional[str] = None, header_lin
     try:
         ready, reason, model = _llm_reachability()
         if ready:
-            llm_status = f" <span class='pill' title='LLM connected'>LLM: {escape(model)}</span>"
+            llm_status = f" <a href='/settings' class='pill' title='LLM connected — click to manage key'>LLM: {escape(model)}</a>"
         else:
-            llm_status = f" <span class='pill' style='background:#fef2f2; color:#991b1b' title='LLM unavailable'>LLM unavailable ({escape(reason)})</span>"
+            llm_status = f" <a href='/settings' class='pill' style='background:#fef2f2; color:#991b1b' title='LLM unavailable — click to paste your key'>LLM unavailable ({escape(reason)})</a>"
     except Exception:
         llm_status = ""
 
@@ -1230,7 +1419,8 @@ def layout(title: str, body: str, header_label: Optional[str] = None, header_lin
         f"<a href='/shell{nav_qs}'>Shell</a> | "
         f"<a href='/merge{nav_qs}'>Merge</a> | "
         f"<a href='/changelog{nav_qs}'>Changelog</a> | "
-        f"<a href='/log{nav_qs}'>Log</a>"
+        f"<a href='/log{nav_qs}'>Log</a> | "
+        f"<a href='/settings'>Settings</a>"
     )
 
     # Inject a lightweight client logging hook so console messages and JS errors are POSTed to the server.
@@ -1320,6 +1510,49 @@ def layout(title: str, body: str, header_label: Optional[str] = None, header_lin
       try { base('error', 'upload instrumentation error', 'client-log', { stack: e && e.stack ? String(e.stack) : null }); } catch(_) {}
     }
   }, { once: true });
+
+  // Global button click feedback: show a brief 'Received' toast near the clicked button (no-op for non-buttons)
+  (function initButtonClickFeedback(){
+    try {
+      function showReceived(btn){
+        try {
+          var t = document.createElement('div');
+          t.className = 'click-received';
+          t.textContent = 'Received';
+          document.body.appendChild(t);
+          var r = btn.getBoundingClientRect();
+          var tw = t.offsetWidth || 60;
+          var th = t.offsetHeight || 18;
+          var left = Math.max(6, Math.min((window.innerWidth - tw - 6), r.left + (r.width/2) - (tw/2)));
+          var top = Math.max(6, Math.min((window.innerHeight - th - 6), r.bottom + 6));
+          t.style.left = left + 'px';
+          t.style.top = top + 'px';
+          setTimeout(function(){ if (t && t.parentNode) { t.parentNode.removeChild(t); } }, 1300);
+          // Screen reader announcement
+          try {
+            var sr = document.getElementById('sr-live');
+            if (!sr) {
+              sr = document.createElement('div');
+              sr.id = 'sr-live';
+              sr.setAttribute('aria-live', 'polite');
+              sr.style.position = 'absolute'; sr.style.width='1px'; sr.style.height='1px'; sr.style.overflow='hidden'; sr.style.clip='rect(1px,1px,1px,1px)'; sr.style.clipPath='inset(50%)'; sr.style.whiteSpace='nowrap'; sr.style.border='0';
+              document.body.appendChild(sr);
+            }
+            sr.textContent = 'Received';
+          } catch(_) {}
+        } catch(_) {}
+      }
+      document.addEventListener('click', function(ev){
+        try {
+          var el = ev.target && ev.target.closest ? ev.target.closest('button') : null;
+          if (!el) return;
+          // Buttons already get a press animation via CSS :active; add a toast as confirmation
+          showReceived(el);
+        } catch(_) {}
+      }, true);
+    } catch(_) {}
+  })();
+
 })();
 </script>
 """
@@ -1353,8 +1586,51 @@ def layout(title: str, body: str, header_label: Optional[str] = None, header_lin
     .topbar {{ display:flex; align-items:center; gap:12px; }}
     .spinner {{ display:inline-block; width:12px; height:12px; border:2px solid #cbd5e1; border-top-color:#334155; border-radius:50%; animation: spin 1s linear infinite; }}
     @keyframes spin {{ from {{ transform: rotate(0deg);}} to {{ transform: rotate(360deg);}} }}
+
+    /* Two-column layout and tabs */
+    .two-col {{ display: grid; grid-template-columns: minmax(380px, 1fr) 1fr; gap: 16px; align-items: start; }}
+    .pane {{ display: flex; flex-direction: column; gap: 8px; }}
+    .tabs {{ display: flex; gap: 6px; border-bottom: 1px solid var(--border); }}
+    .tab {{ display:inline-block; padding:6px 10px; border:1px solid var(--border); border-bottom:none; border-radius:6px 6px 0 0; background:#f3f4f6; color:#111; cursor:pointer; user-select:none; }}
+    .tab.active {{ background:#fff; font-weight:600; }}
+    .tab-panels {{ border:1px solid var(--border); border-radius:0 6px 6px 6px; background:#fff; padding:12px; }}
+    .panel.hidden {{ display:none !important; }}
+    @media (max-width: 900px) {{ .two-col {{ grid-template-columns: 1fr; }} }}
+  </style>
+    /* Click feedback toast */
+    .click-received {{ position: fixed; background: #f1f5f9; color: #111; border: 1px solid var(--border); border-radius: 9999px; padding: 2px 8px; font-size: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.08); pointer-events: none; opacity: 0; transform: translateY(-4px); animation: crFade 1200ms ease forwards; }}
+    @keyframes crFade {{ 0% {{ opacity: 0; transform: translateY(-4px); }} 15% {{ opacity: 1; transform: translateY(0); }} 85% {{ opacity: 1; }} 100% {{ opacity: 0; transform: translateY(-6px); }} }}
   </style>
   {client_log_js}
+  <script>
+  (function(){{
+    function activateTab(tab) {{
+      try {{
+        var pane = tab.closest('.pane') || document;
+        var tabs = tab.parentElement.querySelectorAll('.tab');
+        tabs.forEach(function(t){{ t.classList.remove('active'); }});
+        tab.classList.add('active');
+        var target = tab.getAttribute('data-target');
+        if (!target) return;
+        var panelsRoot = pane.querySelector('.tab-panels');
+        if (!panelsRoot) return;
+        panelsRoot.querySelectorAll('.panel').forEach(function(p){{ p.classList.add('hidden'); }});
+        var el = pane.querySelector('#' + target);
+        if (el) el.classList.remove('hidden');
+      }} catch(e) {{ try {{ console.error('[ui] tab error', e); }} catch(_) {{}} }}
+    }}
+    function initTabs(){{
+      document.querySelectorAll('.tabs .tab').forEach(function(tab){{
+        tab.addEventListener('click', function(ev){{ ev.preventDefault(); activateTab(tab); }});
+      }});
+    }}
+    if (document.readyState === 'loading') {{
+      document.addEventListener('DOMContentLoaded', initTabs, {{ once: true }});
+    }} else {{
+      initTabs();
+    }}
+  }})();
+  </script>
 </head>
 <body>
   <header>
@@ -1686,21 +1962,84 @@ SELECT * FROM demo LIMIT 10;""")
       <div style=\"height:10px\"></div>
       <div>Branches: {tabs_html}</div>
 
-      <div style=\"margin-top:8px; display:flex; gap:8px; align-items:center\">\n        <form method=\"post\" action=\"/project/{project.id}/delete\" class=\"inline\" onsubmit=\"return confirm('Delete project {escape(project.title)} and all its data?');\">\n          <button type=\"submit\" class=\"secondary\">Delete Project</button>\n        </form>\n      </div>\n      <div class=\"row\" style='margin-top:8px'>
-        <div class='card' style='flex:1 1 100%'>
-          <div style='margin-bottom:8px'>{thr_tabs_html}</div>
-          <div style='margin:8px 0'>
-            {left_details}
-          </div>
-          <h3>Chat</h3>
-          {flash_html}
-          <div>{msgs_html}</div>
-          {chat_form}
-        </div
-
-        <div style=\"flex:1; display:flex; flex-direction:column; gap:8px\">\n          <div class=\"card\" style='padding:12px'>\n            <h3 style='margin-bottom:6px'>Upload a file</h3>\n            <form method=\"post\" action=\"/project/{project.id}/files/upload?branch_id={current.id}\" enctype=\"multipart/form-data\" data-testid=\"upload-form\">\n              <input type=\"file\" name=\"file\" required data-testid=\"upload-input\" />\n              <div style=\"height:6px\"></div>\n              <div class=\"small muted\">LLM classification runs automatically on upload. See README for API key setup.</div>\n              <div style=\"height:6px\"></div>\n              <button type=\"submit\" data-testid=\"upload-submit\">Upload</button>\n            </form>\n          </div>\n          <div class=\"card\" style=\"max-height:220px; overflow:auto; padding:12px\">\n            <h3 style='margin-bottom:6px'>Files</h3>\n            {file_list_html}\n          </div>\n          {sql_card}\n          <div class=\"card\" style=\"padding:12px\">\n            <h3>Databases</h3>\n            <table class=\"table\">\n              <thead><tr><th>Name</th><th>Branch</th><th>Created</th></tr></thead>\n              <tbody>{dataset_tbody}</tbody>\n            </table>\n          </div>\n        </div>
+      <div style="margin-top:8px; display:flex; gap:8px; align-items:center">
+        <form method="post" action="/project/{project.id}/delete" class="inline" onsubmit="return confirm('Delete project {escape(project.title)} and all its data?');">
+          <button type="submit" class="secondary">Delete Project</button>
+        </form>
       </div>
 
+      <div class="two-col" style="margin-top:8px">
+        <div class="pane">
+          <div class="tabs" data-pane="left">
+            <a href="#" class="tab active" data-target="left-chat">Chat</a>
+            <a href="#" class="tab" data-target="left-file">File</a>
+            <a href="#" class="tab" data-target="left-database">Database</a>
+          </div>
+          <div class="tab-panels">
+            <div id="left-chat" class="panel">
+              <div style='margin-bottom:8px'>{thr_tabs_html}</div>
+              <h3>Chat</h3>
+              {flash_html}
+              <div>{msgs_html}</div>
+              {chat_form}
+            </div>
+            <div id="left-file" class="panel hidden">
+              {left_details}
+            </div>
+            <div id="left-database" class="panel hidden">
+              {sql_card}
+            </div>
+          </div>
+        </div>
+
+        <div class="pane">
+          <div class="tabs" data-pane="right">
+            <a href="#" class="tab active" data-target="right-files">Files</a>
+            <a href="#" class="tab" data-target="right-upload">Upload</a>
+            <a href="#" class="tab" data-target="right-sql">SQL</a>
+            <a href="#" class="tab" data-target="right-datasets">Databases</a>
+          </div>
+          <div class="tab-panels">
+            <div id="right-files" class="panel">
+              <div class="card" style="max-height:220px; overflow:auto; padding:12px">
+                <h3 style='margin-bottom:6px'>Files</h3>
+                {file_list_html}
+              </div>
+            </div>
+            <div id="right-upload" class="panel hidden">
+              <div class="card" style='padding:12px'>
+                <h3 style='margin-bottom:6px'>Upload a file</h3>
+                <form method="post" action="/project/{project.id}/files/upload?branch_id={current.id}" enctype="multipart/form-data" data-testid="upload-form">
+                  <input type="file" name="file" required data-testid="upload-input" />
+                  <div style="height:6px"></div>
+                  <div class="small muted">LLM classification runs automatically on upload. See README for API key setup.</div>
+                  <div style="height:6px"></div>
+                  <button type="submit" data-testid="upload-submit">Upload</button>
+                </form>
+              </div>
+            </div>
+            <div id="right-sql" class="panel hidden">
+              {sql_card}
+            </div>
+            <div id="right-datasets" class="panel hidden">
+              <div class="card" style="padding:12px">
+                <h3>Databases</h3>
+                <table class="table">
+                  <thead><tr><th>Name</th><th>Branch</th><th>Created</th></tr></thead>
+                  <tbody>{dataset_tbody}</tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+      </div>
+      </div>
+
+      <div style="height:72px"></div>
+      <form method='post' action='/project/{project.id}/ask?branch_id={current.id}' style='position:fixed; left:0; right:0; bottom:0; z-index:50; background:#ffffffcc; backdrop-filter: saturate(180%) blur(6px); border-top:1px solid var(--border); padding:10px 16px; display:flex; gap:8px; align-items:center;'>
+        <input type='text' name='query' placeholder='Ask Cedar…' required style='flex:1; padding:10px; border:1px solid var(--border); border-radius:8px' />
+        <button type='submit'>Ask</button>
+        <span class='small muted'>Context: files, changelog, answers</span>
+      </form>
 
     """
 
@@ -3924,6 +4263,327 @@ def create_thread(project_id: int, request: Request, title: Optional[str] = Form
     add_version(db, "thread", t.id, {"project_id": project.id, "branch_id": branch.id, "title": t.title})
     # Redirect to focus the newly created thread
     return RedirectResponse(f"/project/{project.id}?branch_id={branch.id}&thread_id={t.id}&msg=Thread+created", status_code=303)
+
+
+@app.post("/project/{project_id}/ask")
+# Bottom-of-page "Ask" orchestrator. Builds a context-rich prompt, expects strict JSON with function calls,
+# executes tools, and iterates until final/question. Keys are read from ~/CedarPyData/.env.
+# See README (Settings, Client-side logging) and Postmortem #7 for key setup and troubleshooting.
+# Function calls supported: sql, grep, code (python), img, web, plan, notes, question, final.
+# We log all I/O to thread messages and to the changelog; verbose on errors.
+# Code/tool execution is sandboxed best-effort and limited to project DB/files.
+def ask_orchestrator(project_id: int, request: Request, query: str = Form(...), db: Session = Depends(get_project_db)):
+    ensure_project_initialized(project_id)
+    # derive branch
+    branch_q = request.query_params.get("branch_id")
+    try:
+        branch_q = int(branch_q) if branch_q is not None else None
+    except Exception:
+        branch_q = None
+
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        return RedirectResponse("/", status_code=303)
+
+    branch = current_branch(db, project.id, branch_q)
+
+    # Find or create a dedicated Ask thread
+    thr = db.query(Thread).filter(Thread.project_id==project.id, Thread.branch_id==branch.id, Thread.title=="Ask").first()
+    if not thr:
+        thr = Thread(project_id=project.id, branch_id=branch.id, title="Ask")
+        db.add(thr); db.commit(); db.refresh(thr)
+        add_version(db, "thread", thr.id, {"project_id": project.id, "branch_id": branch.id, "title": thr.title})
+
+    # Persist user query
+    um = ThreadMessage(project_id=project.id, branch_id=branch.id, thread_id=thr.id, role="user", content=query)
+    db.add(um); db.commit()
+
+    import json as _json
+
+    def _files_index(limit: int = 500) -> List[Dict[str, Any]]:
+        ids = branch_filter_ids(db, project.id, branch.id)
+        recs = db.query(FileEntry).filter(FileEntry.project_id==project.id, FileEntry.branch_id.in_(ids)).order_by(FileEntry.created_at.desc()).limit(limit).all()
+        out: List[Dict[str, Any]] = []
+        for f in recs:
+            out.append({
+                "id": f.id,
+                "title": (f.ai_title or f.display_name or "").strip(),
+                "display_name": f.display_name,
+                "structure": f.structure,
+                "file_type": f.file_type,
+                "mime_type": f.mime_type,
+                "size_bytes": f.size_bytes,
+            })
+        return out
+
+    def _recent_changelog(limit: int = 50) -> List[Dict[str, Any]]:
+        recs = db.query(ChangelogEntry).filter(ChangelogEntry.project_id==project.id, ChangelogEntry.branch_id==branch.id).order_by(ChangelogEntry.created_at.desc()).limit(limit).all()
+        out: List[Dict[str, Any]] = []
+        for c in recs:
+            out.append({
+                "id": c.id,
+                "when": c.created_at.isoformat() if c.created_at else None,
+                "action": c.action,
+                "summary": c.summary_text,
+            })
+        return out
+
+    def _recent_assistant_msgs(limit: int = 10) -> List[Dict[str, Any]]:
+        recs = db.query(ThreadMessage).filter(ThreadMessage.project_id==project.id, ThreadMessage.branch_id==branch.id, ThreadMessage.role=="assistant").order_by(ThreadMessage.created_at.desc()).limit(limit).all()
+        out: List[Dict[str, Any]] = []
+        for m in recs:
+            out.append({
+                "when": m.created_at.isoformat() if m.created_at else None,
+                "title": m.display_title,
+                "content": m.content[:2000] if m.content else "",
+            })
+        return out
+
+    client, model = _llm_client_config()
+    if not client:
+        am = ThreadMessage(project_id=project.id, branch_id=branch.id, thread_id=thr.id, role="assistant", display_title="LLM key missing", content="Set CEDARPY_OPENAI_API_KEY or OPENAI_API_KEY in ~/CedarPyData/.env; see README")
+        db.add(am); db.commit()
+        return RedirectResponse(f"/project/{project.id}?branch_id={branch.id}&thread_id={thr.id}&msg=Missing+OpenAI+key", status_code=303)
+
+    # System prompt and schema
+    sys_prompt = (
+        "You are Cedar's orchestrator. Always respond with STRICT JSON (no prose outside JSON).\n"
+        "Schema: { \"Text Visible To User\": string, \"function_calls\": [ { \"name\": one of [sql, grep, code, img, web, plan, notes, question, final], \"args\": object } ] }\n"
+        "Rules:\n"
+        "- Use sql to query the project's SQLite database (use sqlite_master/PRAGMA to introspect).\n"
+        "- Use grep with {file_id, pattern, flags?} to search a specific file by id.\n"
+        "- Use code with {language:'python', source:'...'}; helpers available: cedar.query(sql), cedar.read(file_id), cedar.list_files(), cedar.open_path(file_id), cedar.note(text,[tags]).\n"
+        "- Use img with {image_id, purpose} to analyze an image file; an inline data URL is provided.\n"
+        "- Use web with {url} to fetch HTML.\n"
+        "- Use plan with {steps:[...]}; we will iterate steps.\n"
+        "- Use notes with {content, tags?} to store notes.\n"
+        "- Use question with {text} to ask the user and then stop.\n"
+        "- Use final with {text} for the final output and then stop.\n"
+    )
+
+    example = {
+        "Text Visible To User": "Working on it…",
+        "function_calls": [
+            {"name": "sql", "args": {"sql": "SELECT name FROM sqlite_master WHERE type='table'"}}
+        ]
+    }
+
+    context_obj = {
+        "files_index": _files_index(),
+        "recent_changelog": _recent_changelog(),
+        "recent_assistant_messages": _recent_assistant_msgs(),
+        "project": {"id": project.id, "title": project.title},
+        "branch": {"id": branch.id, "name": branch.name}
+    }
+
+    def _call_llm(messages: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        try:
+            resp = client.chat.completions.create(model=model, messages=messages)
+            raw = (resp.choices[0].message.content or "").strip()
+            return json.loads(raw)
+        except Exception as e:
+            try: print(f"[ask-llm-error] {type(e).__name__}: {e}")
+            except Exception: pass
+            return None
+
+    # Tool executors
+    def _exec_sql(sql_text: str) -> Dict[str, Any]:
+        try:
+            eng = _get_project_engine(project.id)
+            rows: List[List[Any]] = []
+            cols: List[str] = []
+            with eng.begin() as conn:
+                res = conn.exec_driver_sql(sql_text)
+                if res.returns_rows:
+                    cols = list(res.keys())
+                    for i, r in enumerate(res.fetchall()):
+                        if i >= 200: break
+                        row = []
+                        for v in r:
+                            if isinstance(v, (int, float)) or v is None:
+                                row.append(v)
+                            else:
+                                row.append(str(v))
+                        rows.append(row)
+            return {"ok": True, "columns": cols, "rows": rows}
+        except Exception as e:
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+    def _exec_grep(file_id: int, pattern: str, flags: str = "") -> Dict[str, Any]:
+        try:
+            f = db.query(FileEntry).filter(FileEntry.id==int(file_id), FileEntry.project_id==project.id).first()
+            if not f or not f.storage_path or not os.path.isfile(f.storage_path):
+                return {"ok": False, "error": "file not found"}
+            rx_flags = 0
+            if 'i' in (flags or ''): rx_flags |= re.IGNORECASE
+            if 'm' in (flags or ''): rx_flags |= re.MULTILINE
+            rx = re.compile(pattern, rx_flags)
+            matches: List[Dict[str, Any]] = []
+            with open(f.storage_path, 'r', encoding='utf-8', errors='replace') as fh:
+                for ln, line in enumerate(fh, start=1):
+                    if rx.search(line):
+                        matches.append({"line": ln, "text": line.rstrip()})
+                        if len(matches) >= 200: break
+            return {"ok": True, "matches": matches}
+        except Exception as e:
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+    def _exec_code(source: str) -> Dict[str, Any]:
+        logs = io.StringIO()
+        def _cedar_query(sql_text: str):
+            return _exec_sql(sql_text)
+        def _cedar_list_files():
+            return _files_index()
+        def _cedar_read(file_id: int):
+            f = db.query(FileEntry).filter(FileEntry.id==int(file_id), FileEntry.project_id==project.id).first()
+            if not f or not f.storage_path or not os.path.isfile(f.storage_path):
+                return None
+            try:
+                with open(f.storage_path, 'rb') as fh:
+                    b = fh.read(500000)
+                    try:
+                        return b.decode('utf-8', errors='replace')
+                    except Exception:
+                        import base64 as _b64
+                        return "base64:" + _b64.b64encode(b).decode('ascii')
+            except Exception:
+                return None
+        def _cedar_open_path(file_id: int):
+            f = db.query(FileEntry).filter(FileEntry.id==int(file_id), FileEntry.project_id==project.id).first()
+            return f.storage_path if (f and f.storage_path) else None
+        def _cedar_note(content: str, tags: Optional[List[str]] = None):
+            n = Note(project_id=project.id, branch_id=branch.id, content=str(content), tags=tags)
+            db.add(n); db.commit()
+            return {"id": n.id}
+        cedar = type("CedarHelpers", (), {"query": _cedar_query, "list_files": _cedar_list_files, "read": _cedar_read, "open_path": _cedar_open_path, "note": _cedar_note})()
+        safe_globals: Dict[str, Any] = {"__builtins__": {"print": print, "len": len, "range": range, "str": str, "int": int, "float": float, "bool": bool, "list": list, "dict": dict, "set": set, "tuple": tuple}, "cedar": cedar, "sqlite3": sqlite3, "json": json, "re": re, "io": io}
+        try:
+            with contextlib.redirect_stdout(logs):
+                exec(compile(source, filename="<ask_code>", mode="exec"), safe_globals, safe_globals)
+        except Exception as e:
+            return {"ok": False, "error": f"{type(e).__name__}: {e}", "logs": logs.getvalue()}
+        return {"ok": True, "logs": logs.getvalue()}
+
+    def _exec_web(url: str) -> Dict[str, Any]:
+        try:
+            import urllib.request as _req
+            with _req.urlopen(url, timeout=20) as resp:
+                ct = resp.headers.get('Content-Type','')
+                body = resp.read()
+            txt = body.decode('utf-8', errors='replace')
+            return {"ok": True, "content_type": ct, "text": txt[:200000]}
+        except Exception as e:
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+    def _exec_img(image_id: int, purpose: str = "") -> Dict[str, Any]:
+        try:
+            f = db.query(FileEntry).filter(FileEntry.id==int(image_id), FileEntry.project_id==project.id).first()
+            if not f or not f.storage_path or not os.path.isfile(f.storage_path):
+                return {"ok": False, "error": "image not found"}
+            import base64 as _b64
+            with open(f.storage_path, 'rb') as fh:
+                b = fh.read()
+            ext = (os.path.splitext(f.storage_path)[1].lower() or ".png").lstrip('.')
+            mime = f.mime_type or ("image/" + (ext if ext in {"png","jpeg","jpg","webp","gif"} else "png"))
+            data_url = f"data:{mime};base64,{_b64.b64encode(b).decode('ascii')}"
+            return {"ok": True, "image_id": f.id, "purpose": purpose, "data_url_head": data_url[:120000]}
+        except Exception as e:
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+    def _exec_notes(content: str, tags: Optional[List[str]] = None) -> Dict[str, Any]:
+        try:
+            n = Note(project_id=project.id, branch_id=branch.id, content=str(content), tags=tags)
+            db.add(n); db.commit(); db.refresh(n)
+            return {"ok": True, "note_id": n.id}
+        except Exception as e:
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+    # First LLM call
+    messages: List[Dict[str, Any]] = [
+        {"role": "system", "content": sys_prompt},
+        {"role": "user", "content": "Context:"},
+        {"role": "user", "content": _json.dumps(context_obj, ensure_ascii=False)},
+        {"role": "user", "content": "Schema and rules (example):"},
+        {"role": "user", "content": _json.dumps(example, ensure_ascii=False)},
+        {"role": "user", "content": query},
+    ]
+
+    loop_count = 0
+    final_text: Optional[str] = None
+    question_text: Optional[str] = None
+    last_response: Optional[Dict[str, Any]] = None
+
+    while loop_count < 6:
+        loop_count += 1
+        resp = _call_llm(messages)
+        if not resp:
+            break
+        last_response = resp
+        try:
+            db.add(ThreadMessage(project_id=project.id, branch_id=branch.id, thread_id=thr.id, role="assistant", content=_json.dumps(resp, ensure_ascii=False), display_title="Ask: JSON")); db.commit()
+        except Exception:
+            db.rollback()
+
+        text_visible = str(resp.get("Text Visible To User") or "").strip()
+        calls = resp.get("function_calls") or []
+        tool_results: List[Dict[str, Any]] = []
+
+        for call in calls:
+            name = str(call.get("name") or "").strip().lower()
+            args = call.get("args") or {}
+            out: Dict[str, Any] = {"name": name, "ok": False, "result": None}
+            if name == "sql":
+                out["result"] = _exec_sql(str(args.get("sql") or ""))
+            elif name == "grep":
+                out["result"] = _exec_grep(int(args.get("file_id")), str(args.get("pattern") or ""), str(args.get("flags") or ""))
+            elif name == "code":
+                if str(args.get("language") or "").lower() == "python":
+                    out["result"] = _exec_code(str(args.get("source") or ""))
+                else:
+                    out["result"] = {"ok": False, "error": "unsupported language"}
+            elif name == "img":
+                out["result"] = _exec_img(int(args.get("image_id")), str(args.get("purpose") or ""))
+            elif name == "web":
+                out["result"] = _exec_web(str(args.get("url") or ""))
+            elif name == "plan":
+                steps = args.get("steps") or []
+                out["result"] = _exec_notes("Plan steps:\n" + "\n".join([str(s) for s in steps]), ["plan"])
+            elif name == "notes":
+                out["result"] = _exec_notes(str(args.get("content") or ""), args.get("tags"))
+            elif name == "question":
+                question_text = str(args.get("text") or text_visible or "I have a question for you.")
+                final_text = None
+            elif name == "final":
+                final_text = str(args.get("text") or text_visible or "Done.")
+            else:
+                out["result"] = {"ok": False, "error": f"unknown function: {name}"}
+            r = out.get("result")
+            if isinstance(r, dict):
+                out["ok"] = bool(r.get("ok", True))
+            tool_results.append(out)
+
+        if question_text or final_text:
+            break
+
+        messages.append({"role": "user", "content": "ToolResults:"})
+        messages.append({"role": "user", "content": _json.dumps({"tool_results": tool_results}, ensure_ascii=False)})
+        if text_visible:
+            messages.append({"role": "user", "content": text_visible})
+
+    show_msg = final_text or question_text or (last_response and str(last_response.get("Text Visible To User") or "").strip()) or "(no response)"
+
+    am = ThreadMessage(project_id=project.id, branch_id=branch.id, thread_id=thr.id, role="assistant", display_title=("Ask • Final" if final_text else ("Ask • Question" if question_text else "Ask • Update")), content=show_msg)
+    db.add(am); db.commit()
+
+    try:
+        input_payload = {"query": query}
+        output_payload = {"final": final_text, "question": question_text}
+        record_changelog(db, project.id, branch.id, "ask.orchestrator", input_payload, output_payload)
+    except Exception:
+        pass
+
+    dest_msg = "Answer+ready" if final_text else ("Question+for+you" if question_text else "Ask+updated")
+    return RedirectResponse(f"/project/{project.id}?branch_id={branch.id}&thread_id={thr.id}&msg={dest_msg}", status_code=303)
 
 
 @app.post("/project/{project_id}/threads/chat")
