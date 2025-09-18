@@ -2136,9 +2136,9 @@ SELECT * FROM demo LIMIT 10;""")
     # Thread tabs (above left panel)
     thr_tabs = []
     for t in threads:
-        sel = "style='font-weight:600'" if (selected_thread and t.id == selected_thread.id) else ""
-        thr_tabs.append(f"<a {sel} href='/project/{project.id}?branch_id={current.id}" + (f"&file_id={selected_file.id}" if selected_file else "") + f"&thread_id={t.id}' class='pill'>{escape(t.title)}</a>")
-    thr_tabs_html = " ".join(thr_tabs) + f" <a href='/project/{project.id}/threads/new?branch_id={current.id}" + (f"&file_id={selected_file.id}" if selected_file else "") + "' class='pill' title='New thread'>+</a>"
+        cls = "tab active" if (selected_thread and t.id == selected_thread.id) else "tab"
+        thr_tabs.append(f"<a href='/project/{project.id}?branch_id={current.id}" + (f"&file_id={selected_file.id}" if selected_file else "") + f"&thread_id={t.id}' class='{cls}'>{escape(t.title)}</a>")
+    thr_tabs_html = " ".join(thr_tabs) + f" <a href='/project/{project.id}/threads/new?branch_id={current.id}" + (f"&file_id={selected_file.id}" if selected_file else "") + "' class='tab new' title='New Thread'>+</a>"
 
     # Render thread messages
     msgs = thread_messages or []
@@ -2160,7 +2160,7 @@ SELECT * FROM demo LIMIT 10;""")
                     details = f"<pre class='small' style='white-space:pre-wrap; background:#f8fafc; padding:8px; border-radius:6px; display:none' id='{details_id}'>" + escape(m.content) + "</pre>"
             except Exception:
                 details = f"<pre class='small' style='white-space:pre-wrap; background:#f8fafc; padding:8px; border-radius:6px; display:none' id='{details_id}'>" + escape(m.content) + "</pre>"
-            # Build a short preview to show inline under the title
+            # Build a short preview to show inline in a bubble
             try:
                 if getattr(m, 'payload_json', None) is not None:
                     import json as _json
@@ -2171,13 +2171,22 @@ SELECT * FROM demo LIMIT 10;""")
                     preview = (txt[:400] + ('…' if len(txt) > 400 else ''))
             except Exception:
                 preview = ''
+            # Role class for styling
+            try:
+                role_raw = (getattr(m, 'role', '') or '').strip().lower()
+                role_css = 'user' if role_raw == 'user' else ('assistant' if role_raw == 'assistant' else 'system')
+            except Exception:
+                role_css = 'assistant'
 
             msg_rows.append(
-                f"<div class='small' style='margin:6px 0'>"
-                f"<span class='pill'>{role}</span> "
-                f"<a href='#' onclick=\"var e=document.getElementById('{details_id}'); if(e){{ e.style.display = (e.style.display==='none'?'block':'none'); }} return false;\" style='font-weight:600'>{title_txt}</a>"
-                f"<div class='small' style='white-space:pre-wrap; margin-top:4px'>{escape(preview)}</div>"
-                f"{details}"
+                f"<div class='msg {role_css}'>"
+                f"  <div class='meta small'>"
+                f"    <span class='pill'>{role}</span> "
+                f"    <span class='title' style='font-weight:600'>{title_txt}</span> "
+                f"    <a href='#' class='small muted' onclick=\"var e=document.getElementById('{details_id}'); if(e){{ e.style.display = (e.style.display==='none'?'block':'none'); }} return false;\">details</a>"
+                f"  </div>"
+                f"  <div class='bubble {role_css}'><div class='content' style='white-space:pre-wrap'>{escape(preview)}</div></div>"
+                f"  {details}"
                 f"</div>"
             )
     else:
@@ -2285,60 +2294,55 @@ SELECT * FROM demo LIMIT 10;""")
           </div>
           <div class="tab-panels">
             <div id="left-chat" class="panel">
-              <div style='margin-bottom:8px'>{thr_tabs_html}</div>
+              <div class='tabbar thread-tabs' style='margin-bottom:6px'>{thr_tabs_html}</div>
               <h3>Chat</h3>
+              <style>
+                .chat-log { display:flex; flex-direction:column; gap:8px; }
+                .msg .meta { display:flex; gap:8px; align-items:center; margin-bottom:4px; }
+                .bubble { border:1px solid var(--border); border-radius:12px; padding:10px 12px; background:#fff; }
+                .bubble.user { background:#ecfeff; border-color:#bae6fd; }
+                .bubble.assistant { background:#f8fafc; border-color:#e5e7eb; }
+                .bubble.system { background:#fff7ed; border-color:#fde68a; }
+                .thread-tabs .tab { display:inline-block; padding:6px 10px; border:1px solid var(--border); border-bottom:none; border-radius:6px 6px 0 0; background:#f3f4f6; color:#111; margin-right:4px; }
+                .thread-tabs .tab.active { background:#fff; font-weight:600; }
+                .thread-tabs .tab.new { background:#e5f6ff; }
+                .chat-input { margin-top:6px; }
+              </style>
               {flash_html}
-              <div id='msgs'>{msgs_html}</div>
-              {chat_form}
+              <div id='msgs' class='chat-log'>{msgs_html}</div>
+              <div class='chat-input'>{chat_form}</div>
               {script_js}
             </div>
           </div>
         </div>
 
-        <div class="pane">
-          <div class="tabs" data-pane="right">
-            <a href="#" class="tab active" data-target="right-files">Files</a>
-            <a href="#" class="tab" data-target="right-details">Details</a>
-            <a href="#" class="tab" data-target="right-upload">Upload</a>
-            <a href="#" class="tab" data-target="right-sql">SQL</a>
-            <a href="#" class="tab" data-target="right-datasets">Databases</a>
+        <div class="pane right">
+          <div class="card" style="max-height:220px; overflow:auto; padding:12px">
+            <h3 style='margin-bottom:6px'>Files</h3>
+            {file_list_html}
           </div>
-          <div class="tab-panels">
-            <div id="right-files" class="panel">
-              <div class="card" style="max-height:220px; overflow:auto; padding:12px">
-                <h3 style='margin-bottom:6px'>Files</h3>
-                {file_list_html}
-              </div>
-            </div>
-            <div id="right-details" class="panel hidden">
-              {left_details}
-            </div>
-            <div id="right-upload" class="panel hidden">
-              <div class="card" style='padding:12px'>
-                <h3 style='margin-bottom:6px'>Upload a file</h3>
-                <form method="post" action="/project/{project.id}/files/upload?branch_id={current.id}" enctype="multipart/form-data" data-testid="upload-form">
-                  <input type="file" name="file" required data-testid="upload-input" />
-                  <div style="height:6px"></div>
-                  <div class="small muted">LLM classification runs automatically on upload. See README for API key setup.</div>
-                  <div style="height:6px"></div>
-                  <button type="submit" data-testid="upload-submit">Upload</button>
-                </form>
-              </div>
-            </div>
-            <div id="right-sql" class="panel hidden">
-              {sql_card}
-            </div>
-            <div id="right-datasets" class="panel hidden">
-              <div class="card" style="padding:12px">
-                <h3>Databases</h3>
-                <table class="table">
-                  <thead><tr><th>Name</th><th>Branch</th><th>Created</th></tr></thead>
-                  <tbody>{dataset_tbody}</tbody>
-                </table>
-              </div>
-            </div>
+          <div style="height:8px"></div>
+          <div class="card" style='padding:12px'>
+            <h3 style='margin-bottom:6px'>Upload</h3>
+            <form method="post" action="/project/{project.id}/files/upload?branch_id={current.id}" enctype="multipart/form-data" data-testid="upload-form">
+              <input type="file" name="file" required data-testid="upload-input" />
+              <div style="height:6px"></div>
+              <div class="small muted">LLM classification runs automatically on upload. See README for API key setup.</div>
+              <div style="height:6px"></div>
+              <button type="submit" data-testid="upload-submit">Upload</button>
+            </form>
           </div>
-      </div>
+          <div style="height:8px"></div>
+          {sql_card}
+          <div style="height:8px"></div>
+          <div class="card" style="padding:12px">
+            <h3>Databases</h3>
+            <table class="table">
+              <thead><tr><th>Name</th><th>Branch</th><th>Created</th></tr></thead>
+              <tbody>{dataset_tbody}</tbody>
+            </table>
+          </div>
+        </div>
       </div>
 
     """
