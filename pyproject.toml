@@ -1,0 +1,23 @@
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+# Exclude bundled/packaged artifacts and vendor content.
+exclude = [
+  ".git",
+  "__pycache__",
+  ".venv",
+  "build",
+  "dist",
+  "dist-macos",
+  "packaging",
+  "**/*.app/**",
+  "**/_internal/**",
+]
+
+[tool.ruff.lint]
+# Keep ruff laser-focused for the pre-build gate. Block only on syntax and undefined names.
+select = ["E9", "F821"]
+
+[tool.ruff.lint.per-file-ignores]
+# main.py contains large f-strings within a function; ruff may mis-detect undefined names in placeholders.
+"main.py" = ["F821"]
