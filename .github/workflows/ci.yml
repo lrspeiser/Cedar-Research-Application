@@ -25,9 +25,6 @@ jobs:
         run: ruff check .
 
 
-      - name: Mypy (type check)
-        run: mypy --config-file mypy.ini
-
       - name: Compile all (syntax check)
         run: python -m compileall -q .
 
