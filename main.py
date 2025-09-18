@@ -1200,20 +1200,132 @@ app = FastAPI(title="Cedar")
 from fastapi.responses import HTMLResponse as _HTMLResponse
 
 def layout(title: str, body: str, header_label: Optional[str] = None, header_link: Optional[str] = None, nav_query: Optional[str] = None) -> HTMLResponse:  # type: ignore[override]
+    # LLM status for header (best-effort; cached)
     try:
-        h = f"<div class='topbar'><strong>Cedar</strong>"
-        if header_label:
-            if header_link:
-                h += f" &middot; <a href='{escape(header_link)}'>{escape(header_label)}</a>"
-            else:
-                h += f" &middot; {escape(header_label)}"
-        h += "</div>"
-        html = f"""<!doctype html><html><head><meta charset='utf-8'/><title>{escape(title)}</title>
-        <style>body{{font-family:-apple-system,Segoe UI,Roboto,Arial;margin:16px}}a{{color:#2563eb;text-decoration:none}}</style></head>
-        <body>{h}<main>{body}</main></body></html>"""
-        return _HTMLResponse(html)
+        ready, reason, model = _llm_reachability()
+        if ready:
+            llm_status = f" <a href='/settings' class='pill' title='LLM connected — click to manage key'>LLM: {escape(model)}</a>"
+        else:
+            llm_status = f" <a href='/settings' class='pill' style='background:#fef2f2; color:#991b1b' title='LLM unavailable — click to paste your key'>LLM unavailable ({escape(reason)})</a>"
     except Exception:
-        return _HTMLResponse(f"<html><body><h1>{escape(title)}</h1><div>{body}</div></body></html>")
+        llm_status = ""
+
+    # Build header breadcrumb/label (optional)
+    try:
+        if header_label:
+            lbl = escape(header_label)
+            if header_link:
+                header_html = f"<a href='{escape(header_link)}' style='font-weight:600'>{lbl}</a>"
+            else:
+                header_html = f"<span style='font-weight:600'>{lbl}</span>"
+        else:
+            header_html = ""
+        header_info = header_html
+    except Exception:
+        header_html = ""
+        header_info = ""
+
+    # Build right-side navigation with optional project context (propagates ?project_id=&branch_id=)
+    try:
+        nav_qs = ("?" + nav_query.strip()) if (nav_query and nav_query.strip()) else ""
+    except Exception:
+        nav_qs = ""
+
+    nav_html = (
+        f"<a href='/'>&#8203;Projects</a> | "
+        f"<a href='/shell{nav_qs}'>Shell</a> | "
+        f"<a href='/merge{nav_qs}'>Merge</a> | "
+        f"<a href='/changelog{nav_qs}'>Changelog</a> | "
+        f"<a href='/log{nav_qs}'>Log</a> | "
+        f"<a href='/settings'>Settings</a>"
+    )
+
+    # Inject client logging script (console/errors -> /api/client-log)
+    client_log_js = """
+<script>
+(function(){
+  if (window.__cedarpyClientLogInitialized) return; window.__cedarpyClientLogInitialized = true;
+  const endpoint = '/api/client-log';
+  function post(payload){
+    try {
+      const body = JSON.stringify(payload);
+      if (navigator.sendBeacon) {
+        const blob = new Blob([body], {type: 'application/json'});
+        navigator.sendBeacon(endpoint, blob);
+        return;
+      }
+      fetch(endpoint, {method: 'POST', headers: {'Content-Type': 'application/json'}, body, keepalive: true}).catch(function(){});
+    } catch(e) {}
+  }
+  function base(level, message, origin, extra){
+    post(Object.assign({
+      when: new Date().toISOString(),
+      level: String(level||'info'),
+      message: String(message||''),
+      url: String(location.href||''),
+      userAgent: navigator.userAgent || '',
+      origin: origin || 'console'
+    }, extra||{}));
+  }
+  var orig = { log: console.log, info: console.info, warn: console.warn, error: console.error };
+  console.log = function(){ try { base('info', Array.from(arguments).join(' '), 'console.log'); } catch(e){}; return orig.log.apply(console, arguments); };
+  console.info = function(){ try { base('info', Array.from(arguments).join(' '), 'console.info'); } catch(e){}; return orig.info.apply(console, arguments); };
+  console.warn = function(){ try { base('warn', Array.from(arguments).join(' '), 'console.warn'); } catch(e){}; return orig.warn.apply(console, arguments); };
+  console.error = function(){ try { base('error', Array.from(arguments).join(' '), 'console.error'); } catch(e){}; return orig.error.apply(console, arguments); };
+  window.addEventListener('error', function(ev){
+    try { base('error', ev.message || 'window.onerror', 'window.onerror', { line: ev.lineno||null, column: ev.colno||null, stack: ev.error && ev.error.stack ? String(ev.error.stack) : null }); } catch(e){}
+  }, true);
+  window.addEventListener('unhandledrejection', function(ev){
+    try { var r = ev && ev.reason; base('error', (r && (r.message || r.toString())) || 'unhandledrejection', 'unhandledrejection', { stack: r && r.stack ? String(r.stack) : null }); } catch(e){}
+  });
+})();
+</script>
+"""
+
+    html_doc = f"""<!doctype html>
+<html lang=\"en\">
+<head>
+  <meta charset=\"utf-8\" />
+  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+  <title>{escape(title)}</title>
+  <style>
+    :root {{ --fg: #111; --bg: #fff; --accent: #2563eb; --muted: #6b7280; --border: #e5e7eb; }}
+    * {{ box-sizing: border-box; }}
+    body {{ margin: 0; font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Oxygen, Ubuntu, Cantarell, \"Helvetica Neue\", Arial, \"Apple Color Emoji\", \"Segoe UI Emoji\"; color: var(--fg); background: var(--bg); }}
+    header {{ padding: 16px 20px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg); }}
+    main {{ padding: 20px; max-width: 1100px; margin: 0 auto; }}
+    h1, h2, h3 {{ margin: 0 0 12px; }}
+    a {{ color: var(--accent); text-decoration: none; }}
+    a:hover {{ text-decoration: underline; }}
+    .row {{ display: flex; gap: 16px; flex-wrap: wrap; }}
+    .card {{ border: 1px solid var(--border); border-radius: 8px; padding: 16px; background: #fff; flex: 1 1 340px; }}
+    .muted {{ color: var(--muted); }}
+    .table {{ width: 100%; border-collapse: collapse; }}
+    .table th, .table td {{ border-bottom: 1px solid var(--border); padding: 8px 6px; text-align: left; vertical-align: top; }}
+    .pill {{ display: inline-block; padding: 2px 8px; border-radius: 999px; background: #eef2ff; color: #3730a3; font-size: 12px; }}
+    .small {{ font-size: 12px; }}
+    .topbar {{ display:flex; align-items:center; gap:12px; }}
+  </style>
+  {client_log_js}
+</head>
+<body>
+  <header>
+    <div class=\"topbar\">
+      <div><strong>Cedar</strong> <span class='muted'>•</span> {header_info}</div>
+      <div style=\"margin-left:auto\">{nav_html}{llm_status}</div>
+    </div>
+  </header>
+  <main>
+    {body}
+  </main>
+</body>
+</html>
+"""
+    try:
+        html_doc = html_doc.format(llm_status=llm_status, header_info=header_html, nav_html=nav_html)
+    except Exception:
+        pass
+    return HTMLResponse(html_doc)
 
 
 @app.get("/settings", response_class=HTMLResponse)
@@ -1398,7 +1510,13 @@ def _llm_reachability(ttl_seconds: int = 300) -> tuple[bool, str, str]:
     try:
         # Cheap probe: retrieve the model
         client.models.retrieve(model)
+        prev_ready = bool(_LLM_READY_CACHE.get("ready"))
         _LLM_READY_CACHE.update({"ts": now, "ready": True, "reason": "ok", "model": model})
+        try:
+            if not prev_ready:
+                print(f"[llm-ready] model={model} key=ok")
+        except Exception:
+            pass
         return True, "ok", model
     except Exception as e:
         _LLM_READY_CACHE.update({"ts": now, "ready": False, "reason": f"{type(e).__name__}", "model": model or ""})
@@ -2030,10 +2148,23 @@ SELECT * FROM demo LIMIT 10;""")
                     details = f"<pre class='small' style='white-space:pre-wrap; background:#f8fafc; padding:8px; border-radius:6px; display:none' id='{details_id}'>" + escape(m.content) + "</pre>"
             except Exception:
                 details = f"<pre class='small' style='white-space:pre-wrap; background:#f8fafc; padding:8px; border-radius:6px; display:none' id='{details_id}'>" + escape(m.content) + "</pre>"
+            # Build a short preview to show inline under the title
+            try:
+                if getattr(m, 'payload_json', None) is not None:
+                    import json as _json
+                    _preview_json = _json.dumps(m.payload_json, ensure_ascii=False)
+                    preview = (_preview_json[:400] + ('…' if len(_preview_json) > 400 else ''))
+                else:
+                    txt = m.content or ''
+                    preview = (txt[:400] + ('…' if len(txt) > 400 else ''))
+            except Exception:
+                preview = ''
+
             msg_rows.append(
                 f"<div class='small' style='margin:6px 0'>"
                 f"<span class='pill'>{role}</span> "
                 f"<a href='#' onclick=\"var e=document.getElementById('{details_id}'); if(e){{ e.style.display = (e.style.display==='none'?'block':'none'); }} return false;\" style='font-weight:600'>{title_txt}</a>"
+                f"<div class='small' style='white-space:pre-wrap; margin-top:4px'>{escape(preview)}</div>"
                 f"{details}"
                 f"</div>"
             )
