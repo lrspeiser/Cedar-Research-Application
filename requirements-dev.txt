@@ -1,0 +1,10 @@
+fastapi
+starlette
+uvicorn
+pydantic
+sqlalchemy
+pytest
+ruff
+black
+mypy
+httpx
