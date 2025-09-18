@@ -1206,6 +1206,7 @@ def settings_page(msg: Optional[str] = None):
     {banner}
     <p class='muted'>LLM keys are read from <code>{html.escape(SETTINGS_PATH)}</code>. We will not display keys here.</p>
     <p>OpenAI key status: <strong>{'Present' if key_present else 'Missing'}</strong></p>
+    <p>LLM connectivity: {('✅ <strong>OK</strong> – ' + html.escape(str(model))) if _llm_reach_ok() else ('❌ <strong>Unavailable</strong> – ' + html.escape(_llm_reach_reason()))}</p>
     <form method='post' action='/settings/save'>
       <div>
         <label>OpenAI API Key</label><br/>
@@ -1383,7 +1384,20 @@ def _llm_reachability(ttl_seconds: int = 300) -> tuple[bool, str, str]:
         return False, f"{type(e).__name__}", model or ""
 
 
-def layout(title: str, body: str, header_label: Optional[str] = None, header_link: Optional[str] = None, nav_query: Optional[str] = None) -> HTMLResponse:
+# Helpers for Settings connectivity line
+    def _llm_reach_ok() -> bool:
+        try:
+            ok, _, _ = _llm_reachability()
+            return bool(ok)
+        except Exception:
+            return False
+    def _llm_reach_reason() -> str:
+        try:
+            ok, reason, _ = _llm_reachability()
+            return "ok" if ok else (reason or "unknown")
+        except Exception:
+            return "unknown"
+
     # LLM status for header (best-effort; cached)
     try:
         ready, reason, model = _llm_reachability()
@@ -1489,6 +1503,24 @@ def layout(title: str, body: str, header_label: Optional[str] = None, header_lin
   // Client-side upload UI instrumentation (logs to console -> forwarded to /api/client-log). See README: Client-side logging.
   document.addEventListener('DOMContentLoaded', function(){
     try {
+      // Typing indicator for Ask form
+      try {
+        var askForm = document.getElementById('askForm');
+        if (askForm) {
+          askForm.addEventListener('submit', function(){
+            try {
+              var msgs = document.getElementById('msgs');
+              if (!msgs) return;
+              var d = document.createElement('div');
+              d.className = 'small typing';
+              d.id = 'typingIndicator';
+              d.innerHTML = "<span class='pill'>assistant</span> Thinking <span class='dots'><span>.</span><span>.</span><span>.</span></span>";
+              msgs.appendChild(d);
+            } catch(e) { try { console.error('[ui] typing indicator error', e); } catch(_) {} }
+          });
+        }
+      } catch(e) {}
+
       var form = document.querySelector('[data-testid=upload-form]');
       var input = document.querySelector('[data-testid=upload-input]');
       var button = document.querySelector('[data-testid=upload-submit]');
@@ -1621,6 +1653,13 @@ def layout(title: str, body: str, header_label: Optional[str] = None, header_lin
     .tab-panels {{ border:1px solid var(--border); border-radius:0 6px 6px 6px; background:#fff; padding:12px; }}
     .panel.hidden {{ display:none !important; }}
     @media (max-width: 900px) {{ .two-col {{ grid-template-columns: 1fr; }} }}
+    /* Typing indicator */
+    .typing {{ color: var(--muted); font-style: italic; }}
+    .dots span {{ display:inline-block; opacity: 0; animation: blink 1.2s infinite; }}
+    .dots span:nth-child(1) {{ animation-delay: 0s; }}
+    .dots span:nth-child(2) {{ animation-delay: 0.2s; }}
+    .dots span:nth-child(3) {{ animation-delay: 0.4s; }}
+    @keyframes blink {{ 0%, 20% {{ opacity: 0; }} 50% {{ opacity: 1; }} 100% {{ opacity: 0; }} }}
     /* Click feedback toast */
     .click-received {{ position: fixed; background: #f1f5f9; color: #111; border: 1px solid var(--border); border-radius: 9999px; padding: 2px 8px; font-size: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.08); pointer-events: none; opacity: 0; transform: translateY(-4px); animation: crFade 1200ms ease forwards; }}
     @keyframes crFade {{ 0% {{ opacity: 0; transform: translateY(-4px); }} 15% {{ opacity: 1; transform: translateY(0); }} 85% {{ opacity: 1; }} 100% {{ opacity: 0; transform: translateY(-6px); }} }}
@@ -2004,7 +2043,7 @@ SELECT * FROM demo LIMIT 10;""")
               <div style='margin-bottom:8px'>{thr_tabs_html}</div>
               <h3>Chat</h3>
               {flash_html}
-              <div>{msgs_html}</div>
+              <div id='msgs'>{msgs_html}</div>
               {chat_form}
             </div>
             <div id="left-file" class="panel hidden">
@@ -2059,7 +2098,7 @@ SELECT * FROM demo LIMIT 10;""")
       </div>
 
       <div style="height:72px"></div>
-      <form method='post' action='/project/{project.id}/ask?branch_id={current.id}' style='position:fixed; left:0; right:0; bottom:0; z-index:50; background:#ffffffcc; backdrop-filter: saturate(180%) blur(6px); border-top:1px solid var(--border); padding:10px 16px; display:flex; gap:8px; align-items:center;'>
+      <form id='askForm' method='post' action='/project/{project.id}/ask?branch_id={current.id}' style='position:fixed; left:0; right:0; bottom:0; z-index:50; background:#ffffffcc; backdrop-filter: saturate(180%) blur(6px); border-top:1px solid var(--border); padding:10px 16px; display:flex; gap:8px; align-items:center;'>
         <input type='text' name='query' placeholder='Ask Cedar…' required style='flex:1; padding:10px; border:1px solid var(--border); border-radius:8px' />
         <button type='submit'>Ask</button>
         <span class='small muted'>Context: files, changelog, answers</span>
@@ -4374,6 +4413,7 @@ def ask_orchestrator(project_id: int, request: Request, query: str = Form(...), 
         "You are Cedar's orchestrator. Always respond with STRICT JSON (no prose outside JSON).\n"
         "Schema: { \"Text Visible To User\": string, \"function_calls\": [ { \"name\": one of [sql, grep, code, img, web, plan, notes, question, final], \"args\": object } ] }\n"
         "Rules:\n"
+        "- \"Text Visible To User\" is REQUIRED and MUST be non-empty. It should EITHER (a) state the answer succinctly OR (b) state the concrete steps you are taking to get the answer.\n"
         "- Use sql to query the project's SQLite database (use sqlite_master/PRAGMA to introspect).\n"
         "- Use grep with {file_id, pattern, flags?} to search a specific file by id.\n"
         "- Use code with {language:'python', source:'...'}; helpers available: cedar.query(sql), cedar.read(file_id), cedar.list_files(), cedar.open_path(file_id), cedar.note(text,[tags]).\n"
@@ -4536,6 +4576,8 @@ def ask_orchestrator(project_id: int, request: Request, query: str = Form(...), 
     final_text: Optional[str] = None
     question_text: Optional[str] = None
     last_response: Optional[Dict[str, Any]] = None
+    last_text_visible: str = ""
+    last_tool_summary: str = ""
 
     while loop_count < 6:
         loop_count += 1
@@ -4549,6 +4591,7 @@ def ask_orchestrator(project_id: int, request: Request, query: str = Form(...), 
             db.rollback()
 
         text_visible = str(resp.get("Text Visible To User") or "").strip()
+        last_text_visible = text_visible or last_text_visible
         calls = resp.get("function_calls") or []
         tool_results: List[Dict[str, Any]] = []
 
@@ -4589,12 +4632,18 @@ def ask_orchestrator(project_id: int, request: Request, query: str = Form(...), 
         if question_text or final_text:
             break
 
+        # Summarize tools run for potential fallback rendering
+        try:
+            last_tool_summary = "Tools run: " + ", ".join([str((tr or {}).get("name") or "?") for tr in tool_results])
+        except Exception:
+            last_tool_summary = last_tool_summary or ""
+
         messages.append({"role": "user", "content": "ToolResults:"})
         messages.append({"role": "user", "content": _json.dumps({"tool_results": tool_results}, ensure_ascii=False)})
         if text_visible:
             messages.append({"role": "user", "content": text_visible})
 
-    show_msg = final_text or question_text or (last_response and str(last_response.get("Text Visible To User") or "").strip()) or "(no response)"
+    show_msg = final_text or question_text or (last_text_visible.strip() if last_text_visible and last_text_visible.strip() else "") or ( (last_response and str(last_response.get("Text Visible To User") or "").strip()) or "") or (last_tool_summary if last_tool_summary else "(no response)")
 
     am = ThreadMessage(project_id=project.id, branch_id=branch.id, thread_id=thr.id, role="assistant", display_title=("Ask • Final" if final_text else ("Ask • Question" if question_text else "Ask • Update")), content=show_msg)
     db.add(am); db.commit()

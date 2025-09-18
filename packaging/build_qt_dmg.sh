@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build a Qt-embedded CedarPy.app (PyInstaller spec) and wrap it into a DMG.
-# This build shows a Dock icon (no LSUIElement), launches cedarqt.py, and embeds the browser.
+# Build the official macOS DMG for CedarPy with a Dock icon and standard Quit behavior.
+# WHY: The Qt build shows a Dock icon (no LSUIElement), provides a normal app menu, and supports Cmd-Q/quit from Dock.
+# This is the REQUIRED build for user-facing distribution so the app can be exited cleanly.
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"

@@ -19,12 +19,19 @@ simple roll-up behavior between Main and branches. Everything is in `main.py` as
 
 ## Quickstart
 
+Important: For packaged distribution, always use the Qt DMG build so the app shows a Dock icon and can be quit via Cmd-Q/Dock.
+- Build: bash packaging/build_qt_dmg.sh
+- Install: open packaging/dist-qt/CedarPy-qt.dmg and drag CedarPy.app to Applications
+- Do not use the embedded DMG for end-users if you need a Dock icon and standard quit behavior.
+
 ### Run as a desktop app (Qt + QtWebEngine)
 
 - Install deps (includes PySide6):
   - pip install -r requirements.txt
-- Launch the embedded-browser desktop shell:
+- Launch the embedded-browser desktop shell with a Dock icon and Quit support:
   - python cedarqt.py
+
+Why this matters: the Qt desktop shell presents a normal macOS app with a Dock icon and menu, so you can Quit via Cmd-Q or from the Dock. This is the supported way to run Cedar as a desktop app to ensure it can be exited cleanly.
 
 This starts the FastAPI server and opens the UI inside a QtWebEngine window. JavaScript console output and in-page errors are captured and forwarded to your app logs under ~/Library/Logs/CedarPy (or $CEDARPY_LOG_DIR if set).
 
