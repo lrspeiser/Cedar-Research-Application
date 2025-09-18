@@ -1566,18 +1566,57 @@ def layout(title: str, body: str, header_label: Optional[str] = None, header_lin
     form.inline * {{ vertical-align: middle; }}
     input[type=\"text\"], select {{ padding: 8px; border: 1px solid var(--border); border-radius: 6px; width: 100%; }}
     input[type=\"file\"] {{ padding: 6px; border: 1px dashed var(--border); border-radius: 6px; width: 100%; position: relative; z-index: 1; display: block; }}
-    button {{ padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--accent); color: white; cursor: pointer; position: relative; z-index: 2; pointer-events: auto; transition: transform 80ms ease, filter 120ms ease, box-shadow 120ms ease; will-change: transform; user-select: none; }}
-    button:active {{ transform: scale(0.98); filter: brightness(0.98); }}
+    button {{ padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--accent); color: white; cursor: pointer; position: relative; z-index: 2; pointer-events: auto; }}
     button.secondary {{ background: #f3f4f6; color: #111; }}
     .small {{ font-size: 12px; }}
     .topbar {{ display:flex; align-items:center; gap:12px; }}
     .spinner {{ display:inline-block; width:12px; height:12px; border:2px solid #cbd5e1; border-top-color:#334155; border-radius:50%; animation: spin 1s linear infinite; }}
     @keyframes spin {{ from {{ transform: rotate(0deg);}} to {{ transform: rotate(360deg);}} }}
+
+    /* Two-column layout and tabs */
+    .two-col {{ display: grid; grid-template-columns: minmax(380px, 1fr) 1fr; gap: 16px; align-items: start; }}
+    .pane {{ display: flex; flex-direction: column; gap: 8px; }}
+    .tabs {{ display: flex; gap: 6px; border-bottom: 1px solid var(--border); }}
+    .tab {{ display:inline-block; padding:6px 10px; border:1px solid var(--border); border-bottom:none; border-radius:6px 6px 0 0; background:#f3f4f6; color:#111; cursor:pointer; user-select:none; }}
+    .tab.active {{ background:#fff; font-weight:600; }}
+    .tab-panels {{ border:1px solid var(--border); border-radius:0 6px 6px 6px; background:#fff; padding:12px; }}
+    .panel.hidden {{ display:none !important; }}
+    @media (max-width: 900px) {{ .two-col {{ grid-template-columns: 1fr; }} }}
+  </style>
     /* Click feedback toast */
     .click-received {{ position: fixed; background: #f1f5f9; color: #111; border: 1px solid var(--border); border-radius: 9999px; padding: 2px 8px; font-size: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.08); pointer-events: none; opacity: 0; transform: translateY(-4px); animation: crFade 1200ms ease forwards; }}
     @keyframes crFade {{ 0% {{ opacity: 0; transform: translateY(-4px); }} 15% {{ opacity: 1; transform: translateY(0); }} 85% {{ opacity: 1; }} 100% {{ opacity: 0; transform: translateY(-6px); }} }}
   </style>
   {client_log_js}
+  <script>
+  (function(){
+    function activateTab(tab) {{
+      try {{
+        var pane = tab.closest('.pane') || document;
+        var tabs = tab.parentElement.querySelectorAll('.tab');
+        tabs.forEach(function(t){{ t.classList.remove('active'); }});
+        tab.classList.add('active');
+        var target = tab.getAttribute('data-target');
+        if (!target) return;
+        var panelsRoot = pane.querySelector('.tab-panels');
+        if (!panelsRoot) return;
+        panelsRoot.querySelectorAll('.panel').forEach(function(p){{ p.classList.add('hidden'); }});
+        var el = pane.querySelector('#' + target);
+        if (el) el.classList.remove('hidden');
+      }} catch(e) {{ try {{ console.error('[ui] tab error', e); }} catch(_) {{}} }}
+    }}
+    function initTabs(){{
+      document.querySelectorAll('.tabs .tab').forEach(function(tab){{
+        tab.addEventListener('click', function(ev){{ ev.preventDefault(); activateTab(tab); }});
+      }});
+    }}
+    if (document.readyState === 'loading') {{
+      document.addEventListener('DOMContentLoaded', initTabs, {{ once: true }});
+    }} else {{
+      initTabs();
+    }}
+  })();
+  </script>
 </head>
 <body>
   <header>
@@ -1909,19 +1948,76 @@ SELECT * FROM demo LIMIT 10;""")
       <div style=\"height:10px\"></div>
       <div>Branches: {tabs_html}</div>
 
-      <div style=\"margin-top:8px; display:flex; gap:8px; align-items:center\">\n        <form method=\"post\" action=\"/project/{project.id}/delete\" class=\"inline\" onsubmit=\"return confirm('Delete project {escape(project.title)} and all its data?');\">\n          <button type=\"submit\" class=\"secondary\">Delete Project</button>\n        </form>\n      </div>\n      <div class=\"row\" style='margin-top:8px'>
-        <div class='card' style='flex:1 1 100%'>
-          <div style='margin-bottom:8px'>{thr_tabs_html}</div>
-          <div style='margin:8px 0'>
-            {left_details}
-          </div>
-          <h3>Chat</h3>
-          {flash_html}
-          <div>{msgs_html}</div>
-          {chat_form}
-        </div
+      <div style="margin-top:8px; display:flex; gap:8px; align-items:center">
+        <form method="post" action="/project/{project.id}/delete" class="inline" onsubmit="return confirm('Delete project {escape(project.title)} and all its data?');">
+          <button type="submit" class="secondary">Delete Project</button>
+        </form>
+      </div>
 
-        <div style=\"flex:1; display:flex; flex-direction:column; gap:8px\">\n          <div class=\"card\" style='padding:12px'>\n            <h3 style='margin-bottom:6px'>Upload a file</h3>\n            <form method=\"post\" action=\"/project/{project.id}/files/upload?branch_id={current.id}\" enctype=\"multipart/form-data\" data-testid=\"upload-form\">\n              <input type=\"file\" name=\"file\" required data-testid=\"upload-input\" />\n              <div style=\"height:6px\"></div>\n              <div class=\"small muted\">LLM classification runs automatically on upload. See README for API key setup.</div>\n              <div style=\"height:6px\"></div>\n              <button type=\"submit\" data-testid=\"upload-submit\">Upload</button>\n            </form>\n          </div>\n          <div class=\"card\" style=\"max-height:220px; overflow:auto; padding:12px\">\n            <h3 style='margin-bottom:6px'>Files</h3>\n            {file_list_html}\n          </div>\n          {sql_card}\n          <div class=\"card\" style=\"padding:12px\">\n            <h3>Databases</h3>\n            <table class=\"table\">\n              <thead><tr><th>Name</th><th>Branch</th><th>Created</th></tr></thead>\n              <tbody>{dataset_tbody}</tbody>\n            </table>\n          </div>\n        </div>
+      <div class="two-col" style="margin-top:8px">
+        <div class="pane">
+          <div class="tabs" data-pane="left">
+            <a href="#" class="tab active" data-target="left-chat">Chat</a>
+            <a href="#" class="tab" data-target="left-file">File</a>
+            <a href="#" class="tab" data-target="left-database">Database</a>
+          </div>
+          <div class="tab-panels">
+            <div id="left-chat" class="panel">
+              <div style='margin-bottom:8px'>{thr_tabs_html}</div>
+              <h3>Chat</h3>
+              {flash_html}
+              <div>{msgs_html}</div>
+              {chat_form}
+            </div>
+            <div id="left-file" class="panel hidden">
+              {left_details}
+            </div>
+            <div id="left-database" class="panel hidden">
+              {sql_card}
+            </div>
+          </div>
+        </div>
+
+        <div class="pane">
+          <div class="tabs" data-pane="right">
+            <a href="#" class="tab active" data-target="right-files">Files</a>
+            <a href="#" class="tab" data-target="right-upload">Upload</a>
+            <a href="#" class="tab" data-target="right-sql">SQL</a>
+            <a href="#" class="tab" data-target="right-datasets">Databases</a>
+          </div>
+          <div class="tab-panels">
+            <div id="right-files" class="panel">
+              <div class="card" style="max-height:220px; overflow:auto; padding:12px">
+                <h3 style='margin-bottom:6px'>Files</h3>
+                {file_list_html}
+              </div>
+            </div>
+            <div id="right-upload" class="panel hidden">
+              <div class="card" style='padding:12px'>
+                <h3 style='margin-bottom:6px'>Upload a file</h3>
+                <form method="post" action="/project/{project.id}/files/upload?branch_id={current.id}" enctype="multipart/form-data" data-testid="upload-form">
+                  <input type="file" name="file" required data-testid="upload-input" />
+                  <div style="height:6px"></div>
+                  <div class="small muted">LLM classification runs automatically on upload. See README for API key setup.</div>
+                  <div style="height:6px"></div>
+                  <button type="submit" data-testid="upload-submit">Upload</button>
+                </form>
+              </div>
+            </div>
+            <div id="right-sql" class="panel hidden">
+              {sql_card}
+            </div>
+            <div id="right-datasets" class="panel hidden">
+              <div class="card" style="padding:12px">
+                <h3>Databases</h3>
+                <table class="table">
+                  <thead><tr><th>Name</th><th>Branch</th><th>Created</th></tr></thead>
+                  <tbody>{dataset_tbody}</tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
 
