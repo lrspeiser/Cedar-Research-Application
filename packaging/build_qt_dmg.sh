@@ -12,7 +12,94 @@ OUT_DIR="$PKG_DIR/dist-qt"
 APP_NAME="CedarPy.app"
 DMG_PATH="$OUT_DIR/CedarPy-qt.dmg"
 
+# Optional CI gating
+# - Set CEDARPY_SKIP_CI_CHECK=1 to skip gating
+# - Set CEDARPY_REQUIRE_CI=1 to fail if gating cannot be performed
+# - Set CEDARPY_CI_BRANCH to override branch (default: main)
+# - Set CEDARPY_GITHUB_REPO (owner/repo) to override repo autodetection
+ci_gate() {
+  if [ "${CEDARPY_SKIP_CI_CHECK:-}" = "1" ]; then
+    echo "[ci] Skipping CI gating via CEDARPY_SKIP_CI_CHECK=1"
+    return 0
+  fi
+  BRANCH="${CEDARPY_CI_BRANCH:-main}"
+  # Derive repo from git remote if not provided
+  ORIGIN_URL=$(git -C "$ROOT_DIR" remote get-url origin 2>/dev/null || true)
+  REPO_GUESS=$(printf "%s" "$ORIGIN_URL" | sed -E 's#.*github.com[:/]+([^/]+)/([^/]+?)(\.git)?$#\1/\2#')
+  REPO="${CEDARPY_GITHUB_REPO:-$REPO_GUESS}"
+  if [ -z "$REPO" ]; then
+    if [ "${CEDARPY_REQUIRE_CI:-}" = "1" ]; then
+      echo "[ci] ERROR: Could not determine GitHub repo and CEDARPY_REQUIRE_CI=1 set; aborting" >&2
+      exit 3
+    else
+      echo "[ci] WARNING: Could not determine GitHub repo; proceeding without CI gating" >&2
+      return 0
+    fi
+  fi
+  echo "[ci] Gating on latest run for $REPO (branch=$BRANCH)"
+  if command -v gh >/dev/null 2>&1; then
+    # Use GitHub CLI
+    RUN_ID=$(gh run list --repo "$REPO" --branch "$BRANCH" --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null || true)
+    if [ -z "$RUN_ID" ]; then
+      if [ "${CEDARPY_REQUIRE_CI:-}" = "1" ]; then
+        echo "[ci] ERROR: No recent runs found for $REPO#$BRANCH; aborting" >&2
+        exit 3
+      else
+        echo "[ci] WARNING: No recent runs found for $REPO#$BRANCH; proceeding"
+        return 0
+      fi
+    fi
+    echo "[ci] Waiting for run $RUN_ID to complete..."
+    if ! gh run watch "$RUN_ID" --repo "$REPO" --exit-status; then
+      echo "[ci] ERROR: GitHub run failed (run_id=$RUN_ID)" >&2
+      exit 3
+    fi
+    echo "[ci] Run $RUN_ID succeeded. Proceeding with build."
+  else
+    # Fallback to REST API via curl; requires GITHUB_TOKEN
+    if [ -z "${GITHUB_TOKEN:-}" ]; then
+      if [ "${CEDARPY_REQUIRE_CI:-}" = "1" ]; then
+        echo "[ci] ERROR: gh not found and GITHUB_TOKEN not set; aborting due to CEDARPY_REQUIRE_CI=1" >&2
+        exit 3
+      else
+        echo "[ci] WARNING: gh not found and GITHUB_TOKEN not set; proceeding without CI gating" >&2
+        return 0
+      fi
+    fi
+    echo "[ci] Using GitHub REST API for $REPO (branch=$BRANCH)"
+    # Poll until status=completed, then require conclusion=success
+    ATTEMPTS=0
+    MAX_ATTEMPTS=120 # ~10 minutes at 5s intervals
+    while :; do
+      RESP=$(curl -s \
+        -H "Authorization: Bearer $GITHUB_TOKEN" \
+        -H "Accept: application/vnd.github+json" \
+        "https://api.github.com/repos/$REPO/actions/runs?branch=$BRANCH&per_page=1")
+      STATUS=$(printf "%s" "$RESP" | python3 -c 'import sys,json; d=json.load(sys.stdin); r=d.get("workflow_runs",[{"status":"","conclusion":"","id":None}])[0]; print(r.get("status",""))' 2>/dev/null || true)
+      CONCL=$(printf "%s" "$RESP" | python3 -c 'import sys,json; d=json.load(sys.stdin); r=d.get("workflow_runs",[{"status":"","conclusion":"","id":None}])[0]; print(r.get("conclusion",""))' 2>/dev/null || true)
+      if [ "$STATUS" = "completed" ]; then
+        if [ "$CONCL" = "success" ]; then
+          echo "[ci] Latest run succeeded. Proceeding with build."
+          break
+        else
+          echo "[ci] ERROR: Latest run concluded '$CONCL'" >&2
+          exit 3
+        fi
+      fi
+      ATTEMPTS=$((ATTEMPTS+1))
+      if [ $ATTEMPTS -ge $MAX_ATTEMPTS ]; then
+        echo "[ci] ERROR: Timed out waiting for run completion" >&2
+        exit 3
+      fi
+      sleep 5
+    done
+  fi
+}
+
 mkdir -p "$OUT_DIR"
+
+# Gate on CI before doing heavy work
+ci_gate
 
 # Clean old outputs
 rm -rf "$DIST_DIR/$APP_NAME" "$DMG_PATH" "$ROOT_DIR/build" "$DIST_DIR" 2>/dev/null || true
