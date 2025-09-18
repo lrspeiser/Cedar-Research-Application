@@ -25,7 +25,7 @@ ci_gate() {
   BRANCH="${CEDARPY_CI_BRANCH:-main}"
   # Derive repo from git remote if not provided
   ORIGIN_URL=$(git -C "$ROOT_DIR" remote get-url origin 2>/dev/null || true)
-  REPO_GUESS=$(printf "%s" "$ORIGIN_URL" | sed -E 's#.*github.com[:/]+([^/]+)/([^/]+?)(\.git)?$#\1/\2#')
+  REPO_GUESS=$(printf "%s" "$ORIGIN_URL" | sed -E 's#.*github.com[:/]+([^/]+)/([^/]+)(\.git)?$#\1/\2#')
   REPO="${CEDARPY_GITHUB_REPO:-$REPO_GUESS}"
   if [ -z "$REPO" ]; then
     if [ "${CEDARPY_REQUIRE_CI:-}" = "1" ]; then
