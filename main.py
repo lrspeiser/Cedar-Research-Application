@@ -2297,16 +2297,16 @@ SELECT * FROM demo LIMIT 10;""")
               <div class='tabbar thread-tabs' style='margin-bottom:6px'>{thr_tabs_html}</div>
               <h3>Chat</h3>
               <style>
-                .chat-log { display:flex; flex-direction:column; gap:8px; }
-                .msg .meta { display:flex; gap:8px; align-items:center; margin-bottom:4px; }
-                .bubble { border:1px solid var(--border); border-radius:12px; padding:10px 12px; background:#fff; }
-                .bubble.user { background:#ecfeff; border-color:#bae6fd; }
-                .bubble.assistant { background:#f8fafc; border-color:#e5e7eb; }
-                .bubble.system { background:#fff7ed; border-color:#fde68a; }
-                .thread-tabs .tab { display:inline-block; padding:6px 10px; border:1px solid var(--border); border-bottom:none; border-radius:6px 6px 0 0; background:#f3f4f6; color:#111; margin-right:4px; }
-                .thread-tabs .tab.active { background:#fff; font-weight:600; }
-                .thread-tabs .tab.new { background:#e5f6ff; }
-                .chat-input { margin-top:6px; }
+                .chat-log {{ display:flex; flex-direction:column; gap:8px; }}
+                .msg .meta {{ display:flex; gap:8px; align-items:center; margin-bottom:4px; }}
+                .bubble {{ border:1px solid var(--border); border-radius:12px; padding:10px 12px; background:#fff; }}
+                .bubble.user {{ background:#ecfeff; border-color:#bae6fd; }}
+                .bubble.assistant {{ background:#f8fafc; border-color:#e5e7eb; }}
+                .bubble.system {{ background:#fff7ed; border-color:#fde68a; }}
+                .thread-tabs .tab {{ display:inline-block; padding:6px 10px; border:1px solid var(--border); border-bottom:none; border-radius:6px 6px 0 0; background:#f3f4f6; color:#111; margin-right:4px; }}
+                .thread-tabs .tab.active {{ background:#fff; font-weight:600; }}
+                .thread-tabs .tab.new {{ background:#e5f6ff; }}
+                .chat-input {{ margin-top:6px; }}
               </style>
               {flash_html}
               <div id='msgs' class='chat-log'>{msgs_html}</div>
