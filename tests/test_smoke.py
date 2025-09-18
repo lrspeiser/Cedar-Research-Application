@@ -4,7 +4,7 @@ import re
 
 import main
 
-client = TestClient(main.app)
+client = TestClient(main.app, follow_redirects=True)
 
 
 def test_home_ok():
@@ -16,12 +16,10 @@ def test_home_ok():
 def test_create_and_open_project():
     title = f"Smoke {int(time.time())}"
     r = client.post("/projects/create", data={"title": title})
-    # Allow 303 redirect
-    assert r.status_code in (200, 303)
+    # With follow_redirects=True, we expect a 200 and the project page in the response
+    assert r.status_code == 200
+    r2 = r
 
-    # Follow redirect if present
-    url = r.headers.get("location") or "/"
-    r2 = client.get(url)
     assert r2.status_code == 200
     # Project page should contain a heading and right pane sections
     assert re.search(r"<h1>", r2.text)
