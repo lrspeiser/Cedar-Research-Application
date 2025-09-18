@@ -594,16 +594,21 @@ except Exception:
 # Also see README section "Tabular import via LLM codegen" for the second-stage processing when structure == 'tabular'.
 
 def _llm_client_config():
+    """
+    Returns (client, model) if OpenAI SDK is available and a key is configured.
+    Looks up key from env first, then falls back to the user settings file via _env_get.
+    """
     try:
         from openai import OpenAI  # type: ignore
     except Exception:
         return None, None
-    api_key = os.getenv("CEDARPY_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
-    if not api_key:
+    # Prefer env, then fallback to settings file
+    api_key = os.getenv("CEDARPY_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY") or _env_get("CEDARPY_OPENAI_API_KEY") or _env_get("OPENAI_API_KEY")
+    if not api_key or not str(api_key).strip():
         return None, None
-    model = os.getenv("CEDARPY_OPENAI_MODEL", "gpt-5")
+    model = os.getenv("CEDARPY_OPENAI_MODEL") or _env_get("CEDARPY_OPENAI_MODEL") or "gpt-5"
     try:
-        client = OpenAI(api_key=api_key)
+        client = OpenAI(api_key=str(api_key).strip())
         return client, model
     except Exception:
         return None, None
@@ -1337,7 +1342,7 @@ _LLM_READY_CACHE = {"ts": 0.0, "ready": False, "reason": "init", "model": None}
 
 def _llm_reachability(ttl_seconds: int = 300) -> tuple[bool, str, str]:
     """Best-effort reachability check for UI. Returns (ready, reason, model).
-    Cached to avoid per-request network calls.
+    Cached to avoid per-request network calls. Provides clearer reasons when unavailable.
     """
     now = time.time()
     try:
@@ -1345,10 +1350,29 @@ def _llm_reachability(ttl_seconds: int = 300) -> tuple[bool, str, str]:
             return bool(_LLM_READY_CACHE.get("ready")), str(_LLM_READY_CACHE.get("reason") or ""), str(_LLM_READY_CACHE.get("model") or "")
     except Exception:
         pass
+    # Determine SDK availability
+    sdk_ok = True
+    try:
+        from openai import OpenAI  # type: ignore  # noqa: F401
+    except Exception:
+        sdk_ok = False
+    # Determine key presence (env or settings file)
+    key_present = bool(
+        os.getenv("CEDARPY_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY") or _env_get("CEDARPY_OPENAI_API_KEY") or _env_get("OPENAI_API_KEY")
+    )
     client, model = _llm_client_config()
     if not client:
-        _LLM_READY_CACHE.update({"ts": now, "ready": False, "reason": "missing key", "model": model or ""})
-        return False, "missing key", model or ""
+        reason = "missing key"
+        if key_present and not sdk_ok:
+            reason = "OpenAI SDK missing"
+        elif (not key_present) and sdk_ok:
+            reason = "missing key"
+        elif (not key_present) and (not sdk_ok):
+            reason = "SDK+key missing"
+        else:
+            reason = "init error"
+        _LLM_READY_CACHE.update({"ts": now, "ready": False, "reason": reason, "model": model or ""})
+        return False, reason, model or ""
     try:
         # Cheap probe: retrieve the model
         client.models.retrieve(model)

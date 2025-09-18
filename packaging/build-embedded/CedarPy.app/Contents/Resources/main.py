@@ -1580,7 +1580,8 @@ def layout(title: str, body: str, header_label: Optional[str] = None, header_lin
     form.inline * {{ vertical-align: middle; }}
     input[type=\"text\"], select {{ padding: 8px; border: 1px solid var(--border); border-radius: 6px; width: 100%; }}
     input[type=\"file\"] {{ padding: 6px; border: 1px dashed var(--border); border-radius: 6px; width: 100%; position: relative; z-index: 1; display: block; }}
-    button {{ padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--accent); color: white; cursor: pointer; position: relative; z-index: 2; pointer-events: auto; }}
+    button {{ padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--accent); color: white; cursor: pointer; position: relative; z-index: 2; pointer-events: auto; transition: transform 80ms ease, filter 120ms ease, box-shadow 120ms ease; will-change: transform; user-select: none; }}
+    button:active {{ transform: scale(0.98); filter: brightness(0.98); }}
     button.secondary {{ background: #f3f4f6; color: #111; }}
     .small {{ font-size: 12px; }}
     .topbar {{ display:flex; align-items:center; gap:12px; }}
@@ -1596,7 +1597,6 @@ def layout(title: str, body: str, header_label: Optional[str] = None, header_lin
     .tab-panels {{ border:1px solid var(--border); border-radius:0 6px 6px 6px; background:#fff; padding:12px; }}
     .panel.hidden {{ display:none !important; }}
     @media (max-width: 900px) {{ .two-col {{ grid-template-columns: 1fr; }} }}
-  </style>
     /* Click feedback toast */
     .click-received {{ position: fixed; background: #f1f5f9; color: #111; border: 1px solid var(--border); border-radius: 9999px; padding: 2px 8px; font-size: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.08); pointer-events: none; opacity: 0; transform: translateY(-4px); animation: crFade 1200ms ease forwards; }}
     @keyframes crFade {{ 0% {{ opacity: 0; transform: translateY(-4px); }} 15% {{ opacity: 1; transform: translateY(0); }} 85% {{ opacity: 1; }} 100% {{ opacity: 0; transform: translateY(-6px); }} }}
