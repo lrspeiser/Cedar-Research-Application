@@ -5493,14 +5493,28 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
     try:
         if bool(payload.get('debug')):
             await websocket.send_text(json.dumps({"type": "debug", "prompt": messages}))
-    except Exception:
-        pass
+            try:
+                print("[ws-chat] debug-sent")
+            except Exception:
+                pass
+    except Exception as e:
+        try:
+            print(f"[ws-chat-debug-error] {type(e).__name__}: {e}")
+        except Exception:
+            pass
 
     # Orchestrated plan/execute loop (non-streaming JSON)
     try:
         await websocket.send_text(json.dumps({"type": "info", "stage": "planning"}))
-    except Exception:
-        pass
+        try:
+            print("[ws-chat] planning-sent")
+        except Exception:
+            pass
+    except Exception as e:
+        try:
+            print(f"[ws-chat-planinfo-error] {type(e).__name__}: {e}")
+        except Exception:
+            pass
 
     import urllib.request as _req
     import re as _re
@@ -5707,11 +5721,19 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
         loop_count += 1
         # Call LLM for next action
         try:
+            try:
+                print("[ws-chat] llm-call")
+            except Exception:
+                pass
             resp = client.chat.completions.create(model=model, messages=messages)
             raw = (resp.choices[0].message.content or "").strip()
         except Exception as e:
             try:
-                print(f"[ws-chat-error] {type(e).__name__}: {e}")
+                print(f"[ws-chat-llm-error] {type(e).__name__}: {e}")
+            except Exception:
+                pass
+            await websocket.send_text(json.dumps({"type": "error", "error": f"{type(e).__name__}: {e}"}))
+            await websocket.close(); return
             except Exception:
                 pass
             await websocket.send_text(json.dumps({"type": "error", "error": f"{type(e).__name__}: {e}"}))
