@@ -5734,10 +5734,6 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
                 pass
             await websocket.send_text(json.dumps({"type": "error", "error": f"{type(e).__name__}: {e}"}))
             await websocket.close(); return
-            except Exception:
-                pass
-            await websocket.send_text(json.dumps({"type": "error", "error": f"{type(e).__name__}: {e}"}))
-            await websocket.close(); return
 
         # Persist assistant JSON response for traceability
         dbj = SessionLocal()
