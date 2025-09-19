@@ -5718,110 +5718,132 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
     final_text = None
     question_text = None
 
-    while loop_count < 8:
-        loop_count += 1
-        # Call LLM for next action
-        try:
+    try:
+        while loop_count < 8:
+            loop_count += 1
+            # Call LLM for next action
             try:
-                print("[ws-chat] llm-call")
-            except Exception:
-                pass
-            resp = client.chat.completions.create(model=model, messages=messages)
-            raw = (resp.choices[0].message.content or "").strip()
-        except Exception as e:
-            try:
-                print(f"[ws-chat-llm-error] {type(e).__name__}: {e}")
-            except Exception:
-                pass
-            await websocket.send_text(json.dumps({"type": "error", "error": f"{type(e).__name__}: {e}"}))
-            await websocket.close(); return
-
-        # Persist assistant JSON response for traceability
-        dbj = SessionLocal()
-        try:
-            dbj.add(ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="assistant", content=raw, display_title="Research JSON"))
-            dbj.commit()
-        except Exception:
-            try: dbj.rollback()
-            except Exception: pass
-        finally:
-            try: dbj.close()
-            except Exception: pass
-
-        # Parse function call(s)
-        calls: List[Dict[str, Any]] = []
-        obj = None
-        try:
-            obj = json.loads(raw)
-        except Exception:
-            obj = None
-        if isinstance(obj, list):
-            calls = [c for c in obj if isinstance(c, dict)]
-        elif isinstance(obj, dict):
-            if 'function' in obj:
-                calls = [obj]
-            elif 'steps' in obj:
-                calls = [{"function": "plan", "steps": obj.get('steps') or []}]
-        else:
-            # Not parseable; ask for one function call
-            messages.append({"role": "user", "content": "Please respond with ONE function call in strict JSON."})
-            continue
-
-        for call in calls:
-            name = str((call.get('function') or '')).strip().lower()
-            args = call.get('args') or {}
-            if name == 'plan':
-                _send_info('plan')
-                # Persist plan
-                dbp = SessionLocal()
                 try:
-                    dbp.add(ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="assistant", display_title="Plan", content=json.dumps(call, ensure_ascii=False), payload_json=call))
-                    dbp.commit()
-                except Exception:
-                    try: dbp.rollback()
-                    except Exception: pass
-                finally:
-                    try: dbp.close()
-                    except Exception: pass
-                # Emit an action bubble to the client with plan steps preview
-                try:
-                    await websocket.send_text(json.dumps({"type": "action", "function": "plan", "args": {"steps": call.get("steps") or []}}))
+                    print("[ws-chat] llm-call")
                 except Exception:
                     pass
-                # Ask to proceed with the first step
-                messages.append({"role": "user", "content": "Proceed with the first step now. Respond with ONE function call in strict JSON only."})
-                break  # go to next LLM turn
-            if name in ('final', 'question'):
-                if name == 'final':
-                    final_text = str((args or {}).get('text') or call.get('output_to_user') or '').strip() or 'Done.'
-                else:
-                    question_text = str((args or {}).get('text') or call.get('output_to_user') or '').strip() or 'I have a question for you.'
-                break
-            # Execute tool
-            _send_info(f"tool:{name}")
+                resp = client.chat.completions.create(model=model, messages=messages)
+                raw = (resp.choices[0].message.content or "").strip()
+            except Exception as e:
+                try:
+                    print(f"[ws-chat-llm-error] {type(e).__name__}: {e}")
+                except Exception:
+                    pass
+                await websocket.send_text(json.dumps({"type": "error", "error": f"{type(e).__name__}: {e}"}))
+                await websocket.close(); return
+
+            # Persist assistant JSON response for traceability
+            dbj = SessionLocal()
             try:
-                await websocket.send_text(json.dumps({"type": "action", "function": name, "args": args or {}}))
+                dbj.add(ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="assistant", content=raw, display_title="Research JSON"))
+                dbj.commit()
             except Exception:
-                pass
-            fn = tools_map.get(name)
-            result = fn(args) if fn else {"ok": False, "error": f"unknown tool: {name}"}
-            # Persist tool result
-            dbt = SessionLocal()
-            try:
-                payload = {"function": name, "args": args, "result": result}
-                dbt.add(ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="assistant", display_title=f"Tool: {name}", content=json.dumps(payload, ensure_ascii=False), payload_json=payload))
-                dbt.commit()
-            except Exception:
-                try: dbt.rollback()
+                try: dbj.rollback()
                 except Exception: pass
             finally:
-                try: dbt.close()
+                try: dbj.close()
                 except Exception: pass
-            # Feed result back to LLM
-            messages.append({"role": "user", "content": "ToolResult:"})
-            messages.append({"role": "user", "content": json.dumps({"function": name, "result": result}, ensure_ascii=False)})
-        if final_text or question_text:
-            break
+
+            # Parse function call(s)
+            calls: List[Dict[str, Any]] = []
+            obj = None
+            try:
+                obj = json.loads(raw)
+            except Exception:
+                obj = None
+            if isinstance(obj, list):
+                calls = [c for c in obj if isinstance(c, dict)]
+            elif isinstance(obj, dict):
+                if 'function' in obj:
+                    calls = [obj]
+                elif 'steps' in obj:
+                    calls = [{"function": "plan", "steps": obj.get('steps') or []}]
+            else:
+                # Not parseable; ask for one function call
+                messages.append({"role": "user", "content": "Please respond with ONE function call in strict JSON."})
+                continue
+
+            for call in calls:
+                name = str((call.get('function') or '')).strip().lower()
+                args = call.get('args') or {}
+                if name == 'plan':
+                    _send_info('plan')
+                    # Persist plan
+                    dbp = SessionLocal()
+                    try:
+                        dbp.add(ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="assistant", display_title="Plan", content=json.dumps(call, ensure_ascii=False), payload_json=call))
+                        dbp.commit()
+                    except Exception:
+                        try: dbp.rollback()
+                        except Exception: pass
+                    finally:
+                        try: dbp.close()
+                        except Exception: pass
+                    # Emit an action bubble to the client with plan steps preview
+                    try:
+                        await websocket.send_text(json.dumps({"type": "action", "function": "plan", "args": {"steps": call.get("steps") or []}}))
+                    except Exception:
+                        pass
+                    # Ask to proceed with the first step
+                    messages.append({"role": "user", "content": "Proceed with the first step now. Respond with ONE function call in strict JSON only."})
+                    break  # go to next LLM turn
+                if name in ('final', 'question'):
+                    if name == 'final':
+                        final_text = str((args or {}).get('text') or call.get('output_to_user') or '').strip() or 'Done.'
+                    else:
+                        question_text = str((args or {}).get('text') or call.get('output_to_user') or '').strip() or 'I have a question for you.'
+                    break
+                # Execute tool
+                _send_info(f"tool:{name}")
+                try:
+                    await websocket.send_text(json.dumps({"type": "action", "function": name, "args": args or {}}))
+                except Exception:
+                    pass
+                fn = tools_map.get(name)
+                try:
+                    result = fn(args) if fn else {"ok": False, "error": f"unknown tool: {name}"}
+                except Exception as e:
+                    try:
+                        print(f"[ws-chat-tool-error] {name}: {type(e).__name__}: {e}")
+                    except Exception:
+                        pass
+                    result = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+                # Persist tool result
+                dbt = SessionLocal()
+                try:
+                    payload = {"function": name, "args": args, "result": result}
+                    dbt.add(ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="assistant", display_title=f"Tool: {name}", content=json.dumps(payload, ensure_ascii=False), payload_json=payload))
+                    dbt.commit()
+                except Exception:
+                    try: dbt.rollback()
+                    except Exception: pass
+                finally:
+                    try: dbt.close()
+                    except Exception: pass
+                # Feed result back to LLM
+                messages.append({"role": "user", "content": "ToolResult:"})
+                messages.append({"role": "user", "content": json.dumps({"function": name, "result": result}, ensure_ascii=False)})
+            if final_text or question_text:
+                break
+    except Exception as e:
+        try:
+            print(f"[ws-chat-loop-error] {type(e).__name__}: {e}")
+        except Exception:
+            pass
+        try:
+            await websocket.send_text(json.dumps({"type": "error", "error": f"{type(e).__name__}: {e}"}))
+        except Exception:
+            pass
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+        return
 
     # If the loop ended without a 'final' or 'question', nudge once more to produce a 'final'.
     if not final_text and not question_text:
