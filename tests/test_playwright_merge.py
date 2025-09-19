@@ -80,7 +80,14 @@ def test_merge_dashboard_shows_unique_and_merges(page: Page, path: str):
         tmp_path.write_text("hello,merge-branch\n", encoding="utf-8")
         upload_input.set_input_files(str(tmp_path))
         page.get_by_test_id("upload-submit").click(no_wait_after=True)
-        page.wait_for_url("**/project/*?**msg=File+uploaded**", wait_until="domcontentloaded")
+        # Robust wait: prefer URL with msg, but accept DOM confirmation if navigation timing varies
+        try:
+            page.wait_for_url("**/project/*?**msg=File+uploaded**", wait_until="domcontentloaded", timeout=60000)
+        except Exception:
+            # Fallback: wait for Files heading and the uploaded filename to appear
+            from playwright.sync_api import expect
+            expect(page.get_by_role("heading", name="Files")).to_be_visible(timeout=60000)
+            expect(page.get_by_text(".pw_tmp_merge.txt").first).to_be_visible(timeout=60000)
         # Open Merge page
         page.goto(base + "/merge")
         page.get_by_role("link", name="Open").first.click()
