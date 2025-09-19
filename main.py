@@ -5423,6 +5423,7 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
             "Include examples of the JSON schema for each function so the system can parse it afterwards.\n"
             "We will pass with each query: (a) a list of files and databases you can access (Resources), (b) recent conversation history (History), and (c) optional Context (selected file/DB).\n"
             "All data systems are queriable by you via the db/download/extract functions. Provide concrete, executable specs for those.\n"
+            "IMPORTANT: Constrain yourself to at most 3 turns in total. Always end with a \"final\" function within 3 turns, especially for simple queries like arithmetic.\n"
         )
 
         examples_json = {
@@ -5864,6 +5865,46 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
         pass
 
 
+def _run_tabular_import_background(project_id: int, branch_id: int, file_id: int, thread_id: int) -> None:
+    """Background worker to run tabular import without blocking the upload response.
+    See README: Tabular import via LLM codegen.
+    """
+    try:
+        from sqlalchemy.orm import sessionmaker as _sessionmaker
+        import json as _json
+    except Exception:
+        return
+    try:
+        SessionLocal = _sessionmaker(bind=_get_project_engine(project_id), autoflush=False, autocommit=False, future=True)
+        dbj = SessionLocal()
+    except Exception:
+        return
+    try:
+        rec = dbj.query(FileEntry).filter(FileEntry.id == int(file_id), FileEntry.project_id == project_id).first()
+        if not rec:
+            return
+        try:
+            imp_res = _tabular_import_via_llm(project_id, branch_id, rec, dbj)
+        except Exception as e:
+            imp_res = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        # Persist outcome to thread and changelog
+        try:
+            # Keep test compatibility: title begins with "File analyzed" so existing assertions still pass
+            title = ("File analyzed — Tabular import completed" if imp_res.get("ok") else "File analyzed — Tabular import failed")
+            dbj.add(ThreadMessage(project_id=project_id, branch_id=branch_id, thread_id=thread_id, role="assistant", display_title=title, content=_json.dumps(imp_res), payload_json=imp_res))
+            dbj.commit()
+        except Exception:
+            try: dbj.rollback()
+            except Exception: pass
+        try:
+            record_changelog(dbj, project_id, branch_id, "file.tabular_import", {"file_id": file_id}, imp_res)
+        except Exception:
+            pass
+    finally:
+        try: dbj.close()
+        except Exception: pass
+
+
 @app.post("/project/{project_id}/files/upload")
 # LLM classification runs after file is saved. See README for API key setup.
 # If LLM fails or is disabled, the file is kept and structure fields remain unset.
@@ -6018,31 +6059,15 @@ def upload_file(project_id: int, request: Request, file: UploadFile = File(...),
             db.commit()
         except Exception:
             db.rollback()
+        # Offload tabular import to a background thread to avoid blocking the upload redirect
         try:
-            imp_res = _tabular_import_via_llm(project.id, branch.id, record, db)
-            # Record outcome to thread and changelog
-            try:
-                # Keep test compatibility: title begins with "File analyzed" so existing assertions still pass
-                # while providing extra context about tabular import status.
-                title = ("File analyzed — Tabular import completed" if imp_res.get("ok") else "File analyzed — Tabular import failed")
-                db.add(ThreadMessage(project_id=project.id, branch_id=branch.id, thread_id=thr.id, role="assistant", display_title=title, content=json.dumps(imp_res), payload_json=imp_res))
-                db.commit()
-            except Exception:
-                db.rollback()
-            try:
-                record_changelog(db, project.id, branch.id, "file.tabular_import", {"file_id": record.id, "display_name": original_name}, imp_res)
-            except Exception:
-                pass
+            import threading as _threading
+            _threading.Thread(target=_run_tabular_import_background, args=(project.id, branch.id, record.id, thr.id), daemon=True).start()
         except Exception as e2:
             try:
-                print(f"[tabular-error] {type(e2).__name__}: {e2}")
+                print(f"[tabular-bg-error] {type(e2).__name__}: {e2}")
             except Exception:
                 pass
-            try:
-                db.add(ThreadMessage(project_id=project.id, branch_id=branch.id, thread_id=thr.id, role="assistant", display_title="Tabular import failed", content=str(e2)))
-                db.commit()
-            except Exception:
-                db.rollback()
 
     # Redirect focusing the uploaded file and processing thread, so the user sees the steps
     return RedirectResponse(f"/project/{project.id}?branch_id={branch.id}&file_id={record.id}&thread_id={thr.id}&msg=File+uploaded", status_code=303)

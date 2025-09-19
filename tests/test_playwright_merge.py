@@ -80,7 +80,7 @@ def test_merge_dashboard_shows_unique_and_merges(page: Page, path: str):
         tmp_path.write_text("hello,merge-branch\n", encoding="utf-8")
         upload_input.set_input_files(str(tmp_path))
         page.get_by_test_id("upload-submit").click(no_wait_after=True)
-        page.wait_for_url("**/project/*?**msg=File+uploaded**")
+        page.wait_for_url("**/project/*?**msg=File+uploaded**", wait_until="domcontentloaded")
         # Open Merge page
         page.goto(base + "/merge")
         page.get_by_role("link", name="Open").first.click()
@@ -89,7 +89,7 @@ def test_merge_dashboard_shows_unique_and_merges(page: Page, path: str):
         assert page.get_by_role("heading", name="Branch: feature-x").is_visible()
         # Run merge from this page
         page.get_by_role("button", name="Merge feature-x → Main").click()
-        page.wait_for_url("**/project/*?**msg=*")
+        page.wait_for_url("**/project/*?**msg=*", wait_until="domcontentloaded")
         # After merge, return to merge page and verify unique list is empty
         # Extract project id from current URL and navigate directly
         import re as _re
