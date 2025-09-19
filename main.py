@@ -25,7 +25,7 @@ from typing import Optional, List, Dict, Any, Tuple
 from collections import deque
 
 from fastapi import FastAPI, Request, UploadFile, File, Form, Depends, Header, HTTPException, Body, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse, FileResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
