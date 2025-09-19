@@ -5083,21 +5083,20 @@ def thread_chat(project_id: int, request: Request, content: str = Form(...), thr
     else:
         try:
             sys_prompt = (
-                "You are Cedar's assistant. Always respond with strict JSON containing keys: title (string) and data (object).\n"
-                "title should be a short human-friendly heading summarizing the result.\n"
-                "data should be structured and parsable. Do not include anything outside JSON."
+                "This is a research tool to help people understand the breadth of existing research in the area,\n"
+                "collect and analyze data, and build out reports and visuals to help communicate their findings.\n"
+                "You will have a number of tools to select from when responding to a user.\n"
+                "For simple queries, you can answer with the \"final\" function.\n"
+                "For more complex queries, or ones that require precise numerical answers, begin with the \"plan\" function.\n"
+                "Within \"plan\" indicate the functions you will use for each step.\n"
+                "Functions include web, download, extract, image, db, code, shell, notes, compose, question, final.\n"
+                "In every response, output STRICT JSON and always include output_to_user and changelog_summary.\n"
+                "Include examples for each function so the system can parse it afterwards.\n"
+                "We pass Resources (files/dbs), History (recent conversation), and Context (selected file/DB) with each query.\n"
+                "All data systems are queriable via db/download/extract—provide concrete, executable specs.\n"
             )
-            # Provide an example to enforce structure
-            example = {
-                "title": "Extracted insights for Project Risks",
-                "data": {
-                    "summary": "Three key risks identified",
-                    "items": [
-                        {"risk": "Budget overrun", "severity": "high"},
-                        {"risk": "Scope creep", "severity": "medium"}
-                    ]
-                }
-            }
+
+            # Build context JSON
             ctx = {}
             if fctx:
                 ctx["file"] = {
@@ -5113,12 +5112,82 @@ def thread_chat(project_id: int, request: Request, content: str = Form(...), thr
                     "name": dctx.name,
                     "description": (dctx.description or "")[:500]
                 }
+
+            # Resources (files/dbs) and history
+            resources = {"files": [], "databases": []}
+            history = []
+            try:
+                ids = branch_filter_ids(db, project.id, branch.id)
+                recs = db.query(FileEntry).filter(FileEntry.project_id==project.id, FileEntry.branch_id.in_(ids)).order_by(FileEntry.created_at.desc()).limit(200).all()
+                for f in recs:
+                    resources["files"].append({
+                        "id": f.id,
+                        "title": (f.ai_title or f.display_name or "").strip(),
+                        "display_name": f.display_name,
+                        "structure": f.structure,
+                        "file_type": f.file_type,
+                        "mime_type": f.mime_type,
+                        "size_bytes": f.size_bytes,
+                    })
+                dsets = db.query(Dataset).filter(Dataset.project_id==project.id, Dataset.branch_id.in_(ids)).order_by(Dataset.created_at.desc()).limit(200).all()
+                for d in dsets:
+                    resources["databases"].append({
+                        "id": d.id,
+                        "name": d.name,
+                        "description": (d.description or "")[:500],
+                    })
+            except Exception:
+                pass
+            try:
+                recent = db.query(ThreadMessage).filter(ThreadMessage.project_id==project.id, ThreadMessage.thread_id==thr.id).order_by(ThreadMessage.created_at.desc()).limit(15).all()
+                for m in reversed(recent):
+                    history.append({
+                        "role": m.role,
+                        "title": (m.display_title or None),
+                        "content": (m.content or "")[:2000]
+                    })
+            except Exception:
+                pass
+
+            examples_json = {
+                "plan": {
+                    "function": "plan",
+                    "steps": [
+                        {"description": "Search the web for background", "will_call": ["web", "download"]},
+                        {"description": "Extract claims/citations from PDFs", "will_call": ["extract"]},
+                        {"description": "Query DB for aggregates", "will_call": ["db"]},
+                        {"description": "Write draft", "will_call": ["compose", "final"]}
+                    ],
+                    "output_to_user": "Plan with steps and tools",
+                    "changelog_summary": "created plan"
+                },
+                "web": {"function": "web", "args": {"query": "example query"}, "output_to_user": "Searched web", "changelog_summary": "web search"},
+                "download": {"function": "download", "args": {"urls": ["https://example.org/a.pdf"]}, "output_to_user": "Downloading 1 file", "changelog_summary": "download start"},
+                "extract": {"function": "extract", "args": {"file_id": 1}, "output_to_user": "Extracted claims/citations", "changelog_summary": "extract done"},
+                "image": {"function": "image", "args": {"image_id": 2, "purpose": "diagram analysis"}, "output_to_user": "Analyzed image", "changelog_summary": "image"},
+                "db": {"function": "db", "args": {"sql": "SELECT COUNT(*) FROM citations"}, "output_to_user": "Ran SQL", "changelog_summary": "db query"},
+                "code": {"function": "code", "args": {"language": "python", "packages": ["pandas"], "source": "print(2+2)"}, "output_to_user": "Executed code", "changelog_summary": "code run"},
+                "shell": {"function": "shell", "args": {"script": "echo hello"}, "output_to_user": "Ran shell", "changelog_summary": "shell"},
+                "notes": {"function": "notes", "args": {"themes": [{"name": "Background", "notes": ["note1"]}]}, "output_to_user": "Saved notes", "changelog_summary": "notes saved"},
+                "compose": {"function": "compose", "args": {"sections": [{"title": "Intro", "text": "…"}]}, "output_to_user": "Drafted text", "changelog_summary": "compose"},
+                "question": {"function": "question", "args": {"text": "Clarify scope?"}, "output_to_user": "Need input", "changelog_summary": "asked user"},
+                "final": {"function": "final", "args": {"text": "Answer."}, "output_to_user": "Answer for user", "changelog_summary": "finalized"}
+            }
+
             import json as _json
             messages = [
                 {"role": "system", "content": sys_prompt},
-                {"role": "user", "content": "Context:"},
-                {"role": "user", "content": _json.dumps(ctx, ensure_ascii=False)},
-                {"role": "user", "content": "Follow this response schema strictly (example):"},
+                {"role": "user", "content": "Resources:"},
+                {"role": "user", "content": _json.dumps(resources, ensure_ascii=False)},
+                {"role": "user", "content": "History:"},
+                {"role": "user", "content": _json.dumps(history, ensure_ascii=False)}
+            ]
+            if ctx:
+                messages.append({"role": "user", "content": "Context:"})
+                messages.append({"role": "user", "content": _json.dumps(ctx, ensure_ascii=False)})
+            messages.append({"role": "user", "content": "Functions and examples:"})
+            messages.append({"role": "user", "content": _json.dumps(examples_json, ensure_ascii=False)})
+            messages.append({"role": "user", "content": content})
                 {"role": "user", "content": _json.dumps(example, ensure_ascii=False)},
                 {"role": "user", "content": content},
             ]
@@ -5252,8 +5321,98 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
             "description": (dctx.description or "")[:500]
         }
 
+    # Build resources index (files/dbs) and recent thread history
+    resources = {"files": [], "databases": []}
+    history = []
+    try:
+        ids = branch_filter_ids(db, project_id, branch.id)
+        recs = db.query(FileEntry).filter(FileEntry.project_id==project_id, FileEntry.branch_id.in_(ids)).order_by(FileEntry.created_at.desc()).limit(200).all()
+        for f in recs:
+            resources["files"].append({
+                "id": f.id,
+                "title": (f.ai_title or f.display_name or "").strip(),
+                "display_name": f.display_name,
+                "structure": f.structure,
+                "file_type": f.file_type,
+                "mime_type": f.mime_type,
+                "size_bytes": f.size_bytes,
+            })
+        dsets = db.query(Dataset).filter(Dataset.project_id==project_id, Dataset.branch_id.in_(ids)).order_by(Dataset.created_at.desc()).limit(200).all()
+        for d in dsets:
+            resources["databases"].append({
+                "id": d.id,
+                "name": d.name,
+                "description": (d.description or "")[:500],
+            })
+    except Exception:
+        pass
+    try:
+        recent = db.query(ThreadMessage).filter(ThreadMessage.project_id==project_id, ThreadMessage.thread_id==thr.id).order_by(ThreadMessage.created_at.desc()).limit(15).all()
+        for m in reversed(recent):
+            history.append({
+                "role": m.role,
+                "title": (m.display_title or None),
+                "content": (m.content or "")[:2000]
+            })
+    except Exception:
+        pass
+
+    # Research tool system prompt and examples
+    sys_prompt = (
+        "This is a research tool to help people understand the breadth of existing research in the area,\n"
+        "collect and analyze data, and build out reports and visuals to help communicate their findings.\n"
+        "You will have a number of tools to select from when responding to a user.\n"
+        "For simple queries, you can answer with the \"final\" function.\n"
+        "For more complex queries, or ones that require precise numerical answers, begin with the \"plan\" function.\n"
+        "Within \"plan\" indicate the functions you will use for each step.\n"
+        "Functions include: \n"
+        "- web: run a web search and obtain a webpage with all links extracted.\n"
+        "- download: download one or more URLs.\n"
+        "- extract: take a file (e.g., PDF) and break it into claims (unique findings) and citations (references).\n"
+        "- image: analyze a provided image.\n"
+        "- db: execute an SQL statement against the built-in DB.\n"
+        "- code: execute code; specify language, required packages, and the code.\n"
+        "- shell: execute a shell script.\n"
+        "- notes: write notes organized by themes.\n"
+        "- compose: write the paper from notes.\n"
+        "- question: ask a question of the user.\n"
+        "- final: the last step in the plan.\n"
+        "In every response, output STRICT JSON. Always include output_to_user (what to show the user) and changelog_summary.\n"
+        "Include examples of the JSON schema for each function so the system can parse it afterwards.\n"
+        "We will pass with each query: (a) a list of files and databases you can access (Resources), (b) recent conversation history (History), and (c) optional Context (selected file/DB).\n"
+        "All data systems are queriable by you via the db/download/extract functions. Provide concrete, executable specs for those.\n"
+    )
+
+    examples_json = {
+        "plan": {
+            "function": "plan",
+            "steps": [
+                {"description": "Search for recent survey papers", "will_call": ["web", "download", "extract"]},
+                {"description": "Aggregate key findings and compute statistics", "will_call": ["db", "code"]},
+                {"description": "Write summary", "will_call": ["compose", "final"]}
+            ],
+            "output_to_user": "High-level plan with steps and intended tools",
+            "changelog_summary": "created plan with 3 steps"
+        },
+        "web": {"function": "web", "args": {"query": "site:nature.com CRISPR review 2024"}, "output_to_user": "Searched web", "changelog_summary": "web search"},
+        "download": {"function": "download", "args": {"urls": ["https://example.org/paper.pdf"]}, "output_to_user": "Queued 1 download", "changelog_summary": "download requested"},
+        "extract": {"function": "extract", "args": {"file_id": 123}, "output_to_user": "Extracted claims/citations", "changelog_summary": "extracted PDF"},
+        "image": {"function": "image", "args": {"image_id": 42, "purpose": "chart reading"}, "output_to_user": "Analyzed image", "changelog_summary": "image analysis"},
+        "db": {"function": "db", "args": {"sql": "SELECT COUNT(*) FROM claims"}, "output_to_user": "Ran SQL", "changelog_summary": "db query"},
+        "code": {"function": "code", "args": {"language": "python", "packages": ["pandas"], "source": "print(2+2)"}, "output_to_user": "Executed code", "changelog_summary": "code run"},
+        "shell": {"function": "shell", "args": {"script": "echo hello"}, "output_to_user": "Ran shell", "changelog_summary": "shell run"},
+        "notes": {"function": "notes", "args": {"themes": [{"name": "Risks", "notes": ["…"]}]}, "output_to_user": "Saved notes", "changelog_summary": "notes saved"},
+        "compose": {"function": "compose", "args": {"sections": [{"title": "Intro", "text": "…"}]}, "output_to_user": "Drafted section(s)", "changelog_summary": "compose partial"},
+        "question": {"function": "question", "args": {"text": "Which domain do you care about?"}, "output_to_user": "Need clarification", "changelog_summary": "asked user"},
+        "final": {"function": "final", "args": {"text": "2+2=4"}, "output_to_user": "2+2=4", "changelog_summary": "finalized answer"}
+    }
+
     messages = [
-        {"role": "system", "content": "You are Cedar's assistant. Respond concisely to the user's message."},
+        {"role": "system", "content": sys_prompt},
+        {"role": "user",   "content": "Resources:"},
+        {"role": "user",   "content": json.dumps(resources, ensure_ascii=False)},
+        {"role": "user",   "content": "History:"},
+        {"role": "user",   "content": json.dumps(history, ensure_ascii=False)}
     ]
     if ctx:
         try:
@@ -5261,6 +5420,11 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
             messages.append({"role": "user", "content": json.dumps(ctx, ensure_ascii=False)})
         except Exception:
             pass
+    messages.append({"role": "user", "content": "Functions and examples:"})
+    try:
+        messages.append({"role": "user", "content": json.dumps(examples_json, ensure_ascii=False)})
+    except Exception:
+        messages.append({"role": "user", "content": "{""error"":""examples unavailable""}"})
     messages.append({"role": "user", "content": content})
 
     q = queue.Queue()
