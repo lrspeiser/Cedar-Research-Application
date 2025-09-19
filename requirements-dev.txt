@@ -4,6 +4,7 @@ uvicorn
 pydantic
 sqlalchemy
 pytest
+pytest-cov
 ruff
 black
 mypy
