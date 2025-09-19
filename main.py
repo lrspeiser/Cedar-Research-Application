@@ -1252,6 +1252,107 @@ def layout(title: str, body: str, header_label: Optional[str] = None, header_lin
         f"<a href='/settings'>Settings</a>"
     )
 
+    # Client logging hook (console/errors -> /api/client-log)
+    client_log_js = """
+<script>
+(function(){
+  if (window.__cedarpyClientLogInitialized) return; window.__cedarpyClientLogInitialized = true;
+  const endpoint = '/api/client-log';
+  function post(payload){
+    try {
+      const body = JSON.stringify(payload);
+      if (navigator.sendBeacon) {
+        const blob = new Blob([body], {type: 'application/json'});
+        navigator.sendBeacon(endpoint, blob);
+        return;
+      }
+      fetch(endpoint, {method: 'POST', headers: {'Content-Type': 'application/json'}, body, keepalive: true}).catch(function(){});
+    } catch(e) {}
+  }
+  function base(level, message, origin, extra){
+    post(Object.assign({
+      when: new Date().toISOString(),
+      level: String(level||'info'),
+      message: String(message||''),
+      url: String(location.href||''),
+      userAgent: navigator.userAgent || '',
+      origin: origin || 'console'
+    }, extra||{}));
+  }
+  var orig = { log: console.log, info: console.info, warn: console.warn, error: console.error };
+  console.log = function(){ try { base('info', Array.from(arguments).join(' '), 'console.log'); } catch(e){}; return orig.log.apply(console, arguments); };
+  console.info = function(){ try { base('info', Array.from(arguments).join(' '), 'console.info'); } catch(e){}; return orig.info.apply(console, arguments); };
+  console.warn = function(){ try { base('warn', Array.from(arguments).join(' '), 'console.warn'); } catch(e){}; return orig.warn.apply(console, arguments); };
+  console.error = function(){ try { base('error', Array.from(arguments).join(' '), 'console.error'); } catch(e){}; return orig.error.apply(console, arguments); };
+  window.addEventListener('error', function(ev){
+    try { base('error', ev.message || 'window.onerror', 'window.onerror', { line: ev.lineno||null, column: ev.colno||null, stack: ev.error && ev.error.stack ? String(ev.error.stack) : null }); } catch(e){}
+  }, true);
+  window.addEventListener('unhandledrejection', function(ev){
+    try { var r = ev && ev.reason; base('error', (r && (r.message || r.toString())) || 'unhandledrejection', 'unhandledrejection', { stack: r && r.stack ? String(r.stack) : null }); } catch(e){}
+  });
+  document.addEventListener('DOMContentLoaded', function(){ try { console.log('[ui] page ready'); } catch(e){} }, { once: true });
+})();
+</script>
+"""
+
+    # Build HTML document
+    html_doc = f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{escape(title)}</title>
+  <style>
+    :root {{ --fg: #111; --bg: #fff; --accent: #2563eb; --muted: #6b7280; --border: #e5e7eb; }}
+    * {{ box-sizing: border-box; }}
+    body {{ margin: 0; font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Oxygen, Ubuntu, Cantarell, \"Helvetica Neue\", Arial, \"Apple Color Emoji\", \"Segoe UI Emoji\"; color: var(--fg); background: var(--bg); }}
+    header {{ padding: 16px 20px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg); }}
+    main {{ padding: 20px; max-width: 1100px; margin: 0 auto; }}
+    h1, h2, h3 {{ margin: 0 0 12px; }}
+    a {{ color: var(--accent); text-decoration: none; }}
+    a:hover {{ text-decoration: underline; }}
+    .row {{ display: flex; gap: 16px; flex-wrap: wrap; }}
+    .card {{ border: 1px solid var(--border); border-radius: 8px; padding: 16px; background: #fff; flex: 1 1 340px; }}
+    .muted {{ color: var(--muted); }}
+    .table {{ width: 100%; border-collapse: collapse; }}
+    .table th, .table td {{ border-bottom: 1px solid var(--border); padding: 8px 6px; text-align: left; vertical-align: top; }}
+    .pill {{ display: inline-block; padding: 2px 8px; border-radius: 999px; background: #eef2ff; color: #3730a3; font-size: 12px; }}
+    .small {{ font-size: 12px; }}
+    .topbar {{ display:flex; align-items:center; gap:12px; }}
+    .spinner {{ display:inline-block; width:12px; height:12px; border:2px solid #cbd5e1; border-top-color:#334155; border-radius:50%; animation: spin 1s linear infinite; }}
+    @keyframes spin {{ from {{ transform: rotate(0deg);}} to {{ transform: rotate(360deg);}} }}
+
+    /* Two-column layout and tabs */
+    .two-col {{ display: grid; grid-template-columns: 1fr 360px; gap: 16px; align-items: start; }}
+    .pane {{ display: flex; flex-direction: column; gap: 8px; }}
+    .tabs {{ display: flex; gap: 6px; border-bottom: 1px solid var(--border); }}
+    .tab {{ display:inline-block; padding:6px 10px; border:1px solid var(--border); border-bottom:none; border-radius:6px 6px 0 0; background:#f3f4f6; color:#111; cursor:pointer; user-select:none; }}
+    .tab.active {{ background:#fff; font-weight:600; }}
+    .tab-panels {{ border:1px solid var(--border); border-radius:0 6px 6px 6px; background:#fff; padding:12px; }}
+    .panel.hidden {{ display:none !important; }}
+    @media (max-width: 900px) {{ .two-col {{ grid-template-columns: 1fr; }} }}
+  </style>
+  {client_log_js}
+</head>
+<body>
+  <header>
+    <div class="topbar">
+      <div><strong>Cedar</strong> <span class='muted'>•</span> {header_info}</div>
+      <div style=\"margin-left:auto\">{nav_html}{llm_status}</div>
+    </div>
+  </header>
+  <main>
+    {body}
+  </main>
+</body>
+</html>
+"""
+    try:
+        html_doc = html_doc.format(llm_status=llm_status, header_info=header_html, nav_html=nav_html)
+    except Exception:
+        pass
+    return HTMLResponse(html_doc)
+
 
 
 @app.get("/settings", response_class=HTMLResponse)
