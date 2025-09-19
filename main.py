@@ -2401,6 +2401,7 @@ SELECT * FROM demo LIMIT 10;""")
                 <div id='msgs' class='chat-log'>{msgs_html}</div>
                 <div class='chat-input'>{chat_form}</div>
                 {script_js}
+                { ("<div class='card' style='margin-top:8px; padding:12px'><h3>File Details</h3>" + left_details + "</div>") if selected_file else "" }
               </div>
             </div>
           </div>

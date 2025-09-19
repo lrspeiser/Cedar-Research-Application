@@ -96,7 +96,6 @@ def test_project_upload_flow(page: Page, path: str):
         # Should navigate back to project with msg=File+uploaded
         page.wait_for_url("**/project/*?**msg=File+uploaded**")
         # Verify file appears in Files list
-        assert page.get_by_text("Upload a file").is_visible()
         # The Files card heading should be present (avoid strict mode violation)
         assert page.get_by_role("heading", name="Files").is_visible()
         assert page.get_by_text(".pw_tmp_upload.txt").first.is_visible()

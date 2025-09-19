@@ -130,23 +130,23 @@ def test_ws_end_to_end_shell_and_sql_and_branches():
 
             # ws/sqlx on Main: create table if not exists, then insert/select/undo in branch
             with client.websocket_connect(f"/ws/sqlx/{pid}{token_q}") as wsx:
-                wsx.send_text(json.dumps({"action": "exec", "sql": "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, project_id INTEGER, branch_id INTEGER, body TEXT)"}))
+                wsx.send_text(json.dumps({"action": "exec", "sql": "CREATE TABLE IF NOT EXISTS notes_demo (id INTEGER PRIMARY KEY, project_id INTEGER, branch_id INTEGER, body TEXT)"}))
                 out = json.loads(wsx.receive_text()); assert out.get("ok") is True
 
                 # Insert in branch B1 (explicit ids to satisfy strict policy)
-                wsx.send_text(json.dumps({"action": "exec", "branch_name": "B1", "sql": f"INSERT INTO notes (project_id, branch_id, body) VALUES ({pid}, {b1_id}, 'hidden?')"}))
+                wsx.send_text(json.dumps({"action": "exec", "branch_name": "B1", "sql": f"INSERT INTO notes_demo (project_id, branch_id, body) VALUES ({pid}, {b1_id}, 'hidden?')"}))
                 out_ins = json.loads(wsx.receive_text()); assert out_ins.get("ok") is True
                 last_log_id = out_ins.get("last_log_id")
                 assert last_log_id is not None
 
                 # Select in Main for Main branch rows only (should not see 'hidden?')
-                wsx.send_text(json.dumps({"action": "exec", "sql": f"SELECT body FROM notes WHERE project_id={pid} AND branch_id={main_id} ORDER BY id"}))
+                wsx.send_text(json.dumps({"action": "exec", "sql": f"SELECT body FROM notes_demo WHERE project_id={pid} AND branch_id={main_id} ORDER BY id"}))
                 out_main = json.loads(wsx.receive_text()); assert out_main.get("ok") is True
                 rows_main = out_main.get("rows") or []
                 assert all("hidden?" not in [str(v) for v in r] for r in rows_main)
 
                 # Select in B1 context explicitly (should see 'hidden?')
-                wsx.send_text(json.dumps({"action": "exec", "sql": f"SELECT body FROM notes WHERE project_id={pid} AND branch_id={b1_id} ORDER BY id"}))
+                wsx.send_text(json.dumps({"action": "exec", "sql": f"SELECT body FROM notes_demo WHERE project_id={pid} AND branch_id={b1_id} ORDER BY id"}))
                 out_b1 = json.loads(wsx.receive_text()); assert out_b1.get("ok") is True
                 rows_b1 = out_b1.get("rows") or []
                 assert any("hidden?" in [str(v) for v in r] for r in rows_b1)
@@ -158,7 +158,7 @@ def test_ws_end_to_end_shell_and_sql_and_branches():
                 out_undo = json.loads(wsx.receive_text()); assert out_undo.get("ok") is True
 
                 # Verify row gone in B1
-                wsx.send_text(json.dumps({"action": "exec", "sql": f"SELECT body FROM notes WHERE project_id={pid} AND branch_id={b1_id} ORDER BY id"}))
+                wsx.send_text(json.dumps({"action": "exec", "sql": f"SELECT body FROM notes_demo WHERE project_id={pid} AND branch_id={b1_id} ORDER BY id"}))
                 out_b1_after = json.loads(wsx.receive_text()); assert out_b1_after.get("ok") is True
                 rows_b1_after = out_b1_after.get("rows") or []
                 assert all("hidden?" not in [str(v) for v in r] for r in rows_b1_after)
