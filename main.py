@@ -2156,6 +2156,8 @@ SELECT * FROM demo LIMIT 10;""")
     try {
       var msgs = document.getElementById('msgs');
       if (msgs && text) {
+        // Remove placeholder if present
+        try { var first = msgs.firstElementChild; if (first && first.classList.contains('muted')) { first.remove(); } } catch(_){ }
         var u = document.createElement('div');
         u.className = 'small';
         u.innerHTML = "<span class='pill'>user</span> " + text.replace(/</g,'&lt;');
@@ -2168,12 +2170,12 @@ SELECT * FROM demo LIMIT 10;""")
       stream.appendChild(pill); stream.appendChild(document.createTextNode(' ')); stream.appendChild(streamText);
       if (msgs) msgs.appendChild(stream);
       var lastW = null;
+      var stagesSeen = {};
       var wsScheme = (location.protocol === 'https:') ? 'wss' : 'ws';
       var ws = new WebSocket(wsScheme + '://' + location.host + '/ws/chat/' + PROJECT_ID);
       ws.onopen = function(){
         try {
-          // Show submitted stage immediately
-          var info = document.createElement('div'); info.className = 'small muted'; info.textContent = 'submitted'; if (msgs) msgs.appendChild(info);
+          // Do not print a local 'submitted'; rely on server info events for true order
           ws.send(JSON.stringify({action:'chat', content: text, branch_id: BRANCH_ID, thread_id: threadId||null }));
         } catch(e){}
       };
@@ -2186,7 +2188,16 @@ SELECT * FROM demo LIMIT 10;""")
             lastW = m.word;
           }
         } else if (m.type === 'info') {
-          try { var inf = document.createElement('div'); inf.className = 'small muted'; inf.textContent = String(m.stage || m.message || 'info'); if (msgs) msgs.appendChild(inf); } catch(_){ }
+          try {
+            var label = String(m.stage || m.message || 'info');
+            if (!stagesSeen[label]) {
+              stagesSeen[label] = 1;
+              var inf = document.createElement('div');
+              inf.className = 'small muted';
+              inf.textContent = label;
+              if (msgs) msgs.appendChild(inf);
+            }
+          } catch(_){ }
         } else if (m.type === 'final' && m.text) {
           streamText.textContent = m.text;
         } else if (m.type === 'error') {
@@ -2236,7 +2247,10 @@ SELECT * FROM demo LIMIT 10;""")
               <div class='tabbar thread-tabs' style='margin-bottom:6px'>{thr_tabs_html}</div>
               <h3>Chat</h3>
               <style>
-                .chat-log {{ display:flex; flex-direction:column; gap:8px; }}
+                /* Chat area grows to fill; input stays at bottom */
+                #left-chat {{ display:flex; flex-direction:column; min-height: 520px; }}
+                #left-chat .chat-log {{ flex:1; display:flex; flex-direction:column; gap:8px; overflow-y:auto; padding-bottom:6px; }}
+                #left-chat .chat-input {{ margin-top:auto; padding-top:6px; background:#fff; }}
                 .msg .meta {{ display:flex; gap:8px; align-items:center; margin-bottom:4px; }}
                 .bubble {{ border:1px solid var(--border); border-radius:12px; padding:10px 12px; background:#fff; }}
                 .bubble.user {{ background:#ecfeff; border-color:#bae6fd; }}
@@ -2245,7 +2259,6 @@ SELECT * FROM demo LIMIT 10;""")
                 .thread-tabs .tab {{ display:inline-block; padding:6px 10px; border:1px solid var(--border); border-bottom:none; border-radius:6px 6px 0 0; background:#f3f4f6; color:#111; margin-right:4px; }}
                 .thread-tabs .tab.active {{ background:#fff; font-weight:600; }}
                 .thread-tabs .tab.new {{ background:#e5f6ff; }}
-                .chat-input {{ margin-top:6px; }}
               </style>
               {flash_html}
               <div id='msgs' class='chat-log'>{msgs_html}</div>
