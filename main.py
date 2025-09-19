@@ -1878,6 +1878,7 @@ def project_page_html(
     threads: List[Thread],
     datasets: List[Dataset],
     selected_file: Optional[FileEntry] = None,
+    selected_dataset: Optional[Dataset] = None,
     selected_thread: Optional[Thread] = None,
     thread_messages: Optional[List[ThreadMessage]] = None,
     msg: Optional[str] = None,
@@ -1943,7 +1944,7 @@ def project_page_html(
     for d in datasets:
         dataset_rows.append(f"""
            <tr>
-             <td>{escape(d.name)}</td>
+             <td><a href='/project/{project.id}/threads/new?branch_id={current.id}&dataset_id={d.id}'>{escape(d.name)}</a></td>
              <td>{escape(d.branch.name if d.branch else '')}</td>
              <td class=\"small muted\">{d.created_at:%Y-%m-%d %H:%M:%S} UTC</td>
            </tr>
@@ -2016,7 +2017,7 @@ SELECT * FROM demo LIMIT 10;""")
     files_sorted = sorted(files, key=lambda ff: (_file_label(ff).lower(), ff.created_at))
     file_list_items = []
     for f in files_sorted:
-        href = f"/project/{project.id}?branch_id={current.id}&file_id={f.id}" + (f"&thread_id={selected_thread.id}" if selected_thread else "")
+        href = f"/project/{project.id}/threads/new?branch_id={current.id}&file_id={f.id}"
         label_text = escape(_file_label(f) or f.display_name)
         sub = escape(((getattr(f, 'ai_category', None) or f.structure or f.file_type or '') or ''))
         active = (selected_file and f.id == selected_file.id)
@@ -2077,7 +2078,7 @@ SELECT * FROM demo LIMIT 10;""")
     for t in threads:
         cls = "tab active" if (selected_thread and t.id == selected_thread.id) else "tab"
         thr_tabs.append(f"<a href='/project/{project.id}?branch_id={current.id}" + (f"&file_id={selected_file.id}" if selected_file else "") + f"&thread_id={t.id}' class='{cls}'>{escape(t.title)}</a>")
-    thr_tabs_html = " ".join(thr_tabs) + f" <a href='/project/{project.id}/threads/new?branch_id={current.id}" + (f"&file_id={selected_file.id}" if selected_file else "") + "' class='tab new' title='New Thread'>+</a>"
+    thr_tabs_html = " ".join(thr_tabs) + f" <a href='/project/{project.id}/threads/new?branch_id={current.id}" + (f"&dataset_id={selected_dataset.id}" if selected_dataset else (f"&file_id={selected_file.id}" if selected_file else "")) + "' class='tab new' title='New Thread'>+</a>"
 
     # Render thread messages
     msgs = thread_messages or []
@@ -2136,9 +2137,10 @@ SELECT * FROM demo LIMIT 10;""")
     # Only include hidden ids when present to avoid posting empty strings, which cause int parsing errors.
     hidden_thread = f"<input type='hidden' name='thread_id' value='{selected_thread.id}' />" if selected_thread else ""
     hidden_file = f"<input type='hidden' name='file_id' value='{selected_file.id}' />" if selected_file else ""
+    hidden_dataset = f"<input type='hidden' name='dataset_id' value='{selected_dataset.id}' />" if selected_dataset else ""
     chat_form = f"""
-      <form id='chatForm' data-project-id='{project.id}' data-branch-id='{current.id}' data-thread-id='{selected_thread.id if selected_thread else ''}' method='post' action='/project/{project.id}/threads/chat?branch_id={current.id}' style='margin-top:8px'>
-        {hidden_thread}{hidden_file}
+      <form id='chatForm' data-project-id='{project.id}' data-branch-id='{current.id}' data-thread-id='{selected_thread.id if selected_thread else ''}' data-file-id='{selected_file.id if selected_file else ''}' data-dataset-id='{selected_dataset.id if selected_dataset else ''}' method='post' action='/project/{project.id}/threads/chat?branch_id={current.id}' style='margin-top:8px'>
+        {hidden_thread}{hidden_file}{hidden_dataset}
         <textarea id='chatInput' name='content' rows='3' placeholder='Ask a question about this file/context...' style='width:100%; font-family: ui-monospace, Menlo, monospace;'></textarea>
         <div style='height:6px'></div>
         <button type='submit'>Submit</button>
@@ -2152,7 +2154,39 @@ SELECT * FROM demo LIMIT 10;""")
 (function(){
   var PROJECT_ID = %d;
   var BRANCH_ID = %d;
-  function startWS(text, threadId){
+  async function ensureThreadId(tid, fid, dsid) {
+    if (tid) return tid;
+    try {
+      var url = `/project/${PROJECT_ID}/threads/new?branch_id=${BRANCH_ID}` + (fid?`&file_id=${encodeURIComponent(fid)}`:'') + (dsid?`&dataset_id=${encodeURIComponent(dsid)}`:'') + `&json=1`;
+      var resp = await fetch(url, { method: 'GET' });
+      if (!resp.ok) throw new Error('thread create failed');
+      var data = await resp.json();
+      var newTid = data.thread_id ? String(data.thread_id) : null;
+      if (newTid) {
+        try {
+          var chatForm = document.getElementById('chatForm');
+          if (chatForm) {
+            chatForm.setAttribute('data-thread-id', newTid);
+            var hiddenTid = chatForm.querySelector("input[name='thread_id']");
+            if (hiddenTid) hiddenTid.value = newTid; else { var hi = document.createElement('input'); hi.type='hidden'; hi.name='thread_id'; hi.value=newTid; chatForm.appendChild(hi); }
+          }
+          var tabsBar = document.querySelector('.thread-tabs');
+          if (tabsBar) {
+            var a = document.createElement('a');
+            a.href = data.redirect || (`/project/${PROJECT_ID}?branch_id=${BRANCH_ID}&thread_id=${newTid}`);
+            a.className = 'tab active';
+            a.textContent = data.title || 'New Thread';
+            tabsBar.appendChild(a);
+          }
+        } catch(_){ }
+      }
+      return newTid;
+    } catch(_err) {
+      return null;
+    }
+  }
+
+  function startWS(text, threadId, fileId, datasetId){
     try {
       var msgs = document.getElementById('msgs');
       if (msgs && text) {
@@ -2176,7 +2210,7 @@ SELECT * FROM demo LIMIT 10;""")
       ws.onopen = function(){
         try {
           // Do not print a local 'submitted'; rely on server info events for true order
-          ws.send(JSON.stringify({action:'chat', content: text, branch_id: BRANCH_ID, thread_id: threadId||null }));
+          ws.send(JSON.stringify({action:'chat', content: text, branch_id: BRANCH_ID, thread_id: threadId||null, file_id: (fileId||null), dataset_id: (datasetId||null) }));
         } catch(e){}
       };
       ws.onmessage = function(ev){
@@ -2211,12 +2245,15 @@ SELECT * FROM demo LIMIT 10;""")
     try {
       var chatForm = document.getElementById('chatForm');
       if (chatForm) {
-        chatForm.addEventListener('submit', function(ev){
+        chatForm.addEventListener('submit', async function(ev){
           try { ev.preventDefault(); } catch(_){ }
           var t = document.getElementById('chatInput');
           var text = (t && t.value || '').trim(); if (!text) return;
           var tid = chatForm.getAttribute('data-thread-id') || null;
-          startWS(text, tid); try { t.value=''; } catch(_){ }
+          var fid = chatForm.getAttribute('data-file-id') || null;
+          var dsid = chatForm.getAttribute('data-dataset-id') || null;
+          if (!tid) { tid = await ensureThreadId(tid, fid, dsid); }
+          startWS(text, tid, fid, dsid); try { t.value=''; } catch(_){ }
         });
       }
     } catch(_) {}
@@ -2237,38 +2274,39 @@ SELECT * FROM demo LIMIT 10;""")
         </form>
       </div>
 
-      <div class="two-col" style="margin-top:8px">
-        <div class="pane">
-          <div class="tabs" data-pane="left">
-            <a href="#" class="tab active" data-target="left-chat">Chat</a>
-          </div>
-          <div class="tab-panels">
-            <div id="left-chat" class="panel">
-              <div class='tabbar thread-tabs' style='margin-bottom:6px'>{thr_tabs_html}</div>
-              <h3>Chat</h3>
-              <style>
-                /* Chat area grows to fill; input stays at bottom */
-                #left-chat {{ display:flex; flex-direction:column; min-height: 520px; }}
-                #left-chat .chat-log {{ flex:1; display:flex; flex-direction:column; gap:8px; overflow-y:auto; padding-bottom:6px; }}
-                #left-chat .chat-input {{ margin-top:auto; padding-top:6px; background:#fff; }}
-                .msg .meta {{ display:flex; gap:8px; align-items:center; margin-bottom:4px; }}
-                .bubble {{ border:1px solid var(--border); border-radius:12px; padding:10px 12px; background:#fff; }}
-                .bubble.user {{ background:#ecfeff; border-color:#bae6fd; }}
-                .bubble.assistant {{ background:#f8fafc; border-color:#e5e7eb; }}
-                .bubble.system {{ background:#fff7ed; border-color:#fde68a; }}
-                .thread-tabs .tab {{ display:inline-block; padding:6px 10px; border:1px solid var(--border); border-bottom:none; border-radius:6px 6px 0 0; background:#f3f4f6; color:#111; margin-right:4px; }}
-                .thread-tabs .tab.active {{ background:#fff; font-weight:600; }}
-                .thread-tabs .tab.new {{ background:#e5f6ff; }}
-              </style>
-              {flash_html}
-              <div id='msgs' class='chat-log'>{msgs_html}</div>
-              <div class='chat-input'>{chat_form}</div>
-              {script_js}
+      <div id="page-root" style="min-height:100vh; display:flex; flex-direction:column">
+        <div class="two-col" style="margin-top:8px; flex:1; min-height:0">
+          <div class="pane" style="display:flex; flex-direction:column; min-height:0">
+            <div class="tabs" data-pane="left">
+              <a href="#" class="tab active" data-target="left-chat">Chat</a>
+            </div>
+            <div class="tab-panels" style="flex:1; min-height:0">
+              <div id="left-chat" class="panel">
+                <div class='tabbar thread-tabs' style='margin-bottom:6px'>{thr_tabs_html}</div>
+                <h3>Chat</h3>
+                <style>
+                  /* Chat area grows to fill viewport; input stays at bottom regardless of window size */
+                  #left-chat {{ display:flex; flex-direction:column; flex:1; min-height:0; }}
+                  #left-chat .chat-log {{ flex:1; display:flex; flex-direction:column; gap:8px; overflow-y:auto; padding-bottom:6px; }}
+                  #left-chat .chat-input {{ margin-top:auto; padding-top:6px; background:#fff; }}
+                  .msg .meta {{ display:flex; gap:8px; align-items:center; margin-bottom:4px; }}
+                  .bubble {{ border:1px solid var(--border); border-radius:12px; padding:10px 12px; background:#fff; }}
+                  .bubble.user {{ background:#ecfeff; border-color:#bae6fd; }}
+                  .bubble.assistant {{ background:#f8fafc; border-color:#e5e7eb; }}
+                  .bubble.system {{ background:#fff7ed; border-color:#fde68a; }}
+                  .thread-tabs .tab {{ display:inline-block; padding:6px 10px; border:1px solid var(--border); border-bottom:none; border-radius:6px 6px 0 0; background:#f3f4f6; color:#111; margin-right:4px; }}
+                  .thread-tabs .tab.active {{ background:#fff; font-weight:600; }}
+                  .thread-tabs .tab.new {{ background:#e5f6ff; }}
+                </style>
+                {flash_html}
+                <div id='msgs' class='chat-log'>{msgs_html}</div>
+                <div class='chat-input'>{chat_form}</div>
+                {script_js}
+              </div>
             </div>
           </div>
-        </div>
 
-        <div class="pane right">
+          <div class="pane right">
           <div class="card" style="max-height:220px; overflow:auto; padding:12px">
             <h3 style='margin-bottom:6px'>Files</h3>
             {file_list_html}
@@ -2296,6 +2334,7 @@ SELECT * FROM demo LIMIT 10;""")
           </div>
         </div>
       </div>
+    </div>
 
     """
 
@@ -4408,7 +4447,7 @@ def create_project(title: str = Form(...), db: Session = Depends(get_registry_db
 
 
 @app.get("/project/{project_id}", response_class=HTMLResponse)
-def view_project(project_id: int, branch_id: Optional[int] = None, msg: Optional[str] = None, file_id: Optional[int] = None, thread_id: Optional[int] = None, db: Session = Depends(get_project_db)):
+def view_project(project_id: int, branch_id: Optional[int] = None, msg: Optional[str] = None, file_id: Optional[int] = None, dataset_id: Optional[int] = None, thread_id: Optional[int] = None, db: Session = Depends(get_project_db)):
     ensure_project_initialized(project_id)
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
@@ -4451,6 +4490,18 @@ def view_project(project_id: int, branch_id: Optional[int] = None, msg: Optional
     except Exception:
         selected_file = None
 
+    # resolve selected dataset if provided
+    selected_dataset = None
+    try:
+        if dataset_id is not None:
+            selected_dataset = db.query(Dataset).filter(
+                Dataset.id == int(dataset_id),
+                Dataset.project_id == project.id,
+                Dataset.branch_id.in_(show_branch_ids)
+            ).first()
+    except Exception:
+        selected_dataset = None
+
     # resolve selected thread and messages
     selected_thread = None
     thread_messages: List[ThreadMessage] = []
@@ -4462,7 +4513,7 @@ def view_project(project_id: int, branch_id: Optional[int] = None, msg: Optional
     except Exception:
         selected_thread = None
 
-    return layout(project.title, project_page_html(project, branches, current, files, threads, datasets, selected_file=selected_file, selected_thread=selected_thread, thread_messages=thread_messages, msg=msg), header_label=project.title, header_link=f"/project/{project.id}?branch_id={current.id}", nav_query=f"project_id={project.id}&branch_id={current.id}")
+    return layout(project.title, project_page_html(project, branches, current, files, threads, datasets, selected_file=selected_file, selected_dataset=selected_dataset, selected_thread=selected_thread, thread_messages=thread_messages, msg=msg), header_label=project.title, header_link=f"/project/{project.id}?branch_id={current.id}", nav_query=f"project_id={project.id}&branch_id={current.id}")
 
 
 @app.post("/project/{project_id}/branches/create")
@@ -4503,22 +4554,54 @@ def create_thread(project_id: int, request: Request, title: Optional[str] = Form
     except Exception:
         branch_id = None
 
+    file_q = request.query_params.get("file_id")
+    dataset_q = request.query_params.get("dataset_id")
+    json_q = request.query_params.get("json")
+
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         return RedirectResponse("/", status_code=303)
 
     branch = current_branch(db, project.id, branch_id)
-    # Title handling: for GET /threads/new, title may be None -> default
+
+    # Derive a default title from file/dataset context when GET and no explicit title
+    file_obj = None
+    dataset_obj = None
+    try:
+        if file_q is not None:
+            file_obj = db.query(FileEntry).filter(FileEntry.id == int(file_q), FileEntry.project_id == project.id).first()
+    except Exception:
+        file_obj = None
+    try:
+        if dataset_q is not None:
+            dataset_obj = db.query(Dataset).filter(Dataset.id == int(dataset_q), Dataset.project_id == project.id).first()
+    except Exception:
+        dataset_obj = None
+
     if request.method.upper() == 'GET' and (title is None or not str(title).strip()):
-        title = "New Thread"
+        if file_obj:
+            label = (file_obj.ai_title or file_obj.display_name or '').strip() or f"File {file_obj.id}"
+            title = f"File: {label}"
+        elif dataset_obj:
+            title = f"DB: {dataset_obj.name}"
+        else:
+            title = "New Thread"
     title = (title or "New Thread").strip()
+
     t = Thread(project_id=project.id, branch_id=branch.id, title=title)
     db.add(t)
     db.commit()
     db.refresh(t)
     add_version(db, "thread", t.id, {"project_id": project.id, "branch_id": branch.id, "title": t.title})
+
+    redirect_url = f"/project/{project.id}?branch_id={branch.id}&thread_id={t.id}" + (f"&file_id={file_obj.id}" if file_obj else "") + (f"&dataset_id={dataset_obj.id}" if dataset_obj else "") + "&msg=Thread+created"
+
+    # Optional JSON response for client-side creation
+    if json_q is not None and str(json_q).strip() not in {"", "0", "false", "False", "no"}:
+        return JSONResponse({"thread_id": t.id, "branch_id": branch.id, "redirect": redirect_url, "title": t.title})
+
     # Redirect to focus the newly created thread
-    return RedirectResponse(f"/project/{project.id}?branch_id={branch.id}&thread_id={t.id}&msg=Thread+created", status_code=303)
+    return RedirectResponse(redirect_url, status_code=303)
 
 
 @app.post("/project/{project_id}/ask")
@@ -5052,10 +5135,48 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
         await websocket.send_text(json.dumps({"type": "error", "error": "missing_key"}))
         await websocket.close(); return
 
+    # Build optional context from file/dataset
+    fctx = None
+    dctx = None
+    try:
+        fid = payload.get("file_id")
+        if fid is not None:
+            fctx = db.query(FileEntry).filter(FileEntry.id == int(fid), FileEntry.project_id == project_id).first()
+    except Exception:
+        fctx = None
+    try:
+        did = payload.get("dataset_id")
+        if did is not None:
+            dctx = db.query(Dataset).filter(Dataset.id == int(did), Dataset.project_id == project_id).first()
+    except Exception:
+        dctx = None
+
+    ctx = {}
+    if fctx:
+        ctx["file"] = {
+            "display_name": fctx.display_name,
+            "file_type": fctx.file_type,
+            "structure": fctx.structure,
+            "ai_title": fctx.ai_title,
+            "ai_category": fctx.ai_category,
+            "ai_description": (fctx.ai_description or "")[:350],
+        }
+    if dctx:
+        ctx["dataset"] = {
+            "name": dctx.name,
+            "description": (dctx.description or "")[:500]
+        }
+
     messages = [
         {"role": "system", "content": "You are Cedar's assistant. Respond concisely to the user's message."},
-        {"role": "user", "content": content},
     ]
+    if ctx:
+        try:
+            messages.append({"role": "user", "content": "Context:"})
+            messages.append({"role": "user", "content": json.dumps(ctx, ensure_ascii=False)})
+        except Exception:
+            pass
+    messages.append({"role": "user", "content": content})
 
     q = queue.Queue()
     SENTINEL = object()
