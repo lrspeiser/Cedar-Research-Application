@@ -5256,6 +5256,10 @@ def thread_chat(project_id: int, request: Request, content: str = Form(...), thr
 async def ws_chat_stream(websocket: WebSocket, project_id: int):
     await websocket.accept()
     try:
+        try:
+            print(f"[ws-chat] accepted project_id={project_id}")
+        except Exception:
+            pass
         raw = await websocket.receive_text()
         try:
             payload = json.loads(raw)
@@ -5298,6 +5302,10 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
     # Inform client that the request has been submitted
     try:
         await websocket.send_text(json.dumps({"type": "info", "stage": "submitted"}))
+        try:
+            print("[ws-chat] submitted")
+        except Exception:
+            pass
     except Exception:
         pass
 
@@ -5683,6 +5691,10 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
             resp = client.chat.completions.create(model=model, messages=messages)
             raw = (resp.choices[0].message.content or "").strip()
         except Exception as e:
+            try:
+                print(f"[ws-chat-error] {type(e).__name__}: {e}")
+            except Exception:
+                pass
             await websocket.send_text(json.dumps({"type": "error", "error": f"{type(e).__name__}: {e}"}))
             await websocket.close(); return
 
