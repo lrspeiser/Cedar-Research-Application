@@ -219,10 +219,10 @@ jobs:
         if: always()
         shell: bash
         run: |
-          PASSED=$(awk 'match($0,/([0-9]+) passed/,m){c+=m[1]} END{print c+0}' pytest-stdout.txt)
-          FAILED=$(awk 'match($0,/([0-9]+) failed/,m){c+=m[1]} END{print c+0}' pytest-stdout.txt)
-          SKIPPED=$(awk 'match($0,/([0-9]+) skipped/,m){c+=m[1]} END{print c+0}' pytest-stdout.txt)
-          DURATION=$(awk 'match($0,/collected .* in ([0-9.]+)s/,m){d=m[1]} END{if(d=="")print "n/a"; else print d}' pytest-stdout.txt)
+          PASSED=$(awk '/ passed/ {for(i=1;i<=NF;i++) if ($i ~ /^[0-9]+$/) c+=$i} END{print c+0}' pytest-stdout.txt)
+          FAILED=$(awk '/ failed/ {for(i=1;i<=NF;i++) if ($i ~ /^[0-9]+$/) c+=$i} END{print c+0}' pytest-stdout.txt)
+          SKIPPED=$(awk '/ skipped/ {for(i=1;i<=NF;i++) if ($i ~ /^[0-9]+$/) c+=$i} END{print c+0}' pytest-stdout.txt)
+          DURATION=$(awk '/collected .* in [0-9.]+s/ {for(i=1;i<=NF;i++) if ($i ~ /^[0-9.]+s$/) d=$i} END{gsub(/s$/,"",d); print d==""?"n/a":d}' pytest-stdout.txt)
           HAVE_JUNIT="missing"; [[ -f reports/junit.xml ]] && HAVE_JUNIT="reports/junit.xml"
           HAVE_COV="missing";   [[ -f coverage/coverage.xml ]] && HAVE_COV="coverage/coverage.xml"
           cat <<'MD' >> "$GITHUB_STEP_SUMMARY"
@@ -326,10 +326,10 @@ jobs:
         if: always()
         shell: bash
         run: |
-          PASSED=$(awk 'match($0,/([0-9]+) passed/,m){c+=m[1]} END{print c+0}' pytest-stdout.txt)
-          FAILED=$(awk 'match($0,/([0-9]+) failed/,m){c+=m[1]} END{print c+0}' pytest-stdout.txt)
-          SKIPPED=$(awk 'match($0,/([0-9]+) skipped/,m){c+=m[1]} END{print c+0}' pytest-stdout.txt)
-          DURATION=$(awk 'match($0,/collected .* in ([0-9.]+)s/,m){d=m[1]} END{if(d=="")print "n/a"; else print d}' pytest-stdout.txt)
+          PASSED=$(awk '/ passed/ {for(i=1;i<=NF;i++) if ($i ~ /^[0-9]+$/) c+=$i} END{print c+0}' pytest-stdout.txt)
+          FAILED=$(awk '/ failed/ {for(i=1;i<=NF;i++) if ($i ~ /^[0-9]+$/) c+=$i} END{print c+0}' pytest-stdout.txt)
+          SKIPPED=$(awk '/ skipped/ {for(i=1;i<=NF;i++) if ($i ~ /^[0-9]+$/) c+=$i} END{print c+0}' pytest-stdout.txt)
+          DURATION=$(awk '/collected .* in [0-9.]+s/ {for(i=1;i<=NF;i++) if ($i ~ /^[0-9.]+s$/) d=$i} END{gsub(/s$/,"",d); print d==""?"n/a":d}' pytest-stdout.txt)
           HAVE_JUNIT="missing"; [[ -f reports/junit.xml ]] && HAVE_JUNIT="reports/junit.xml"
           HAVE_COV="missing";   [[ -f coverage/coverage.xml ]] && HAVE_COV="coverage/coverage.xml"
           cat <<'MD' >> "$GITHUB_STEP_SUMMARY"
@@ -471,10 +471,10 @@ jobs:
         if: always()
         shell: bash
         run: |
-          PASSED=$(awk 'match($0,/([0-9]+) passed/,m){c+=m[1]} END{print c+0}' pytest-stdout.txt)
-          FAILED=$(awk 'match($0,/([0-9]+) failed/,m){c+=m[1]} END{print c+0}' pytest-stdout.txt)
-          SKIPPED=$(awk 'match($0,/([0-9]+) skipped/,m){c+=m[1]} END{print c+0}' pytest-stdout.txt)
-          DURATION=$(awk 'match($0,/collected .* in ([0-9.]+)s/,m){d=m[1]} END{if(d=="")print "n/a"; else print d}' pytest-stdout.txt)
+          PASSED=$(awk '/ passed/ {for(i=1;i<=NF;i++) if ($i ~ /^[0-9]+$/) c+=$i} END{print c+0}' pytest-stdout.txt)
+          FAILED=$(awk '/ failed/ {for(i=1;i<=NF;i++) if ($i ~ /^[0-9]+$/) c+=$i} END{print c+0}' pytest-stdout.txt)
+          SKIPPED=$(awk '/ skipped/ {for(i=1;i<=NF;i++) if ($i ~ /^[0-9]+$/) c+=$i} END{print c+0}' pytest-stdout.txt)
+          DURATION=$(awk '/collected .* in [0-9.]+s/ {for(i=1;i<=NF;i++) if ($i ~ /^[0-9.]+s$/) d=$i} END{gsub(/s$/,"",d); print d==""?"n/a":d}' pytest-stdout.txt)
           HAVE_JUNIT="missing"; [[ -f reports/junit.xml ]] && HAVE_JUNIT="reports/junit.xml"
           HAVE_COV="missing";   [[ -f coverage/coverage.xml ]] && HAVE_COV="coverage/coverage.xml"
           cat <<'MD' >> "$GITHUB_STEP_SUMMARY"
