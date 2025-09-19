@@ -5468,6 +5468,21 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
         except Exception:
             messages.append({"role": "user", "content": "{""error"":""examples unavailable""}"})
         messages.append({"role": "user", "content": content})
+    except Exception as e:
+        import traceback as _tb
+        try:
+            print(f"[ws-chat-build-error] {type(e).__name__}: {e}\n" + "".join(_tb.format_exception(type(e), e, e.__traceback__))[-1500:])
+        except Exception:
+            pass
+        try:
+            await websocket.send_text(json.dumps({"type": "error", "error": f"{type(e).__name__}: {e}"}))
+        except Exception:
+            pass
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+        return
     finally:
         try:
             db2.close()
