@@ -120,6 +120,25 @@ Security and troubleshooting
 - If the key is missing or the API fails, the upload still succeeds; verbose logs show [llm-*] lines describing the cause. We do not fallback or fabricate values.
 - Code comments in main.py (search for "LLM classification") point back to this section.
 
+### CI test mode (deterministic LLM stubs)
+
+To make CI stable and deterministic without calling external APIs, set:
+
+- CEDARPY_TEST_MODE=1
+
+Behavior when enabled:
+- All OpenAI chat calls via the internal client are stubbed with predictable JSON (no network).
+- File classification returns a fixed result: structure="sources", ai_title="Test File", ai_description, ai_category.
+- Ask orchestrator returns strict JSON with a single final function call ("Test mode OK").
+- WebSocket chat returns a final function with text "Test mode (final)" and a title.
+- Changelog summaries use a simple "TEST: <action> — ok" string.
+
+Logging:
+- Look for [llm-test] lines indicating the stubbed client is in use.
+
+Notes:
+- This flag is used only in CI; normal runs still require a real API key. See code comments around _llm_client_config() referencing this section.
+
 ## Tabular import via LLM codegen
 
 If the classification step returns structure=tabular, CedarPy runs a second LLM job to generate Python code that imports the uploaded file into the per-project SQLite database.

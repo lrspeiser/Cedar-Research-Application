@@ -168,6 +168,7 @@ jobs:
           PYTHONPATH: .
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CEDARPY_OPENAI_API_KEY: ${{ secrets.CEDARPY_OPENAI_API_KEY }}
+          CEDARPY_TEST_MODE: "1"
         shell: bash
         run: |
           mkdir -p reports coverage htmlcov
@@ -275,6 +276,7 @@ DURATION=$(awk '/collected .* in [0-9.]+s/ {for(i=1;i<=NF;i++) if ($i ~ /^[0-9.]
           PYTHONPATH: .
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CEDARPY_OPENAI_API_KEY: ${{ secrets.CEDARPY_OPENAI_API_KEY }}
+          CEDARPY_TEST_MODE: "1"
         shell: bash
         run: |
           mkdir -p reports coverage htmlcov
@@ -420,6 +422,7 @@ DURATION=$(awk '/collected .* in [0-9.]+s/ {for(i=1;i<=NF;i++) if ($i ~ /^[0-9.]
           PYTHONPATH: .
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CEDARPY_OPENAI_API_KEY: ${{ secrets.CEDARPY_OPENAI_API_KEY }}
+          CEDARPY_TEST_MODE: "1"
         shell: bash
         run: |
           mkdir -p reports coverage htmlcov

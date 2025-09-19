@@ -593,12 +593,79 @@ except Exception:
 # IMPORTANT (packaged app): keys are loaded from ~/CedarPyData/.env; see README: "Where to put your OpenAI key (.env) when packaged"
 # and Postmortem #7 "LLM key missing when launching the packaged app (Qt DMG)".
 # Also see README section "Tabular import via LLM codegen" for the second-stage processing when structure == 'tabular'.
+# CI note: CEDARPY_TEST_MODE enables a deterministic stub client; see README: "CI test mode (deterministic LLM stubs)".
 
 def _llm_client_config():
     """
     Returns (client, model) if OpenAI SDK is available and a key is configured.
     Looks up key from env first, then falls back to the user settings file via _env_get.
+
+    CI/Test mode: if CEDARPY_TEST_MODE is truthy, returns a stub client that emits
+    deterministic JSON (no network calls). See README: "CI test mode (deterministic LLM stubs)".
     """
+    # Test-mode stub (no external calls). Enabled in CI.
+    try:
+        _test_mode = str(os.getenv("CEDARPY_TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "on"}
+    except Exception:
+        _test_mode = False
+    if _test_mode:
+        try:
+            print("[llm-test] CEDARPY_TEST_MODE=1; using stubbed LLM client")
+        except Exception:
+            pass
+
+        class _StubMsg:
+            def __init__(self, content: str):
+                self.content = content
+        class _StubChoice:
+            def __init__(self, content: str):
+                self.message = _StubMsg(content)
+        class _StubResp:
+            def __init__(self, content: str):
+                self.choices = [_StubChoice(content)]
+        class _StubCompletions:
+            def create(self, model: str, messages: list):  # type: ignore[override]
+                # Inspect prompt to choose an appropriate deterministic JSON
+                try:
+                    joined = "\n".join([str((m or {}).get("content") or "") for m in (messages or [])])
+                except Exception:
+                    joined = ""
+                out = None
+                try:
+                    if "Classify incoming files" in joined or "Classify this file" in joined:
+                        # File classification stub
+                        out = {
+                            "structure": "sources",
+                            "ai_title": "Test File",
+                            "ai_description": "Deterministic test description",
+                            "ai_category": "General"
+                        }
+                        return _StubResp(json.dumps(out))
+                    if "Cedar's orchestrator" in joined or "Schema: { \"Text Visible To User\"" in joined:
+                        out = {
+                            "Text Visible To User": "Test mode: planning done; finalizing.",
+                            "function_calls": [
+                                {"name": "final", "args": {"text": "Test mode OK"}}
+                            ]
+                        }
+                        return _StubResp(json.dumps(out))
+                    if "This is a research tool" in joined or "Functions include" in joined:
+                        out = {"function": "final", "args": {"text": "Test mode (final)", "title": "Test Session"}}
+                        return _StubResp(json.dumps(out))
+                except Exception:
+                    pass
+                # Generic minimal final
+                out = {"function": "final", "args": {"text": "Test mode", "title": "Test"}}
+                return _StubResp(json.dumps(out))
+        class _StubChat:
+            def __init__(self):
+                self.completions = _StubCompletions()
+        class _StubClient:
+            def __init__(self):
+                self.chat = _StubChat()
+        return _StubClient(), (os.getenv("CEDARPY_OPENAI_MODEL") or _env_get("CEDARPY_OPENAI_MODEL") or "gpt-5")
+
+    # Normal client
     try:
         from openai import OpenAI  # type: ignore
     except Exception:
@@ -697,7 +764,15 @@ def _llm_summarize_action(action: str, input_payload: Dict[str, Any], output_pay
     """Summarize an action for the changelog using a small, fast model.
     Default model: gpt-5-nano (override via CEDARPY_SUMMARY_MODEL).
     Returns summary text or None on error/missing key.
+
+    CI/Test mode: if CEDARPY_TEST_MODE is truthy, return a deterministic summary without calling the API.
+    See README: "CI test mode (deterministic LLM stubs)".
     """
+    try:
+        if str(os.getenv("CEDARPY_TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "on"}:
+            return f"TEST: {action} — ok"
+    except Exception:
+        pass
     try:
         from openai import OpenAI  # type: ignore
     except Exception:
@@ -1247,6 +1322,7 @@ def layout(title: str, body: str, header_label: Optional[str] = None, header_lin
         f"<a href='/'>&#8203;Projects</a> | "
         f"<a href='/shell{nav_qs}'>Shell</a> | "
         f"<a href='/merge{nav_qs}'>Merge</a> | "
+        f"<a href='/threads{nav_qs}'>Threads</a> | "
         f"<a href='/changelog{nav_qs}'>Changelog</a> | "
         f"<a href='/log{nav_qs}'>Log</a> | "
         f"<a href='/settings'>Settings</a>"
@@ -2208,6 +2284,35 @@ SELECT * FROM demo LIMIT 10;""")
   function startWS(text, threadId, fileId, datasetId){
     try {
       var msgs = document.getElementById('msgs');
+
+      // Simple step timing helpers (annotate previous bubble/line with elapsed time)
+      var currentStep = null;
+      function _now(){ try { return performance.now(); } catch(_) { return Date.now(); } }
+      function annotateTime(node, dtMs){
+        try {
+          if (!node) return;
+          var t = document.createElement('span');
+          t.className = 'small muted';
+          t.style.marginLeft = '6px';
+          var sec = (dtMs/1000).toFixed(dtMs >= 1000 ? 1 : 2);
+          t.textContent = '(' + sec + 's)';
+          node.appendChild(t);
+        } catch(_) {}
+      }
+      function stepAdvance(label, node){
+        var now = _now();
+        try {
+          if (currentStep && currentStep.node){
+            var dt = now - currentStep.t0;
+            annotateTime(currentStep.node, dt);
+            try {
+              console.log('[perf] ' + JSON.stringify({ project: PROJECT_ID, thread: threadId||null, from: currentStep.label, to: label, dt_ms: Math.round(dt) }));
+            } catch(_) {}
+          }
+        } catch(_){}
+        currentStep = { label: String(label||''), t0: now, node: node || null };
+      }
+
       if (msgs && text) {
         // Remove placeholder if present
         try { var first = msgs.firstElementChild; if (first && first.classList.contains('muted')) { first.remove(); } } catch(_){ }
@@ -2215,6 +2320,7 @@ SELECT * FROM demo LIMIT 10;""")
         u.className = 'small';
         u.innerHTML = "<span class='pill'>user</span> " + text.replace(/</g,'&lt;');
         msgs.appendChild(u);
+        stepAdvance('user', u);
       }
       var stream = document.createElement('div');
       stream.className = 'small';
@@ -2228,6 +2334,7 @@ SELECT * FROM demo LIMIT 10;""")
         spin = document.createElement('span'); spin.className = 'spinner'; spin.style.marginLeft = '6px'; stream.appendChild(spin);
       } catch(_){ }
       if (msgs) msgs.appendChild(stream);
+      stepAdvance('assistant:processing', stream);
 
       var lastW = null;
       var stagesSeen = {};
@@ -2245,6 +2352,7 @@ SELECT * FROM demo LIMIT 10;""")
           if (!finalOrError) {
             try { streamText.textContent = '[timeout] Took too long. Please try again.'; } catch(_){ }
             clearSpinner();
+            stepAdvance('timeout', stream);
             try { ws.close(); } catch(_){ }
           }
         }, timeoutMs);
@@ -2278,6 +2386,7 @@ SELECT * FROM demo LIMIT 10;""")
             details.appendChild(pre);
             wrap.appendChild(meta); wrap.appendChild(bub); wrap.appendChild(details);
             if (msgs) msgs.appendChild(wrap);
+            stepAdvance('system:'+fn, wrap);
           } catch(_){ }
         } else if (m.type === 'token' && m.word) {
           if (lastW !== m.word) {
@@ -2293,6 +2402,7 @@ SELECT * FROM demo LIMIT 10;""")
               inf.className = 'small muted';
               inf.textContent = label;
               if (msgs) msgs.appendChild(inf);
+              stepAdvance('info:'+label, inf);
             }
             if (label === 'finalizing' || label === 'persisted' || label === 'timeout') {
               clearSpinner();
@@ -2304,7 +2414,8 @@ SELECT * FROM demo LIMIT 10;""")
           try { if (timeoutId) clearTimeout(timeoutId); } catch(_){}
           streamText.textContent = m.text;
           clearSpinner();
-        } else if (m.type === 'error') {
+          stepAdvance('assistant:final', stream);
+        }
           finalOrError = true;
           try { if (timeoutId) clearTimeout(timeoutId); } catch(_){}
           streamText.textContent = '[error] ' + (m.error || 'unknown');
@@ -2312,7 +2423,7 @@ SELECT * FROM demo LIMIT 10;""")
         }
       };
       ws.onerror = function(){ try { streamText.textContent = (streamText.textContent||'') + ' [ws-error]'; } catch(_){} };
-      ws.onclose = function(){ try { if (!finalOrError) { streamText.textContent = (streamText.textContent||'') + ' [closed]'; } } catch(_){} };
+      ws.onclose = function(){ try { if (currentStep && currentStep.node) { annotateTime(currentStep.node, _now() - currentStep.t0); currentStep = null; } if (!finalOrError) { streamText.textContent = (streamText.textContent||'') + ' [closed]'; } } catch(_){} };
     } catch(e) {}
   }
   document.addEventListener('DOMContentLoaded', function(){
@@ -4583,6 +4694,39 @@ def create_project(title: str = Form(...), db: Session = Depends(get_registry_db
     return RedirectResponse(f"/project/{p.id}?branch_id={main_id}", status_code=303)
 
 
+@app.get("/threads", response_class=HTMLResponse)
+def threads_index(project_id: Optional[int] = None, branch_id: Optional[int] = None):
+    title = "Threads"
+    if not project_id:
+        body = """
+        <h1>Threads</h1>
+        <p class='muted'>Open a project first to view its threads.</p>
+        """
+        return layout(title, body)
+    ensure_project_initialized(project_id)
+    SessionLocal = sessionmaker(bind=_get_project_engine(project_id), autoflush=False, autocommit=False, future=True)
+    with SessionLocal() as db:
+        recs = db.query(Thread).filter(Thread.project_id == project_id).order_by(Thread.created_at.desc()).limit(200).all()
+        rows = []
+        for t in recs:
+            try:
+                bname = t.branch.name if t.branch else ""
+            except Exception:
+                bname = ""
+            link = f"/project/{project_id}?branch_id={branch_id or (t.branch_id or 1)}&thread_id={t.id}"
+            rows.append(f"<tr><td><a href='{link}'>{escape(t.title)}</a></td><td class='small muted'>{escape(bname)}</td><td class='small muted'>{t.created_at:%Y-%m-%d %H:%M:%S} UTC</td></tr>")
+        tbody = "".join(rows) if rows else "<tr><td colspan='3' class='muted small'>(No threads yet)</td></tr>"
+        body = f"""
+        <h1>Threads</h1>
+        <div class='card'>
+          <table class='table'>
+            <thead><tr><th>Title</th><th>Branch</th><th>Created</th></tr></thead>
+            <tbody>{tbody}</tbody>
+          </table>
+        </div>
+        """
+        return layout(title, body, nav_query=f"project_id={project_id}&branch_id={(branch_id or 1)}")
+
 @app.get("/project/{project_id}", response_class=HTMLResponse)
 def view_project(project_id: int, branch_id: Optional[int] = None, msg: Optional[str] = None, file_id: Optional[int] = None, dataset_id: Optional[int] = None, thread_id: Optional[int] = None, db: Session = Depends(get_project_db)):
     ensure_project_initialized(project_id)
@@ -5257,9 +5401,9 @@ def thread_chat(project_id: int, request: Request, content: str = Form(...), thr
             messages.append({"role": "user", "content": content})
             resp = client.chat.completions.create(model=model, messages=messages)
             raw = (resp.choices[0].message.content or "").strip()
-            # Feed assistant JSON back into conversation so the next turn has the full prior output
             try:
-                messages.append({"role": "assistant", "content": raw})
+                parsed = _json.loads(raw)
+                reply_title = str(parsed.get("title") or "Assistant")
             except Exception:
                 pass
             try:
@@ -5277,6 +5421,14 @@ def thread_chat(project_id: int, request: Request, content: str = Form(...), thr
     am = ThreadMessage(project_id=project.id, branch_id=branch.id, thread_id=thr.id, role="assistant", content=reply_text or "", display_title=reply_title, payload_json=reply_payload)
     try:
         db.add(am); db.commit()
+    except Exception:
+        db.rollback()
+
+    # If this is a new/default thread, rename it using reply_title
+    try:
+        if reply_title and (thr.title in {"Ask", "New Thread"} or thr.title.startswith("File:") or thr.title.startswith("DB:")):
+            thr.title = reply_title[:100]
+            db.commit()
     except Exception:
         db.rollback()
 
@@ -5462,6 +5614,7 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
             "- question: ask a question of the user.\n"
             "- final: the last step in the plan.\n"
             "In every response, output STRICT JSON. Always include output_to_user (what to show the user) and changelog_summary.\n"
+            "Also include a concise session title in the \"final\" function args as \"title\" (3-6 words, Title Case).\n"
             "Include examples of the JSON schema for each function so the system can parse it afterwards.\n"
             "We will pass with each query: (a) a list of files and databases you can access (Resources), (b) recent conversation history (History), and (c) optional Context (selected file/DB).\n"
             "All data systems are queriable by you via the db/download/extract functions. Provide concrete, executable specs for those.\n"
@@ -5489,7 +5642,7 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
             "notes": {"function": "notes", "args": {"themes": [{"name": "Risks", "notes": ["…"]}]}, "output_to_user": "Saved notes", "changelog_summary": "notes saved"},
             "compose": {"function": "compose", "args": {"sections": [{"title": "Intro", "text": "…"}]}, "output_to_user": "Drafted section(s)", "changelog_summary": "compose partial"},
             "question": {"function": "question", "args": {"text": "Which domain do you care about?"}, "output_to_user": "Need clarification", "changelog_summary": "asked user"},
-            "final": {"function": "final", "args": {"text": "2+2=4"}, "output_to_user": "2+2=4", "changelog_summary": "finalized answer"}
+            "final": {"function": "final", "args": {"text": "2+2=4", "title": "Simple Arithmetic"}, "output_to_user": "2+2=4", "changelog_summary": "finalized answer"}
         }
 
         messages = [
@@ -5759,6 +5912,7 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
     loop_count = 0
     final_text = None
     question_text = None
+    session_title: Optional[str] = None
 
     # Overall budget: ensure we eventually time out and inform the client
     import time as _time
@@ -5853,12 +6007,16 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
                     # Ask to proceed with the first step
                     messages.append({"role": "user", "content": "Proceed with the first step now. Respond with ONE function call in strict JSON only."})
                     break  # go to next LLM turn
-                if name in ('final', 'question'):
-                    if name == 'final':
-                        final_text = str((args or {}).get('text') or call.get('output_to_user') or '').strip() or 'Done.'
-                    else:
-                        question_text = str((args or {}).get('text') or call.get('output_to_user') or '').strip() or 'I have a question for you.'
-                    break
+            if name in ('final', 'question'):
+                if name == 'final':
+                    final_text = str((args or {}).get('text') or call.get('output_to_user') or '').strip() or 'Done.'
+                    try:
+                        session_title = str((args or {}).get('title') or '').strip() or None
+                    except Exception:
+                        session_title = session_title or None
+                else:
+                    question_text = str((args or {}).get('text') or call.get('output_to_user') or '').strip() or 'I have a question for you.'
+                break
                 # Execute tool
                 _send_info(f"tool:{name}")
                 try:
@@ -5938,6 +6096,16 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
     try:
         if final_text:
             dbf.add(ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="assistant", content=final_text, display_title="Final"))
+            # Rename thread if it still has a default title and we have a session_title
+            try:
+                if session_title:
+                    thr_db = dbf.query(Thread).filter(Thread.id == thr.id, Thread.project_id == project_id).first()
+                    if thr_db and (thr_db.title in {"Ask", "New Thread"} or thr_db.title.startswith("File:") or thr_db.title.startswith("DB:")):
+                        thr_db.title = session_title[:100]
+                        dbf.commit()
+            except Exception:
+                try: dbf.rollback()
+                except Exception: pass
         elif question_text:
             dbf.add(ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="assistant", content=question_text, display_title="Question"))
         dbf.commit()
