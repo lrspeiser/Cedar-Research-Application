@@ -219,10 +219,10 @@ jobs:
         if: always()
         shell: bash
         run: |
-          PASSED=$(grep -Eo '([0-9]+) passed'  pytest-stdout.txt | awk '{s+=$1} END{print s+0}')
-          FAILED=$(grep -Eo '([0-9]+) failed'  pytest-stdout.txt | awk '{s+=$1} END{print s+0}')
-          SKIPPED=$(grep -Eo '([0-9]+) skipped' pytest-stdout.txt | awk '{s+=$1} END{print s+0}')
-          DURATION=$(grep -Eo 'collected .* in [0-9.]+s' pytest-stdout.txt | sed -E 's/.* in ([0-9.]+)s/\1/')
+          PASSED=$(( (grep -Eo '([0-9]+) passed'  pytest-stdout.txt | awk '{s+=$1} END{print s+0}') || true ))
+          FAILED=$(( (grep -Eo '([0-9]+) failed'  pytest-stdout.txt | awk '{s+=$1} END{print s+0}') || true ))
+          SKIPPED=$(( (grep -Eo '([0-9]+) skipped' pytest-stdout.txt | awk '{s+=$1} END{print s+0}') || true ))
+          DURATION=$(( (grep -Eo 'collected .* in [0-9.]+s' pytest-stdout.txt | sed -E 's/.* in ([0-9.]+)s/\1/') || true ))
           HAVE_JUNIT="missing"; [[ -f reports/junit.xml ]] && HAVE_JUNIT="reports/junit.xml"
           HAVE_COV="missing";   [[ -f coverage/coverage.xml ]] && HAVE_COV="coverage/coverage.xml"
           cat <<'MD' >> "$GITHUB_STEP_SUMMARY"
@@ -326,10 +326,10 @@ jobs:
         if: always()
         shell: bash
         run: |
-          PASSED=$(grep -Eo '([0-9]+) passed'  pytest-stdout.txt | awk '{s+=$1} END{print s+0}')
-          FAILED=$(grep -Eo '([0-9]+) failed'  pytest-stdout.txt | awk '{s+=$1} END{print s+0}')
-          SKIPPED=$(grep -Eo '([0-9]+) skipped' pytest-stdout.txt | awk '{s+=$1} END{print s+0}')
-          DURATION=$(grep -Eo 'collected .* in [0-9.]+s' pytest-stdout.txt | sed -E 's/.* in ([0-9.]+)s/\1/')
+          PASSED=$(( (grep -Eo '([0-9]+) passed'  pytest-stdout.txt | awk '{s+=$1} END{print s+0}') || true ))
+          FAILED=$(( (grep -Eo '([0-9]+) failed'  pytest-stdout.txt | awk '{s+=$1} END{print s+0}') || true ))
+          SKIPPED=$(( (grep -Eo '([0-9]+) skipped' pytest-stdout.txt | awk '{s+=$1} END{print s+0}') || true ))
+          DURATION=$(( (grep -Eo 'collected .* in [0-9.]+s' pytest-stdout.txt | sed -E 's/.* in ([0-9.]+)s/\1/') || true ))
           HAVE_JUNIT="missing"; [[ -f reports/junit.xml ]] && HAVE_JUNIT="reports/junit.xml"
           HAVE_COV="missing";   [[ -f coverage/coverage.xml ]] && HAVE_COV="coverage/coverage.xml"
           cat <<'MD' >> "$GITHUB_STEP_SUMMARY"
@@ -435,10 +435,10 @@ jobs:
         if: always()
         shell: bash
         run: |
-          PASSED=$(grep -Eo '([0-9]+) passed'  pytest-stdout.txt | awk '{s+=$1} END{print s+0}')
-          FAILED=$(grep -Eo '([0-9]+) failed'  pytest-stdout.txt | awk '{s+=$1} END{print s+0}')
-          SKIPPED=$(grep -Eo '([0-9]+) skipped' pytest-stdout.txt | awk '{s+=$1} END{print s+0}')
-          DURATION=$(grep -Eo 'collected .* in [0-9.]+s' pytest-stdout.txt | sed -E 's/.* in ([0-9.]+)s/\1/')
+          PASSED=$(( (grep -Eo '([0-9]+) passed'  pytest-stdout.txt | awk '{s+=$1} END{print s+0}') || true ))
+          FAILED=$(( (grep -Eo '([0-9]+) failed'  pytest-stdout.txt | awk '{s+=$1} END{print s+0}') || true ))
+          SKIPPED=$(( (grep -Eo '([0-9]+) skipped' pytest-stdout.txt | awk '{s+=$1} END{print s+0}') || true ))
+          DURATION=$(( (grep -Eo 'collected .* in [0-9.]+s' pytest-stdout.txt | sed -E 's/.* in ([0-9.]+)s/\1/') || true ))
           HAVE_JUNIT="missing"; [[ -f reports/junit.xml ]] && HAVE_JUNIT="reports/junit.xml"
           HAVE_COV="missing";   [[ -f coverage/coverage.xml ]] && HAVE_COV="coverage/coverage.xml"
           cat <<'MD' >> "$GITHUB_STEP_SUMMARY"
