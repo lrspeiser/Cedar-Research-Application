@@ -2078,7 +2078,7 @@ SELECT * FROM demo LIMIT 10;""")
     for t in threads:
         cls = "tab active" if (selected_thread and t.id == selected_thread.id) else "tab"
         thr_tabs.append(f"<a href='/project/{project.id}?branch_id={current.id}" + (f"&file_id={selected_file.id}" if selected_file else "") + f"&thread_id={t.id}' class='{cls}'>{escape(t.title)}</a>")
-    thr_tabs_html = " ".join(thr_tabs) + f" <a href='/project/{project.id}/threads/new?branch_id={current.id}" + (f"&dataset_id={selected_dataset.id}" if selected_dataset else (f"&file_id={selected_file.id}" if selected_file else "")) + "' class='tab new' title='New Thread'>+</a>"
+    thr_tabs_html = " ".join(thr_tabs) + f" <a href='/project/{project.id}/threads/new?branch_id={current.id}" + (f"&dataset_id={selected_dataset.id}" if selected_dataset else (f"&file_id={selected_file.id}" if selected_file else "")) + "' class='tab new thread-create' title='New Thread'>+</a>"
 
     # Render thread messages
     msgs = thread_messages or []
@@ -2316,6 +2316,13 @@ SELECT * FROM demo LIMIT 10;""")
         try { ev.preventDefault(); } catch(_){ }
         var fid = a.getAttribute('data-file-id') || null;
         var dsid = a.getAttribute('data-dataset-id') || null;
+        if (!fid || !dsid) {
+          try {
+            var urlObj = new URL(a.getAttribute('href'), window.location.href);
+            if (!fid) fid = urlObj.searchParams.get('file_id');
+            if (!dsid) dsid = urlObj.searchParams.get('dataset_id');
+          } catch(_){ }
+        }
         (async function(){
           var tid = await ensureThreadId(null, fid, dsid);
           if (!tid) return;
@@ -5453,6 +5460,13 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
             db2.close()
         except Exception:
             pass
+
+    # Optional: emit debug prompt for testing
+    try:
+        if bool(payload.get('debug')):
+            await websocket.send_text(json.dumps({"type": "debug", "prompt": messages}))
+    except Exception:
+        pass
 
     # Orchestrated plan/execute loop (non-streaming JSON)
     try:
