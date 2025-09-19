@@ -5823,6 +5823,26 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
         if final_text or question_text:
             break
 
+    # If the loop ended without a 'final' or 'question', nudge once more to produce a 'final'.
+    if not final_text and not question_text:
+        try:
+            messages.append({"role": "user", "content": "Respond NOW with one function call ONLY: {\"function\":\"final\",\"args\":{\"text\":\"<answer>\"}}. STRICT JSON. No prose."})
+            resp = client.chat.completions.create(model=model, messages=messages)
+            raw2 = (resp.choices[0].message.content or "").strip()
+            try:
+                obj2 = json.loads(raw2)
+            except Exception:
+                obj2 = None
+            if isinstance(obj2, dict) and str(obj2.get('function') or '').lower() == 'final':
+                a2 = obj2.get('args') or {}
+                final_text = str(a2.get('text') or obj2.get('output_to_user') or '').strip() or 'Done.'
+                try:
+                    await websocket.send_text(json.dumps({"type": "info", "stage": "final-forced"}))
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
     # Finalize
     try:
         await websocket.send_text(json.dumps({"type": "info", "stage": "finalizing"}))
