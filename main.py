@@ -2222,9 +2222,10 @@ SELECT * FROM demo LIMIT 10;""")
       var streamText = document.createElement('span');
       stream.appendChild(pill); stream.appendChild(document.createTextNode(' ')); stream.appendChild(streamText);
       // Initial visible ACK to the user
+      var spin = null;
       try {
         streamText.textContent = 'Processing…';
-        var spin = document.createElement('span'); spin.className = 'spinner'; spin.style.marginLeft = '6px'; stream.appendChild(spin);
+        spin = document.createElement('span'); spin.className = 'spinner'; spin.style.marginLeft = '6px'; stream.appendChild(spin);
       } catch(_){ }
       if (msgs) msgs.appendChild(stream);
 
@@ -2237,11 +2238,13 @@ SELECT * FROM demo LIMIT 10;""")
       var timeoutMs = 90000; // 90s default; mirrors server CEDARPY_CHAT_TIMEOUT_SECONDS
       var finalOrError = false;
       var timeoutId = null;
+      function clearSpinner(){ try { if (spin && spin.parentNode) spin.remove(); } catch(_){} }
       function refreshTimeout(){
         try { if (timeoutId) clearTimeout(timeoutId); } catch(_){}
         timeoutId = setTimeout(function(){
           if (!finalOrError) {
             try { streamText.textContent = '[timeout] Took too long. Please try again.'; } catch(_){ }
+            clearSpinner();
             try { ws.close(); } catch(_){ }
           }
         }, timeoutMs);
@@ -2291,15 +2294,21 @@ SELECT * FROM demo LIMIT 10;""")
               inf.textContent = label;
               if (msgs) msgs.appendChild(inf);
             }
+            if (label === 'finalizing' || label === 'persisted' || label === 'timeout') {
+              clearSpinner();
+              if (label === 'timeout') { finalOrError = true; }
+            }
           } catch(_){ }
         } else if (m.type === 'final' && m.text) {
           finalOrError = true;
           try { if (timeoutId) clearTimeout(timeoutId); } catch(_){}
           streamText.textContent = m.text;
+          clearSpinner();
         } else if (m.type === 'error') {
           finalOrError = true;
           try { if (timeoutId) clearTimeout(timeoutId); } catch(_){}
           streamText.textContent = '[error] ' + (m.error || 'unknown');
+          clearSpinner();
         }
       };
       ws.onerror = function(){ try { streamText.textContent = (streamText.textContent||'') + ' [ws-error]'; } catch(_){} };
@@ -5910,8 +5919,10 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
             if isinstance(obj2, dict) and str(obj2.get('function') or '').lower() == 'final':
                 a2 = obj2.get('args') or {}
                 final_text = str(a2.get('text') or obj2.get('output_to_user') or '').strip() or 'Done.'
+                # Suppress noisy 'final-forced' from user UI; emit only when debug=true in payload
                 try:
-                    await websocket.send_text(json.dumps({"type": "info", "stage": "final-forced"}))
+                    if bool(payload.get('debug')):
+                        await websocket.send_text(json.dumps({"type": "info", "stage": "final-forced"}))
                 except Exception:
                     pass
         except Exception:
@@ -5938,16 +5949,10 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
         except Exception: pass
 
     if final_text:
-        try:
-            await websocket.send_text(json.dumps({"type": "action", "function": "final", "args": {"text": final_text}}))
-        except Exception:
-            pass
+        # Emit only the final message to avoid confusing 'Next: final' system bubble in the UI
         await websocket.send_text(json.dumps({"type": "final", "text": final_text}))
     elif question_text:
-        try:
-            await websocket.send_text(json.dumps({"type": "action", "function": "question", "args": {"text": question_text}}))
-        except Exception:
-            pass
+        # For questions, continue to use 'final' type for compatibility with existing tests/clients
         await websocket.send_text(json.dumps({"type": "final", "text": question_text}))
     try:
         await websocket.send_text(json.dumps({"type": "info", "stage": "persisted"}))
