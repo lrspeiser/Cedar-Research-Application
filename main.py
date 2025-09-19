@@ -5311,6 +5311,10 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
 
     client, model = _llm_client_config()
     if not client:
+        try:
+            print("[ws-chat] missing-key")
+        except Exception:
+            pass
         db2 = SessionLocal()
         try:
             am = ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="assistant", content="[llm-missing-key] Set CEDARPY_OPENAI_API_KEY or OPENAI_API_KEY.")
