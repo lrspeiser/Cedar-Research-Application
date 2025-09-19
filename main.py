@@ -1290,6 +1290,8 @@ def layout(title: str, body: str, header_label: Optional[str] = None, header_lin
   window.addEventListener('unhandledrejection', function(ev){
     try { var r = ev && ev.reason; base('error', (r && (r.message || r.toString())) || 'unhandledrejection', 'unhandledrejection', { stack: r && r.stack ? String(r.stack) : null }); } catch(e){}
   });
+  // Minimal activity log so Console Logs dialog shows something even without UI interactions
+  document.addEventListener('DOMContentLoaded', function(){ try { console.log('[ui] page ready'); } catch(e){} }, { once: true });
 })();
 </script>
 """
@@ -1317,6 +1319,15 @@ def layout(title: str, body: str, header_label: Optional[str] = None, header_lin
     .pill {{ display: inline-block; padding: 2px 8px; border-radius: 999px; background: #eef2ff; color: #3730a3; font-size: 12px; }}
     .small {{ font-size: 12px; }}
     .topbar {{ display:flex; align-items:center; gap:12px; }}
+    /* Two-column layout (stub fallback) */
+    .two-col {{ display: grid; grid-template-columns: 1fr 360px; gap: 16px; align-items: start; }}
+    .pane {{ display: flex; flex-direction: column; gap: 8px; }}
+    .tabs {{ display: flex; gap: 6px; border-bottom: 1px solid var(--border); }}
+    .tab {{ display:inline-block; padding:6px 10px; border:1px solid var(--border); border-bottom:none; border-radius:6px 6px 0 0; background:#f3f4f6; color:#111; cursor:pointer; user-select:none; }}
+    .tab.active {{ background:#fff; font-weight:600; }}
+    .tab-panels {{ border:1px solid var(--border); border-radius:0 6px 6px 6px; background:#fff; padding:12px; }}
+    .panel.hidden {{ display:none !important; }}
+    @media (max-width: 900px) {{ .two-col {{ grid-template-columns: 1fr; }} }}
   </style>
   {client_log_js}
 </head>
@@ -1811,7 +1822,7 @@ def _llm_reach_reason() -> str:
     @keyframes spin {{ from {{ transform: rotate(0deg);}} to {{ transform: rotate(360deg);}} }}
 
     /* Two-column layout and tabs */
-    .two-col {{ display: grid; grid-template-columns: minmax(380px, 1fr) 1fr; gap: 16px; align-items: start; }}
+.two-col {{ display: grid; grid-template-columns: 1fr 360px; gap: 16px; align-items: start; }}
     .pane {{ display: flex; flex-direction: column; gap: 8px; }}
     .tabs {{ display: flex; gap: 6px; border-bottom: 1px solid var(--border); }}
     .tab {{ display:inline-block; padding:6px 10px; border:1px solid var(--border); border-bottom:none; border-radius:6px 6px 0 0; background:#f3f4f6; color:#111; cursor:pointer; user-select:none; }}
