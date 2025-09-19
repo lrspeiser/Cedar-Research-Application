@@ -1944,7 +1944,7 @@ def project_page_html(
     for d in datasets:
         dataset_rows.append(f"""
            <tr>
-             <td><a href='/project/{project.id}/threads/new?branch_id={current.id}&dataset_id={d.id}'>{escape(d.name)}</a></td>
+             <td><a href='/project/{project.id}/threads/new?branch_id={current.id}&dataset_id={d.id}' class='thread-create' data-dataset-id='{d.id}'>{escape(d.name)}</a></td>
              <td>{escape(d.branch.name if d.branch else '')}</td>
              <td class=\"small muted\">{d.created_at:%Y-%m-%d %H:%M:%S} UTC</td>
            </tr>
@@ -2029,7 +2029,7 @@ SELECT * FROM demo LIMIT 10;""")
             status_icon = "<span title='classified'>✓</span>"
         else:
             status_icon = ""
-        file_list_items.append(f"<li style='margin:6px 0; {li_style}'>{status_icon}<a href='{href}' style='text-decoration:none; color:inherit; margin-left:6px'>{label_text}</a><div class='small muted'>{sub}</div></li>")
+        file_list_items.append(f"<li style='margin:6px 0; {li_style}'>{status_icon}<a href='{href}' class='thread-create' data-file-id='{f.id}' style='text-decoration:none; color:inherit; margin-left:6px'>{label_text}</a><div class='small muted'>{sub}</div></li>")
     file_list_html = "<ul style='list-style:none; padding-left:0; margin:0'>" + ("".join(file_list_items) or "<li class='muted'>No files yet.</li>") + "</ul>"
 
     # Left details panel for selected file
@@ -2095,11 +2095,30 @@ SELECT * FROM demo LIMIT 10;""")
             try:
                 import json as _json
                 if getattr(m, 'payload_json', None) is not None:
-                    details = f"<pre class='small' style='white-space:pre-wrap; background:#f8fafc; padding:8px; border-radius:6px; display:none' id='{details_id}'>" + escape(_json.dumps(m.payload_json, ensure_ascii=False, indent=2)) + "</pre>"
+                    try:
+                        raw_json = _json.dumps(m.payload_json, ensure_ascii=False, indent=2)
+                    except Exception:
+                        raw_json = _json.dumps(m.payload_json, ensure_ascii=False)
+                    # Attempt to surface logs fields when present
+                    logs_txt = ''
+                    try:
+                        pj = m.payload_json or {}
+                        logs_val = pj.get('logs') if isinstance(pj, dict) else None
+                        if isinstance(logs_val, list):
+                            logs_txt = "\n".join([str(x) for x in logs_val])
+                        elif logs_val is not None:
+                            logs_txt = str(logs_val)
+                    except Exception:
+                        logs_txt = ''
+                    sections = []
+                    sections.append(f"<h4 class='small muted' style='margin:6px 0'>Raw JSON</h4><pre class='small' style='white-space:pre-wrap; background:#f8fafc; padding:8px; border-radius:6px'>{escape(raw_json)}</pre>")
+                    if logs_txt:
+                        sections.append(f"<h4 class='small muted' style='margin:6px 0'>Logs</h4><pre class='small' style='white-space:pre-wrap; background:#0b1021; color:#e6e6e6; padding:8px; border-radius:6px; max-height:260px; overflow:auto'>{escape(logs_txt)}</pre>")
+                    details = f"<div id='{details_id}' style='display:none'>" + "".join(sections) + "</div>"
                 else:
-                    details = f"<pre class='small' style='white-space:pre-wrap; background:#f8fafc; padding:8px; border-radius:6px; display:none' id='{details_id}'>" + escape(m.content) + "</pre>"
+                    details = f"<div id='{details_id}' style='display:none'><pre class='small' style='white-space:pre-wrap; background:#f8fafc; padding:8px; border-radius:6px'>" + escape(m.content) + "</pre></div>"
             except Exception:
-                details = f"<pre class='small' style='white-space:pre-wrap; background:#f8fafc; padding:8px; border-radius:6px; display:none' id='{details_id}'>" + escape(m.content) + "</pre>"
+                details = f"<div id='{details_id}' style='display:none'><pre class='small' style='white-space:pre-wrap; background:#f8fafc; padding:8px; border-radius:6px'>" + escape(m.content) + "</pre></div>"
             # Build a short preview to show inline in a bubble
             try:
                 if getattr(m, 'payload_json', None) is not None:
@@ -2125,7 +2144,7 @@ SELECT * FROM demo LIMIT 10;""")
                 f"    <span class='title' style='font-weight:600'>{title_txt}</span> "
                 f"    <a href='#' class='small muted' onclick=\"var e=document.getElementById('{details_id}'); if(e){{ e.style.display = (e.style.display==='none'?'block':'none'); }} return false;\">details</a>"
                 f"  </div>"
-                f"  <div class='bubble {role_css}'><div class='content' style='white-space:pre-wrap'>{escape(preview)}</div></div>"
+                f"  <div class='bubble {role_css}' data-details-id='{details_id}'><div class='content' style='white-space:pre-wrap'>{escape(preview)}</div></div>"
                 f"  {details}"
                 f"</div>"
             )
@@ -2256,6 +2275,57 @@ SELECT * FROM demo LIMIT 10;""")
           startWS(text, tid, fid, dsid); try { t.value=''; } catch(_){ }
         });
       }
+
+      // Toggle details by clicking the bubble/content
+      try {
+        var msgsEl = document.getElementById('msgs');
+        if (msgsEl) {
+          msgsEl.addEventListener('click', function(ev){
+            var b = ev.target && ev.target.closest ? ev.target.closest('.bubble') : null;
+            if (!b) return;
+            var did = b.getAttribute('data-details-id');
+            if (!did) return;
+            var el = document.getElementById(did);
+            if (el) { el.style.display = (el.style.display==='none'?'block':'none'); }
+          });
+        }
+      } catch(_){ }
+
+      // Intercept clicks on file/db links to create a new tab without navigation
+      document.addEventListener('click', function(ev){
+        var a = ev.target && ev.target.closest ? ev.target.closest('a.thread-create') : null;
+        if (!a) return;
+        try { ev.preventDefault(); } catch(_){ }
+        var fid = a.getAttribute('data-file-id') || null;
+        var dsid = a.getAttribute('data-dataset-id') || null;
+        (async function(){
+          var tid = await ensureThreadId(null, fid, dsid);
+          if (!tid) return;
+          // Update chat form context
+          try {
+            var f = document.getElementById('chatForm');
+            if (f) {
+              f.setAttribute('data-thread-id', tid);
+              f.setAttribute('data-file-id', fid||'');
+              f.setAttribute('data-dataset-id', dsid||'');
+              var hidT = f.querySelector("input[name='thread_id']"); if (hidT) hidT.value = tid; else { var i=document.createElement('input'); i.type='hidden'; i.name='thread_id'; i.value=tid; f.appendChild(i); }
+              var hidF = f.querySelector("input[name='file_id']"); if (fid) { if (hidF) hidF.value = fid; else { var j=document.createElement('input'); j.type='hidden'; j.name='file_id'; j.value=fid; f.appendChild(j);} } else if (hidF) { hidF.remove(); }
+              var hidD = f.querySelector("input[name='dataset_id']"); if (dsid) { if (hidD) hidD.value = dsid; else { var k=document.createElement('input'); k.type='hidden'; k.name='dataset_id'; k.value=dsid; f.appendChild(k);} } else if (hidD) { hidD.remove(); }
+            }
+          } catch(_){ }
+          // Clear messages panel to indicate a fresh thread
+          try {
+            var msgs = document.getElementById('msgs');
+            if (msgs) { msgs.innerHTML = "<div class='muted small'>(No messages yet)</div>"; }
+          } catch(_){ }
+          // Update URL
+          try {
+            var url = `/project/${PROJECT_ID}?branch_id=${BRANCH_ID}&thread_id=${encodeURIComponent(tid)}` + (fid?`&file_id=${encodeURIComponent(fid)}`:'') + (dsid?`&dataset_id=${encodeURIComponent(dsid)}`:'');
+            if (history && history.pushState) { history.pushState({}, '', url); }
+          } catch(_){ }
+        })();
+      }, true);
+
     } catch(_) {}
   }, { once: true });
 })();
@@ -2290,7 +2360,7 @@ SELECT * FROM demo LIMIT 10;""")
                   #left-chat .chat-log {{ flex:1; display:flex; flex-direction:column; gap:8px; overflow-y:auto; padding-bottom:6px; }}
                   #left-chat .chat-input {{ margin-top:auto; padding-top:6px; background:#fff; }}
                   .msg .meta {{ display:flex; gap:8px; align-items:center; margin-bottom:4px; }}
-                  .bubble {{ border:1px solid var(--border); border-radius:12px; padding:10px 12px; background:#fff; }}
+                .bubble {{ border:1px solid var(--border); border-radius:14px; padding:12px 14px; background:#fff; font-size:14px; line-height:1.45; }}
                   .bubble.user {{ background:#ecfeff; border-color:#bae6fd; }}
                   .bubble.assistant {{ background:#f8fafc; border-color:#e5e7eb; }}
                   .bubble.system {{ background:#fff7ed; border-color:#fde68a; }}
@@ -4938,7 +5008,7 @@ def ask_orchestrator(project_id: int, request: Request, query: str = Form(...), 
 @app.post("/project/{project_id}/threads/chat")
 # Submit a chat message in the selected thread; includes file metadata context to LLM.
 # Requires OpenAI API key; see README for setup. Verbose errors are surfaced to the UI/log.
-def thread_chat(project_id: int, request: Request, content: str = Form(...), thread_id: Optional[str] = Form(None), file_id: Optional[str] = Form(None), db: Session = Depends(get_project_db)):
+def thread_chat(project_id: int, request: Request, content: str = Form(...), thread_id: Optional[str] = Form(None), file_id: Optional[str] = Form(None), dataset_id: Optional[str] = Form(None), db: Session = Depends(get_project_db)):
     ensure_project_initialized(project_id)
     # derive branch context
     branch_q = request.query_params.get("branch_id")
@@ -4966,6 +5036,12 @@ def thread_chat(project_id: int, request: Request, content: str = Form(...), thr
             file_id_val = int(str(file_id).strip())
         except Exception:
             file_id_val = None
+    dataset_id_val: Optional[int] = None
+    if dataset_id is not None and str(dataset_id).strip() != "":
+        try:
+            dataset_id_val = int(str(dataset_id).strip())
+        except Exception:
+            dataset_id_val = None
 
     # Resolve thread; if missing, auto-create a default one
     thr = None
@@ -4990,6 +5066,12 @@ def thread_chat(project_id: int, request: Request, content: str = Form(...), thr
             fctx = db.query(FileEntry).filter(FileEntry.id == file_id_val, FileEntry.project_id == project.id).first()
         except Exception:
             fctx = None
+    dctx = None
+    if dataset_id_val:
+        try:
+            dctx = db.query(Dataset).filter(Dataset.id == dataset_id_val, Dataset.project_id == project.id).first()
+        except Exception:
+            dctx = None
 
     # LLM call (OpenAI). See README for keys setup. No fallbacks; verbose errors.
     reply_text = None
@@ -5018,15 +5100,18 @@ def thread_chat(project_id: int, request: Request, content: str = Form(...), thr
             }
             ctx = {}
             if fctx:
-                ctx = {
-                    "file": {
-                        "display_name": fctx.display_name,
-                        "file_type": fctx.file_type,
-                        "structure": fctx.structure,
-                        "ai_title": fctx.ai_title,
-                        "ai_category": fctx.ai_category,
-                        "ai_description": (fctx.ai_description or "")[:350],
-                    }
+                ctx["file"] = {
+                    "display_name": fctx.display_name,
+                    "file_type": fctx.file_type,
+                    "structure": fctx.structure,
+                    "ai_title": fctx.ai_title,
+                    "ai_category": fctx.ai_category,
+                    "ai_description": (fctx.ai_description or "")[:350],
+                }
+            if dctx:
+                ctx["dataset"] = {
+                    "name": dctx.name,
+                    "description": (dctx.description or "")[:500]
                 }
             import json as _json
             messages = [
