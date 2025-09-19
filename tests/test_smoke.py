@@ -24,3 +24,7 @@ def test_create_and_open_project():
     # Project page should contain a heading and right pane sections
     assert re.search(r"<h1>", r2.text)
     assert "Files" in r2.text
+    # Assert production layout CSS (two-column grid) is present
+    assert re.search(r"\.two-col\s*\{[\s\S]*grid-template-columns", r2.text)
+    # Assert client logging hook exists so Console Logs can capture
+    assert "/api/client-log" in r2.text

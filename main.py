@@ -1206,9 +1206,9 @@ def _cedarpy_startup_llm_probe():
     except Exception:
         pass
 
-# Minimal fallback layout to prevent runtime NameError if the full layout() is unavailable in a packaged build.
-# This ensures '/' and other pages render a basic shell instead of 500s so readiness probes succeed and logs are visible.
-# The full layout() defined later will override this stub in normal builds.
+# Primary layout for the application (single source of truth).
+# This function renders all pages; there is no secondary/stub layout.
+# CI smoke tests exercise this rendering so DMG builds will block on failures.
 from fastapi.responses import HTMLResponse as _HTMLResponse
 
 def layout(title: str, body: str, header_label: Optional[str] = None, header_link: Optional[str] = None, nav_query: Optional[str] = None) -> HTMLResponse:  # type: ignore[override]
