@@ -2235,7 +2235,25 @@ SELECT * FROM demo LIMIT 10;""")
       ws.onmessage = function(ev){
         var m = null; try { m = JSON.parse(ev.data); } catch(_){ return; }
         if (!m) return;
-        if (m.type === 'token' && m.word) {
+        if (m.type === 'action') {
+          try {
+            var fn = String(m.function||'').trim();
+            var args = m.args || {};
+            var detId = 'det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
+            var wrap = document.createElement('div'); wrap.className = 'msg system';
+            var meta = document.createElement('div'); meta.className = 'meta small'; meta.innerHTML = "<span class='pill'>system</span> <span class='title' style='font-weight:600'>" + (fn==='plan' ? 'Plan created' : ('Next: ' + fn)) + "</span>";
+            var bub = document.createElement('div'); bub.className = 'bubble system'; bub.setAttribute('data-details-id', detId);
+            var cont = document.createElement('div'); cont.className='content'; cont.style.whiteSpace='pre-wrap';
+            cont.textContent = (fn==='plan' ? ('Plan with ' + ((args.steps||[]).length) + ' step(s). Click to view.') : ('About to run ' + fn + '. Click to view args.'));
+            bub.appendChild(cont);
+            var details = document.createElement('div'); details.id = detId; details.style.display='none';
+            var pre = document.createElement('pre'); pre.className='small'; pre.style.whiteSpace='pre-wrap'; pre.style.background='#f8fafc'; pre.style.padding='8px'; pre.style.borderRadius='6px';
+            try { pre.textContent = JSON.stringify(args, null, 2); } catch(_){ pre.textContent = String(args); }
+            details.appendChild(pre);
+            wrap.appendChild(meta); wrap.appendChild(bub); wrap.appendChild(details);
+            if (msgs) msgs.appendChild(wrap);
+          } catch(_){ }
+        } else if (m.type === 'token' && m.word) {
           if (lastW !== m.word) {
             streamText.textContent = (streamText.textContent ? (streamText.textContent + ' ') : '') + String(m.word);
             lastW = m.word;
@@ -2359,11 +2377,15 @@ SELECT * FROM demo LIMIT 10;""")
                   #left-chat {{ display:flex; flex-direction:column; flex:1; min-height:0; }}
                   #left-chat .chat-log {{ flex:1; display:flex; flex-direction:column; gap:8px; overflow-y:auto; padding-bottom:6px; }}
                   #left-chat .chat-input {{ margin-top:auto; padding-top:6px; background:#fff; }}
+                  .msg {{ display:flex; flex-direction:column; max-width:80%; }}
+                  .msg.user {{ align-self:flex-end; }}
+                  .msg.assistant {{ align-self:flex-start; }}
+                  .msg.system {{ align-self:flex-start; }}
                   .msg .meta {{ display:flex; gap:8px; align-items:center; margin-bottom:4px; }}
-                .bubble {{ border:1px solid var(--border); border-radius:14px; padding:12px 14px; background:#fff; font-size:14px; line-height:1.45; }}
-                  .bubble.user {{ background:#ecfeff; border-color:#bae6fd; }}
-                  .bubble.assistant {{ background:#f8fafc; border-color:#e5e7eb; }}
-                  .bubble.system {{ background:#fff7ed; border-color:#fde68a; }}
+                  .bubble {{ border:1px solid var(--border); border-radius:18px; padding:12px 14px; font-size:14px; line-height:1.45; box-shadow: 0 1px 1px rgba(0,0,0,0.04); }}
+                  .bubble.user {{ background:#d9fdd3; border-color:#b2e59a; }}
+                  .bubble.assistant {{ background:#ffffff; border-color:#e6e6e6; }}
+                  .bubble.system {{ background:#e7f3ff; border-color:#cfe8ff; }}
                   .thread-tabs .tab {{ display:inline-block; padding:6px 10px; border:1px solid var(--border); border-bottom:none; border-radius:6px 6px 0 0; background:#f3f4f6; color:#111; margin-right:4px; }}
                   .thread-tabs .tab.active {{ background:#fff; font-weight:600; }}
                   .thread-tabs .tab.new {{ background:#e5f6ff; }}
@@ -5696,6 +5718,11 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
                 finally:
                     try: dbp.close()
                     except Exception: pass
+                # Emit an action bubble to the client with plan steps preview
+                try:
+                    await websocket.send_text(json.dumps({"type": "action", "function": "plan", "args": {"steps": call.get("steps") or []}}))
+                except Exception:
+                    pass
                 # Ask to proceed with the first step
                 messages.append({"role": "user", "content": "Proceed with the first step now. Respond with ONE function call in strict JSON only."})
                 break  # go to next LLM turn
@@ -5707,6 +5734,10 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
                 break
             # Execute tool
             _send_info(f"tool:{name}")
+            try:
+                await websocket.send_text(json.dumps({"type": "action", "function": name, "args": args or {}}))
+            except Exception:
+                pass
             fn = tools_map.get(name)
             result = fn(args) if fn else {"ok": False, "error": f"unknown tool: {name}"}
             # Persist tool result
@@ -5748,8 +5779,16 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
         except Exception: pass
 
     if final_text:
+        try:
+            await websocket.send_text(json.dumps({"type": "action", "function": "final", "args": {"text": final_text}}))
+        except Exception:
+            pass
         await websocket.send_text(json.dumps({"type": "final", "text": final_text}))
     elif question_text:
+        try:
+            await websocket.send_text(json.dumps({"type": "action", "function": "question", "args": {"text": question_text}}))
+        except Exception:
+            pass
         await websocket.send_text(json.dumps({"type": "final", "text": question_text}))
     try:
         await websocket.send_text(json.dumps({"type": "info", "stage": "persisted"}))
