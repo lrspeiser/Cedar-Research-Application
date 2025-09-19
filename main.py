@@ -5188,9 +5188,6 @@ def thread_chat(project_id: int, request: Request, content: str = Form(...), thr
             messages.append({"role": "user", "content": "Functions and examples:"})
             messages.append({"role": "user", "content": _json.dumps(examples_json, ensure_ascii=False)})
             messages.append({"role": "user", "content": content})
-                {"role": "user", "content": _json.dumps(example, ensure_ascii=False)},
-                {"role": "user", "content": content},
-            ]
             resp = client.chat.completions.create(model=model, messages=messages)
             raw = (resp.choices[0].message.content or "").strip()
             try:
