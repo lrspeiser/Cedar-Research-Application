@@ -2221,18 +2221,41 @@ SELECT * FROM demo LIMIT 10;""")
       var pill = document.createElement('span'); pill.className = 'pill'; pill.textContent = 'assistant';
       var streamText = document.createElement('span');
       stream.appendChild(pill); stream.appendChild(document.createTextNode(' ')); stream.appendChild(streamText);
+      // Initial visible ACK to the user
+      try {
+        streamText.textContent = 'Processing…';
+        var spin = document.createElement('span'); spin.className = 'spinner'; spin.style.marginLeft = '6px'; stream.appendChild(spin);
+      } catch(_){ }
       if (msgs) msgs.appendChild(stream);
+
       var lastW = null;
       var stagesSeen = {};
       var wsScheme = (location.protocol === 'https:') ? 'wss' : 'ws';
       var ws = new WebSocket(wsScheme + '://' + location.host + '/ws/chat/' + PROJECT_ID);
+
+      // Client-side watchdog to ensure the user always sees progress or a timeout
+      var timeoutMs = 90000; // 90s default; mirrors server CEDARPY_CHAT_TIMEOUT_SECONDS
+      var finalOrError = false;
+      var timeoutId = null;
+      function refreshTimeout(){
+        try { if (timeoutId) clearTimeout(timeoutId); } catch(_){}
+        timeoutId = setTimeout(function(){
+          if (!finalOrError) {
+            try { streamText.textContent = '[timeout] Took too long. Please try again.'; } catch(_){ }
+            try { ws.close(); } catch(_){ }
+          }
+        }, timeoutMs);
+      }
+
       ws.onopen = function(){
         try {
+          refreshTimeout();
           // Do not print a local 'submitted'; rely on server info events for true order
           ws.send(JSON.stringify({action:'chat', content: text, branch_id: BRANCH_ID, thread_id: threadId||null, file_id: (fileId||null), dataset_id: (datasetId||null) }));
         } catch(e){}
       };
       ws.onmessage = function(ev){
+        refreshTimeout();
         var m = null; try { m = JSON.parse(ev.data); } catch(_){ return; }
         if (!m) return;
         if (m.type === 'action') {
@@ -2270,12 +2293,17 @@ SELECT * FROM demo LIMIT 10;""")
             }
           } catch(_){ }
         } else if (m.type === 'final' && m.text) {
+          finalOrError = true;
+          try { if (timeoutId) clearTimeout(timeoutId); } catch(_){}
           streamText.textContent = m.text;
         } else if (m.type === 'error') {
+          finalOrError = true;
+          try { if (timeoutId) clearTimeout(timeoutId); } catch(_){}
           streamText.textContent = '[error] ' + (m.error || 'unknown');
         }
       };
       ws.onerror = function(){ try { streamText.textContent = (streamText.textContent||'') + ' [ws-error]'; } catch(_){} };
+      ws.onclose = function(){ try { if (!finalOrError) { streamText.textContent = (streamText.textContent||'') + ' [closed]'; } } catch(_){} };
     } catch(e) {}
   }
   document.addEventListener('DOMContentLoaded', function(){
@@ -5220,6 +5248,11 @@ def thread_chat(project_id: int, request: Request, content: str = Form(...), thr
             messages.append({"role": "user", "content": content})
             resp = client.chat.completions.create(model=model, messages=messages)
             raw = (resp.choices[0].message.content or "").strip()
+            # Feed assistant JSON back into conversation so the next turn has the full prior output
+            try:
+                messages.append({"role": "assistant", "content": raw})
+            except Exception:
+                pass
             try:
                 parsed = _json.loads(raw)
                 reply_title = str(parsed.get("title") or "Assistant")
@@ -5718,8 +5751,27 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
     final_text = None
     question_text = None
 
+    # Overall budget: ensure we eventually time out and inform the client
+    import time as _time
+    try:
+        timeout_s = int(os.getenv("CEDARPY_CHAT_TIMEOUT_SECONDS", "90"))
+    except Exception:
+        timeout_s = 90
+    t0 = _time.time()
+
     try:
         while loop_count < 8:
+            # Timeout guard (pre-turn)
+            try:
+                if (_time.time() - t0) > timeout_s:
+                    try:
+                        await websocket.send_text(json.dumps({"type": "info", "stage": "timeout"}))
+                    except Exception:
+                        pass
+                    final_text = f"Timed out after {timeout_s} seconds. Please try again."
+                    break
+            except Exception:
+                pass
             loop_count += 1
             # Call LLM for next action
             try:
