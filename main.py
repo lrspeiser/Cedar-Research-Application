@@ -5289,248 +5289,475 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
         await websocket.send_text(json.dumps({"type": "error", "error": "missing_key"}))
         await websocket.close(); return
 
-    # Build optional context from file/dataset
-    fctx = None
-    dctx = None
+    # Build context/resources/history using a fresh session
+    db2 = SessionLocal()
     try:
-        fid = payload.get("file_id")
-        if fid is not None:
-            fctx = db.query(FileEntry).filter(FileEntry.id == int(fid), FileEntry.project_id == project_id).first()
-    except Exception:
+        # Optional context from file/dataset
         fctx = None
-    try:
-        did = payload.get("dataset_id")
-        if did is not None:
-            dctx = db.query(Dataset).filter(Dataset.id == int(did), Dataset.project_id == project_id).first()
-    except Exception:
         dctx = None
+        try:
+            fid = payload.get("file_id")
+            if fid is not None:
+                fctx = db2.query(FileEntry).filter(FileEntry.id == int(fid), FileEntry.project_id == project_id).first()
+        except Exception:
+            fctx = None
+        try:
+            did = payload.get("dataset_id")
+            if did is not None:
+                dctx = db2.query(Dataset).filter(Dataset.id == int(did), Dataset.project_id == project_id).first()
+        except Exception:
+            dctx = None
 
-    ctx = {}
-    if fctx:
-        ctx["file"] = {
-            "display_name": fctx.display_name,
-            "file_type": fctx.file_type,
-            "structure": fctx.structure,
-            "ai_title": fctx.ai_title,
-            "ai_category": fctx.ai_category,
-            "ai_description": (fctx.ai_description or "")[:350],
-        }
-    if dctx:
-        ctx["dataset"] = {
-            "name": dctx.name,
-            "description": (dctx.description or "")[:500]
+        ctx = {}
+        if fctx:
+            ctx["file"] = {
+                "display_name": fctx.display_name,
+                "file_type": fctx.file_type,
+                "structure": fctx.structure,
+                "ai_title": fctx.ai_title,
+                "ai_category": fctx.ai_category,
+                "ai_description": (fctx.ai_description or "")[:350],
+            }
+        if dctx:
+            ctx["dataset"] = {
+                "name": dctx.name,
+                "description": (dctx.description or "")[:500]
+            }
+
+        # Build resources index (files/dbs) and recent thread history
+        resources = {"files": [], "databases": []}
+        history = []
+        try:
+            ids = branch_filter_ids(db2, project_id, branch.id)
+            recs = db2.query(FileEntry).filter(FileEntry.project_id==project_id, FileEntry.branch_id.in_(ids)).order_by(FileEntry.created_at.desc()).limit(200).all()
+            for f in recs:
+                resources["files"].append({
+                    "id": f.id,
+                    "title": (f.ai_title or f.display_name or "").strip(),
+                    "display_name": f.display_name,
+                    "structure": f.structure,
+                    "file_type": f.file_type,
+                    "mime_type": f.mime_type,
+                    "size_bytes": f.size_bytes,
+                })
+            dsets = db2.query(Dataset).filter(Dataset.project_id==project_id, Dataset.branch_id.in_(ids)).order_by(Dataset.created_at.desc()).limit(200).all()
+            for d in dsets:
+                resources["databases"].append({
+                    "id": d.id,
+                    "name": d.name,
+                    "description": (d.description or "")[:500],
+                })
+        except Exception:
+            pass
+        try:
+            recent = db2.query(ThreadMessage).filter(ThreadMessage.project_id==project_id, ThreadMessage.thread_id==thr.id).order_by(ThreadMessage.created_at.desc()).limit(15).all()
+            for m in reversed(recent):
+                history.append({
+                    "role": m.role,
+                    "title": (m.display_title or None),
+                    "content": (m.content or "")[:2000]
+                })
+        except Exception:
+            pass
+
+        # Research tool system prompt and examples
+        sys_prompt = (
+            "This is a research tool to help people understand the breadth of existing research in the area,\n"
+            "collect and analyze data, and build out reports and visuals to help communicate their findings.\n"
+            "You will have a number of tools to select from when responding to a user.\n"
+            "For simple queries, you can answer with the \"final\" function.\n"
+            "For more complex queries, or ones that require precise numerical answers, begin with the \"plan\" function.\n"
+            "Within \"plan\" indicate the functions you will use for each step.\n"
+            "Functions include: \n"
+            "- web: run a web search and obtain a webpage with all links extracted.\n"
+            "- download: download one or more URLs.\n"
+            "- extract: take a file (e.g., PDF) and break it into claims (unique findings) and citations (references).\n"
+            "- image: analyze a provided image.\n"
+            "- db: execute an SQL statement against the built-in DB.\n"
+            "- code: execute code; specify language, required packages, and the code.\n"
+            "- shell: execute a shell script.\n"
+            "- notes: write notes organized by themes.\n"
+            "- compose: write the paper from notes.\n"
+            "- question: ask a question of the user.\n"
+            "- final: the last step in the plan.\n"
+            "In every response, output STRICT JSON. Always include output_to_user (what to show the user) and changelog_summary.\n"
+            "Include examples of the JSON schema for each function so the system can parse it afterwards.\n"
+            "We will pass with each query: (a) a list of files and databases you can access (Resources), (b) recent conversation history (History), and (c) optional Context (selected file/DB).\n"
+            "All data systems are queriable by you via the db/download/extract functions. Provide concrete, executable specs for those.\n"
+        )
+
+        examples_json = {
+            "plan": {
+                "function": "plan",
+                "steps": [
+                    {"description": "Search for recent survey papers", "will_call": ["web", "download", "extract"]},
+                    {"description": "Aggregate key findings and compute statistics", "will_call": ["db", "code"]},
+                    {"description": "Write summary", "will_call": ["compose", "final"]}
+                ],
+                "output_to_user": "High-level plan with steps and intended tools",
+                "changelog_summary": "created plan with 3 steps"
+            },
+            "web": {"function": "web", "args": {"query": "site:nature.com CRISPR review 2024"}, "output_to_user": "Searched web", "changelog_summary": "web search"},
+            "download": {"function": "download", "args": {"urls": ["https://example.org/paper.pdf"]}, "output_to_user": "Queued 1 download", "changelog_summary": "download requested"},
+            "extract": {"function": "extract", "args": {"file_id": 123}, "output_to_user": "Extracted claims/citations", "changelog_summary": "extracted PDF"},
+            "image": {"function": "image", "args": {"image_id": 42, "purpose": "chart reading"}, "output_to_user": "Analyzed image", "changelog_summary": "image analysis"},
+            "db": {"function": "db", "args": {"sql": "SELECT COUNT(*) FROM claims"}, "output_to_user": "Ran SQL", "changelog_summary": "db query"},
+            "code": {"function": "code", "args": {"language": "python", "packages": ["pandas"], "source": "print(2+2)"}, "output_to_user": "Executed code", "changelog_summary": "code run"},
+            "shell": {"function": "shell", "args": {"script": "echo hello"}, "output_to_user": "Ran shell", "changelog_summary": "shell run"},
+            "notes": {"function": "notes", "args": {"themes": [{"name": "Risks", "notes": ["…"]}]}, "output_to_user": "Saved notes", "changelog_summary": "notes saved"},
+            "compose": {"function": "compose", "args": {"sections": [{"title": "Intro", "text": "…"}]}, "output_to_user": "Drafted section(s)", "changelog_summary": "compose partial"},
+            "question": {"function": "question", "args": {"text": "Which domain do you care about?"}, "output_to_user": "Need clarification", "changelog_summary": "asked user"},
+            "final": {"function": "final", "args": {"text": "2+2=4"}, "output_to_user": "2+2=4", "changelog_summary": "finalized answer"}
         }
 
-    # Build resources index (files/dbs) and recent thread history
-    resources = {"files": [], "databases": []}
-    history = []
+        messages = [
+            {"role": "system", "content": sys_prompt},
+            {"role": "user",   "content": "Resources:"},
+            {"role": "user",   "content": json.dumps(resources, ensure_ascii=False)},
+            {"role": "user",   "content": "History:"},
+            {"role": "user",   "content": json.dumps(history, ensure_ascii=False)}
+        ]
+        if ctx:
+            try:
+                messages.append({"role": "user", "content": "Context:"})
+                messages.append({"role": "user", "content": json.dumps(ctx, ensure_ascii=False)})
+            except Exception:
+                pass
+        messages.append({"role": "user", "content": "Functions and examples:"})
+        try:
+            messages.append({"role": "user", "content": json.dumps(examples_json, ensure_ascii=False)})
+        except Exception:
+            messages.append({"role": "user", "content": "{""error"":""examples unavailable""}"})
+        messages.append({"role": "user", "content": content})
+    finally:
+        try:
+            db2.close()
+        except Exception:
+            pass
+
+    # Orchestrated plan/execute loop (non-streaming JSON)
     try:
-        ids = branch_filter_ids(db, project_id, branch.id)
-        recs = db.query(FileEntry).filter(FileEntry.project_id==project_id, FileEntry.branch_id.in_(ids)).order_by(FileEntry.created_at.desc()).limit(200).all()
-        for f in recs:
-            resources["files"].append({
-                "id": f.id,
-                "title": (f.ai_title or f.display_name or "").strip(),
-                "display_name": f.display_name,
-                "structure": f.structure,
-                "file_type": f.file_type,
-                "mime_type": f.mime_type,
-                "size_bytes": f.size_bytes,
-            })
-        dsets = db.query(Dataset).filter(Dataset.project_id==project_id, Dataset.branch_id.in_(ids)).order_by(Dataset.created_at.desc()).limit(200).all()
-        for d in dsets:
-            resources["databases"].append({
-                "id": d.id,
-                "name": d.name,
-                "description": (d.description or "")[:500],
-            })
+        await websocket.send_text(json.dumps({"type": "info", "stage": "planning"}))
     except Exception:
         pass
-    try:
-        recent = db.query(ThreadMessage).filter(ThreadMessage.project_id==project_id, ThreadMessage.thread_id==thr.id).order_by(ThreadMessage.created_at.desc()).limit(15).all()
-        for m in reversed(recent):
-            history.append({
-                "role": m.role,
-                "title": (m.display_title or None),
-                "content": (m.content or "")[:2000]
-            })
-    except Exception:
-        pass
 
-    # Research tool system prompt and examples
-    sys_prompt = (
-        "This is a research tool to help people understand the breadth of existing research in the area,\n"
-        "collect and analyze data, and build out reports and visuals to help communicate their findings.\n"
-        "You will have a number of tools to select from when responding to a user.\n"
-        "For simple queries, you can answer with the \"final\" function.\n"
-        "For more complex queries, or ones that require precise numerical answers, begin with the \"plan\" function.\n"
-        "Within \"plan\" indicate the functions you will use for each step.\n"
-        "Functions include: \n"
-        "- web: run a web search and obtain a webpage with all links extracted.\n"
-        "- download: download one or more URLs.\n"
-        "- extract: take a file (e.g., PDF) and break it into claims (unique findings) and citations (references).\n"
-        "- image: analyze a provided image.\n"
-        "- db: execute an SQL statement against the built-in DB.\n"
-        "- code: execute code; specify language, required packages, and the code.\n"
-        "- shell: execute a shell script.\n"
-        "- notes: write notes organized by themes.\n"
-        "- compose: write the paper from notes.\n"
-        "- question: ask a question of the user.\n"
-        "- final: the last step in the plan.\n"
-        "In every response, output STRICT JSON. Always include output_to_user (what to show the user) and changelog_summary.\n"
-        "Include examples of the JSON schema for each function so the system can parse it afterwards.\n"
-        "We will pass with each query: (a) a list of files and databases you can access (Resources), (b) recent conversation history (History), and (c) optional Context (selected file/DB).\n"
-        "All data systems are queriable by you via the db/download/extract functions. Provide concrete, executable specs for those.\n"
-    )
+    import urllib.request as _req
+    import re as _re
 
-    examples_json = {
-        "plan": {
-            "function": "plan",
-            "steps": [
-                {"description": "Search for recent survey papers", "will_call": ["web", "download", "extract"]},
-                {"description": "Aggregate key findings and compute statistics", "will_call": ["db", "code"]},
-                {"description": "Write summary", "will_call": ["compose", "final"]}
-            ],
-            "output_to_user": "High-level plan with steps and intended tools",
-            "changelog_summary": "created plan with 3 steps"
-        },
-        "web": {"function": "web", "args": {"query": "site:nature.com CRISPR review 2024"}, "output_to_user": "Searched web", "changelog_summary": "web search"},
-        "download": {"function": "download", "args": {"urls": ["https://example.org/paper.pdf"]}, "output_to_user": "Queued 1 download", "changelog_summary": "download requested"},
-        "extract": {"function": "extract", "args": {"file_id": 123}, "output_to_user": "Extracted claims/citations", "changelog_summary": "extracted PDF"},
-        "image": {"function": "image", "args": {"image_id": 42, "purpose": "chart reading"}, "output_to_user": "Analyzed image", "changelog_summary": "image analysis"},
-        "db": {"function": "db", "args": {"sql": "SELECT COUNT(*) FROM claims"}, "output_to_user": "Ran SQL", "changelog_summary": "db query"},
-        "code": {"function": "code", "args": {"language": "python", "packages": ["pandas"], "source": "print(2+2)"}, "output_to_user": "Executed code", "changelog_summary": "code run"},
-        "shell": {"function": "shell", "args": {"script": "echo hello"}, "output_to_user": "Ran shell", "changelog_summary": "shell run"},
-        "notes": {"function": "notes", "args": {"themes": [{"name": "Risks", "notes": ["…"]}]}, "output_to_user": "Saved notes", "changelog_summary": "notes saved"},
-        "compose": {"function": "compose", "args": {"sections": [{"title": "Intro", "text": "…"}]}, "output_to_user": "Drafted section(s)", "changelog_summary": "compose partial"},
-        "question": {"function": "question", "args": {"text": "Which domain do you care about?"}, "output_to_user": "Need clarification", "changelog_summary": "asked user"},
-        "final": {"function": "final", "args": {"text": "2+2=4"}, "output_to_user": "2+2=4", "changelog_summary": "finalized answer"}
+    def _send_info(label: str):
+        try:
+            return asyncio.create_task(websocket.send_text(json.dumps({"type": "info", "stage": label})))
+        except Exception:
+            return None
+
+    # Tool executors
+    def tool_web(args: dict) -> dict:
+        q = (args or {}).get("query")
+        url = (args or {}).get("url")
+        if url:
+            try:
+                with _req.urlopen(url, timeout=25) as resp:
+                    body = resp.read().decode('utf-8', errors='replace')
+                    links = list(set(_re.findall(r'href=["\']([^"\']+)', body)))
+                    title_m = _re.search(r'<title[^>]*>(.*?)</title>', body, _re.IGNORECASE | _re.DOTALL)
+                    title = title_m.group(1).strip() if title_m else ''
+                    return {"ok": True, "url": url, "title": title, "links": links[:200], "bytes": len(body)}
+            except Exception as e:
+                return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        return {"ok": False, "error": "web.search not configured; provide args.url"}
+
+    def tool_download(args: dict) -> dict:
+        urls = (args or {}).get("urls") or []
+        if not isinstance(urls, list) or not urls:
+            return {"ok": False, "error": "urls required"}
+        results = []
+        tdb = SessionLocal()
+        try:
+            # Determine project files dir
+            paths = _project_dirs(project_id)
+            branch_dir_name = f"branch_{branch.name}"
+            project_dir = os.path.join(paths["files_root"], branch_dir_name)
+            os.makedirs(project_dir, exist_ok=True)
+            for u in urls[:10]:
+                try:
+                    with _req.urlopen(u, timeout=45) as resp:
+                        data = resp.read()
+                        parsed = _re.sub(r'[^a-zA-Z0-9._-]', '_', os.path.basename(u.split('?')[0]) or 'download.bin')
+                        ts = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+                        storage_name = f"{ts}__{parsed}"
+                        disk_path = os.path.join(project_dir, storage_name)
+                        with open(disk_path, 'wb') as fh:
+                            fh.write(data)
+                        size = len(data)
+                        mime, _ = mimetypes.guess_type(parsed)
+                        ftype = file_extension_to_type(parsed)
+                        rec = FileEntry(project_id=project_id, branch_id=branch.id, filename=storage_name, display_name=parsed, file_type=ftype, structure=None, mime_type=mime or '', size_bytes=size, storage_path=os.path.abspath(disk_path), metadata_json=None, ai_processing=False)
+                        tdb.add(rec); tdb.commit(); tdb.refresh(rec)
+                        results.append({"url": u, "file_id": rec.id, "display_name": parsed, "bytes": size})
+                except Exception as e:
+                    results.append({"url": u, "error": f"{type(e).__name__}: {e}"})
+            return {"ok": True, "downloads": results}
+        finally:
+            try: tdb.close()
+            except Exception: pass
+
+    def tool_extract(args: dict) -> dict:
+        fid = (args or {}).get("file_id")
+        if fid is None:
+            return {"ok": False, "error": "file_id required"}
+        tdb = SessionLocal()
+        try:
+            f = tdb.query(FileEntry).filter(FileEntry.id==int(fid), FileEntry.project_id==project_id).first()
+            if not f or not f.storage_path or not os.path.isfile(f.storage_path):
+                return {"ok": False, "error": "file not found"}
+            # Minimal extractor: try to read as UTF-8 text; PDFs and binaries return error
+            try:
+                with open(f.storage_path, 'r', encoding='utf-8') as fh:
+                    txt = fh.read()
+            except Exception:
+                return {"ok": False, "error": "binary or non-utf8 file; PDF extraction not installed"}
+            # Naive claims/citations split
+            lines = [ln.strip() for ln in txt.splitlines() if ln.strip()]
+            claims = [ln for ln in lines[:200]]
+            citations = []
+            rx = _re.compile(r'\[(\d+)\]|doi:|arxiv|http', _re.I)
+            for ln in lines:
+                if rx.search(ln):
+                    citations.append(ln)
+                    if len(citations) >= 200:
+                        break
+            return {"ok": True, "claims": claims[:200], "citations": citations[:200]}
+        finally:
+            try: tdb.close()
+            except Exception: pass
+
+    def tool_image(args: dict) -> dict:
+        try:
+            image_id = int((args or {}).get("image_id"))
+        except Exception:
+            return {"ok": False, "error": "image_id required"}
+        # Reuse existing helper
+        return _exec_img(image_id, str((args or {}).get("purpose") or ""))
+
+    def tool_db(args: dict) -> dict:
+        sql_text = str((args or {}).get("sql") or "").strip()
+        if not sql_text:
+            return {"ok": False, "error": "sql required"}
+        try:
+            return _execute_sql(sql_text, project_id, max_rows=200)
+        except Exception as e:
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+    def tool_code(args: dict) -> dict:
+        lang = str((args or {}).get("language") or "").lower()
+        source = str((args or {}).get("source") or "")
+        if lang != 'python':
+            return {"ok": False, "error": "only python supported"}
+        logs = io.StringIO()
+        def _cedar_query(sql_text: str):
+            return tool_db({"sql": sql_text})
+        def _cedar_list_files():
+            tdb = SessionLocal()
+            try:
+                ids = branch_filter_ids(tdb, project_id, branch.id)
+                recs = tdb.query(FileEntry).filter(FileEntry.project_id==project_id, FileEntry.branch_id.in_(ids)).order_by(FileEntry.created_at.desc()).limit(200).all()
+                return [{"id": ff.id, "display_name": ff.display_name, "file_type": ff.file_type} for ff in recs]
+            finally:
+                try: tdb.close()
+                except Exception: pass
+        def _cedar_read(file_id: int):
+            tdb = SessionLocal()
+            try:
+                f = tdb.query(FileEntry).filter(FileEntry.id==int(file_id), FileEntry.project_id==project_id).first()
+                if not f or not f.storage_path or not os.path.isfile(f.storage_path):
+                    return None
+                with open(f.storage_path, 'rb') as fh:
+                    b = fh.read(500000)
+                try:
+                    return b.decode('utf-8', errors='replace')
+                except Exception:
+                    import base64 as _b64
+                    return "base64:" + _b64.b64encode(b).decode('ascii')
+            finally:
+                try: tdb.close()
+                except Exception: pass
+        safe_globals: Dict[str, Any] = {"__builtins__": {"print": print, "len": len, "range": range, "str": str, "int": int, "float": float, "bool": bool, "list": list, "dict": dict, "set": set, "tuple": tuple}, "cedar": type("CedarHelpers", (), {"query": _cedar_query, "list_files": _cedar_list_files, "read": _cedar_read})(), "sqlite3": sqlite3, "json": json, "re": re, "io": io}
+        try:
+            with contextlib.redirect_stdout(logs):
+                exec(compile(source, filename="<ws_code>", mode="exec"), safe_globals, safe_globals)
+        except Exception as e:
+            return {"ok": False, "error": f"{type(e).__name__}: {e}", "logs": logs.getvalue()}
+        return {"ok": True, "logs": logs.getvalue()}
+
+    def tool_shell(args: dict) -> dict:
+        script = str((args or {}).get("script") or "").strip()
+        if not script:
+            return {"ok": False, "error": "script required"}
+        try:
+            base = os.environ.get('SHELL') or '/bin/zsh'
+            proc = subprocess.run([base, '-lc', script], capture_output=True, text=True, timeout=60)
+            return {"ok": proc.returncode == 0, "return_code": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr}
+        except Exception as e:
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+    def tool_notes(args: dict) -> dict:
+        themes = (args or {}).get("themes")
+        content = json.dumps({"themes": themes}, ensure_ascii=False)
+        tdb = SessionLocal()
+        try:
+            n = Note(project_id=project_id, branch_id=branch.id, content=content, tags=["notes"])
+            tdb.add(n); tdb.commit(); tdb.refresh(n)
+            return {"ok": True, "note_id": n.id}
+        finally:
+            try: tdb.close()
+            except Exception: pass
+
+    def tool_compose(args: dict) -> dict:
+        secs = (args or {}).get("sections") or []
+        content = json.dumps({"sections": secs}, ensure_ascii=False)
+        tdb = SessionLocal()
+        try:
+            n = Note(project_id=project_id, branch_id=branch.id, content=content, tags=["compose"])
+            tdb.add(n); tdb.commit(); tdb.refresh(n)
+            return {"ok": True, "note_id": n.id}
+        finally:
+            try: tdb.close()
+            except Exception: pass
+
+    tools_map = {
+        "web": tool_web,
+        "download": tool_download,
+        "extract": tool_extract,
+        "image": tool_image,
+        "db": tool_db,
+        "code": tool_code,
+        "shell": tool_shell,
+        "notes": tool_notes,
+        "compose": tool_compose,
+        "question": lambda args: {"ok": True, "question": (args or {}).get("text") or "Please clarify"},
+        "final": lambda args: {"ok": True, "text": (args or {}).get("text") or "Done."},
     }
 
-    messages = [
-        {"role": "system", "content": sys_prompt},
-        {"role": "user",   "content": "Resources:"},
-        {"role": "user",   "content": json.dumps(resources, ensure_ascii=False)},
-        {"role": "user",   "content": "History:"},
-        {"role": "user",   "content": json.dumps(history, ensure_ascii=False)}
-    ]
-    if ctx:
-        try:
-            messages.append({"role": "user", "content": "Context:"})
-            messages.append({"role": "user", "content": json.dumps(ctx, ensure_ascii=False)})
-        except Exception:
-            pass
-    messages.append({"role": "user", "content": "Functions and examples:"})
-    try:
-        messages.append({"role": "user", "content": json.dumps(examples_json, ensure_ascii=False)})
-    except Exception:
-        messages.append({"role": "user", "content": "{""error"":""examples unavailable""}"})
-    messages.append({"role": "user", "content": content})
+    loop_count = 0
+    final_text = None
+    question_text = None
 
-    q = queue.Queue()
-    SENTINEL = object()
-    emitted = {"count": 0}
-
-    def _stream_worker():
-        try:
-            stream = client.chat.completions.create(model=model, messages=messages, stream=True)
-            for chunk in stream:
-                try:
-                    ch = chunk.choices[0]
-                    txt = ""
-                    delta = getattr(ch, 'delta', None)
-                    if delta is not None and getattr(delta, 'content', None):
-                        txt = delta.content
-                    # Do NOT fall back to ch.message.content in streaming mode to avoid duplicates
-                    if txt:
-                        q.put(txt)
-                except Exception:
-                    continue
-        except Exception as e:
-            q.put(json.dumps({"__error__": f"{type(e).__name__}: {e}"}))
-        finally:
-            q.put(SENTINEL)
-
-    t = threading.Thread(target=_stream_worker, daemon=True)
-    t.start()
-
-    # Inform client that streaming is starting
-    try:
-        await websocket.send_text(json.dumps({"type": "info", "stage": "streaming"}))
-    except Exception:
-        pass
-
-    assembled = ""
-    buffer = ""
-    error_text = None
-
-    while True:
-        item = await asyncio.to_thread(q.get)
-        if item is SENTINEL:
-            break
-        try:
-            maybe_err = json.loads(item)
-            if isinstance(maybe_err, dict) and "__error__" in maybe_err:
-                error_text = maybe_err["__error__"]
-                break
-        except Exception:
-            pass
-        buffer += item
-        parts = buffer.split()
-        if buffer and not buffer.endswith((' ', '\n', '\t')):
-            words = parts[:-1]
-            buffer = parts[-1] if parts else ""
-        else:
-            words = parts
-            buffer = ""
-        for w in words:
-            emitted["count"] += 1
-            assembled += ("" if not assembled else " ") + w
-            await websocket.send_text(json.dumps({"type": "token", "word": w}))
-
-    if emitted["count"] == 0 and not error_text:
+    while loop_count < 8:
+        loop_count += 1
+        # Call LLM for next action
         try:
             resp = client.chat.completions.create(model=model, messages=messages)
-            txt = (resp.choices[0].message.content or "").strip()
-            for w in (txt.split() if txt else []):
-                assembled += ("" if not assembled else " ") + w
-                await websocket.send_text(json.dumps({"type": "token", "word": w}))
-                await asyncio.sleep(0.02)
+            raw = (resp.choices[0].message.content or "").strip()
         except Exception as e:
-            error_text = f"{type(e).__name__}: {e}"
+            await websocket.send_text(json.dumps({"type": "error", "error": f"{type(e).__name__}: {e}"}))
+            await websocket.close(); return
 
-    if buffer and not error_text:
-        assembled += ("" if not assembled else " ") + buffer
-        await websocket.send_text(json.dumps({"type": "token", "word": buffer}))
+        # Persist assistant JSON response for traceability
+        dbj = SessionLocal()
+        try:
+            dbj.add(ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="assistant", content=raw, display_title="Research JSON"))
+            dbj.commit()
+        except Exception:
+            try: dbj.rollback()
+            except Exception: pass
+        finally:
+            try: dbj.close()
+            except Exception: pass
 
-    # Inform client that we are finalizing/persisting the message
+        # Parse function call(s)
+        calls: List[Dict[str, Any]] = []
+        obj = None
+        try:
+            obj = json.loads(raw)
+        except Exception:
+            obj = None
+        if isinstance(obj, list):
+            calls = [c for c in obj if isinstance(c, dict)]
+        elif isinstance(obj, dict):
+            if 'function' in obj:
+                calls = [obj]
+            elif 'steps' in obj:
+                calls = [{"function": "plan", "steps": obj.get('steps') or []}]
+        else:
+            # Not parseable; ask for one function call
+            messages.append({"role": "user", "content": "Please respond with ONE function call in strict JSON."})
+            continue
+
+        for call in calls:
+            name = str((call.get('function') or '')).strip().lower()
+            args = call.get('args') or {}
+            if name == 'plan':
+                _send_info('plan')
+                # Persist plan
+                dbp = SessionLocal()
+                try:
+                    dbp.add(ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="assistant", display_title="Plan", content=json.dumps(call, ensure_ascii=False), payload_json=call))
+                    dbp.commit()
+                except Exception:
+                    try: dbp.rollback()
+                    except Exception: pass
+                finally:
+                    try: dbp.close()
+                    except Exception: pass
+                # Ask to proceed with the first step
+                messages.append({"role": "user", "content": "Proceed with the first step now. Respond with ONE function call in strict JSON only."})
+                break  # go to next LLM turn
+            if name in ('final', 'question'):
+                if name == 'final':
+                    final_text = str((args or {}).get('text') or call.get('output_to_user') or '').strip() or 'Done.'
+                else:
+                    question_text = str((args or {}).get('text') or call.get('output_to_user') or '').strip() or 'I have a question for you.'
+                break
+            # Execute tool
+            _send_info(f"tool:{name}")
+            fn = tools_map.get(name)
+            result = fn(args) if fn else {"ok": False, "error": f"unknown tool: {name}"}
+            # Persist tool result
+            dbt = SessionLocal()
+            try:
+                payload = {"function": name, "args": args, "result": result}
+                dbt.add(ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="assistant", display_title=f"Tool: {name}", content=json.dumps(payload, ensure_ascii=False), payload_json=payload))
+                dbt.commit()
+            except Exception:
+                try: dbt.rollback()
+                except Exception: pass
+            finally:
+                try: dbt.close()
+                except Exception: pass
+            # Feed result back to LLM
+            messages.append({"role": "user", "content": "ToolResult:"})
+            messages.append({"role": "user", "content": json.dumps({"function": name, "result": result}, ensure_ascii=False)})
+        if final_text or question_text:
+            break
+
+    # Finalize
     try:
         await websocket.send_text(json.dumps({"type": "info", "stage": "finalizing"}))
     except Exception:
         pass
 
-    db3 = SessionLocal()
+    dbf = SessionLocal()
     try:
-        if error_text:
-            db3.add(ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="assistant", content=f"[llm-error] {error_text}", display_title="LLM Error"))
-        else:
-            db3.add(ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="assistant", content=assembled, display_title="Assistant"))
-        db3.commit()
+        if final_text:
+            dbf.add(ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="assistant", content=final_text, display_title="Final"))
+        elif question_text:
+            dbf.add(ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="assistant", content=question_text, display_title="Question"))
+        dbf.commit()
     except Exception:
-        try: db3.rollback()
+        try: dbf.rollback()
         except Exception: pass
     finally:
-        try: db3.close()
+        try: dbf.close()
         except Exception: pass
 
-    if error_text:
-        await websocket.send_text(json.dumps({"type": "error", "error": error_text}))
-    else:
-        await websocket.send_text(json.dumps({"type": "final", "text": assembled}))
-        try:
-            await websocket.send_text(json.dumps({"type": "info", "stage": "persisted"}))
-        except Exception:
-            pass
+    if final_text:
+        await websocket.send_text(json.dumps({"type": "final", "text": final_text}))
+    elif question_text:
+        await websocket.send_text(json.dumps({"type": "final", "text": question_text}))
+    try:
+        await websocket.send_text(json.dumps({"type": "info", "stage": "persisted"}))
+    except Exception:
+        pass
     try:
         await websocket.close()
     except Exception:
