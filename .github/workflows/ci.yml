@@ -360,6 +360,42 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
+  build_dmg:
+    name: Build DMG (macOS)
+    runs-on: macos-latest
+    needs: [tests_unit, tests_ws, tests_playwright]
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Build DMG (Qt)
+        env:
+          CEDARPY_SKIP_CI_CHECK: "1"  # we already gated via needs
+          PIP_BREAK_SYSTEM_PACKAGES: "1"
+        run: |
+          bash packaging/build_qt_dmg.sh
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CedarPy.dmg
+          path: packaging/dist-qt/CedarPy-qt.dmg
+      - name: Summary (DMG)
+        if: always()
+        run: |
+          SZ=$(du -h packaging/dist-qt/CedarPy-qt.dmg 2>/dev/null | awk '{print $1}')
+          cat <<'MD' >> "$GITHUB_STEP_SUMMARY"
+          ## DMG build
+
+          | Field | Value |
+          |------:|:------|
+          | Result | ${{ job.status }} |
+          MD
+          printf "| Size | %s |\n" "${SZ:-n/a}" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Install app + dev deps (incl. Playwright)
         run: |
           python -m pip install --upgrade pip
