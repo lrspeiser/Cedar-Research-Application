@@ -27,9 +27,14 @@ jobs:
           python -m pip install -U pip
           python -m pip install -r requirements.txt
           python -m pip install -r packaging/requirements-macos.txt
-      - name: Build DMG
+      - name: Build DMG (Qt)
+        env:
+          # Ensure gating script can use gh without prompting
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Require CI workflow name 'CI' to have passed; set CEDARPY_CI_WORKFLOW to 'CI' (default)
+          CEDARPY_CI_WORKFLOW: CI
         run: |
-          bash packaging/build_macos_dmg.sh
+          bash packaging/build_qt_dmg.sh
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
