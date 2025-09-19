@@ -134,14 +134,227 @@ jobs:
             echo "Artifacts: **compile-artifacts** (stdout/stderr, pip-freeze)"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  tests:
-    name: Tests (unit/integration)
+  tests_unit:
+    name: Tests — unit
+    runs-on: ubuntu-latest
+    needs: [compile]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install app + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+          pip list --format=freeze > pip-freeze-all.txt
+
+      - name: Verify pytest-cov is available
+        run: |
+          python -c "import pytest_cov; print('pytest-cov OK')" || { echo "pytest-cov not installed"; exit 1; }
+
+      - name: Show pytest config
+        run: |
+          pytest --version | tee pytest-info.txt
+          python -c "import sys,platform;print(platform.platform());print(sys.version)" | tee -a pytest-info.txt
+
+      - name: Pytest (unit)
+        id: pytest
+        env:
+          PYTHONPATH: .
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CEDARPY_OPENAI_API_KEY: ${{ secrets.CEDARPY_OPENAI_API_KEY }}
+        shell: bash
+        run: |
+          mkdir -p reports coverage htmlcov
+          set -o pipefail
+          echo "PYTHONPATH=$PYTHONPATH" | tee run-env.txt
+          echo "OPENAI_API_KEY=${OPENAI_API_KEY:+***set***}" | tee -a run-env.txt
+          pytest -vv \
+            --maxfail=1 \
+            --durations=25 \
+            --log-cli-level=INFO --log-file=pytest.log \
+            --junitxml=reports/junit.xml -o junit_family=xunit2 \
+            --cov=cedarpy --cov-report=xml:coverage/coverage.xml --cov-report=term-missing \
+            -k "not playwright and not ws and not websockets" \
+            2> pytest-stderr.txt | tee pytest-stdout.txt
+          STATUS=${PIPESTATUS[0]}
+          if [[ $STATUS -eq 0 ]]; then
+            echo "result=pass" >> "$GITHUB_OUTPUT"
+          else
+            echo "result=fail" >> "$GITHUB_OUTPUT"
+            exit $STATUS
+          fi
+
+      - name: Upload artifacts (unit)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-artifacts-unit
+          path: |
+            pytest-stdout.txt
+            pytest-stderr.txt
+            pytest.log
+            run-env.txt
+            pytest-info.txt
+            reports/**
+            coverage/**
+            pip-freeze-all.txt
+
+      - name: Publish JUnit as Check (optional)
+        if: always()
+        continue-on-error: true
+        uses: mikepenz/action-junit-report@v4
+        with:
+          report_paths: "reports/junit.xml"
+          check_name: "JUnit Test Report (unit)"
+          include_passed: true
+          detailed_summary: true
+
+      - name: Summary (unit)
+        if: always()
+        shell: bash
+        run: |
+          PASSED=$(grep -Eo '([0-9]+) passed'  pytest-stdout.txt | awk '{s+=$1} END{print s+0}')
+          FAILED=$(grep -Eo '([0-9]+) failed'  pytest-stdout.txt | awk '{s+=$1} END{print s+0}')
+          SKIPPED=$(grep -Eo '([0-9]+) skipped' pytest-stdout.txt | awk '{s+=$1} END{print s+0}')
+          DURATION=$(grep -Eo 'collected .* in [0-9.]+s' pytest-stdout.txt | sed -E 's/.* in ([0-9.]+)s/\1/')
+          HAVE_JUNIT="missing"; [[ -f reports/junit.xml ]] && HAVE_JUNIT="reports/junit.xml"
+          HAVE_COV="missing";   [[ -f coverage/coverage.xml ]] && HAVE_COV="coverage/coverage.xml"
+          cat <<'MD' >> "$GITHUB_STEP_SUMMARY"
+          ## Test results (unit)
+
+          | Metric  | Value |
+          |-------: |:----- |
+          | Result  | **${{ steps.pytest.outputs.result || 'n/a' }}** |
+          MD
+          printf "| Passed  | %s |\n" "${PASSED:-0}" >> "$GITHUB_STEP_SUMMARY"
+          printf "| Failed  | %s |\n" "${FAILED:-0}" >> "$GITHUB_STEP_SUMMARY"
+          printf "| Skipped | %s |\n" "${SKIPPED:-0}" >> "$GITHUB_STEP_SUMMARY"
+          printf "| Runtime | %s s |\n\n" "${DURATION:-n/a}" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "- JUnit: \`$HAVE_JUNIT\` (in **test-artifacts-unit**)"
+            echo "- Coverage XML: \`$HAVE_COV\` (in **test-artifacts-unit**)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  tests_ws:
+    name: Tests — websocket
     runs-on: ubuntu-latest
     needs: [compile]
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
 
+      - name: Install app + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+          pip list --format=freeze > pip-freeze-all.txt
+
+      - name: Verify pytest-cov is available
+        run: |
+          python -c "import pytest_cov; print('pytest-cov OK')" || { echo "pytest-cov not installed"; exit 1; }
+
+      - name: Show pytest config
+        run: |
+          pytest --version | tee pytest-info.txt
+          python -c "import sys,platform;print(platform.platform());print(sys.version)" | tee -a pytest-info.txt
+
+      - name: Pytest (ws)
+        id: pytest
+        env:
+          PYTHONPATH: .
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CEDARPY_OPENAI_API_KEY: ${{ secrets.CEDARPY_OPENAI_API_KEY }}
+        shell: bash
+        run: |
+          mkdir -p reports coverage htmlcov
+          set -o pipefail
+          echo "PYTHONPATH=$PYTHONPATH" | tee run-env.txt
+          echo "OPENAI_API_KEY=${OPENAI_API_KEY:+***set***}" | tee -a run-env.txt
+          pytest -vv \
+            --maxfail=1 \
+            --durations=25 \
+            --log-cli-level=INFO --log-file=pytest.log \
+            --junitxml=reports/junit.xml -o junit_family=xunit2 \
+            --cov=cedarpy --cov-report=xml:coverage/coverage.xml --cov-report=term-missing \
+            tests/test_ws_chat_orchestrator.py tests/test_websockets.py \
+            2> pytest-stderr.txt | tee pytest-stdout.txt
+          STATUS=${PIPESTATUS[0]}
+          if [[ $STATUS -eq 0 ]]; then
+            echo "result=pass" >> "$GITHUB_OUTPUT"
+          else
+            echo "result=fail" >> "$GITHUB_OUTPUT"
+            exit $STATUS
+          fi
+
+      - name: Upload artifacts (ws)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-artifacts-ws
+          path: |
+            pytest-stdout.txt
+            pytest-stderr.txt
+            pytest.log
+            run-env.txt
+            pytest-info.txt
+            reports/**
+            coverage/**
+            pip-freeze-all.txt
+
+      - name: Publish JUnit as Check (optional)
+        if: always()
+        continue-on-error: true
+        uses: mikepenz/action-junit-report@v4
+        with:
+          report_paths: "reports/junit.xml"
+          check_name: "JUnit Test Report (ws)"
+          include_passed: true
+          detailed_summary: true
+
+      - name: Summary (ws)
+        if: always()
+        shell: bash
+        run: |
+          PASSED=$(grep -Eo '([0-9]+) passed'  pytest-stdout.txt | awk '{s+=$1} END{print s+0}')
+          FAILED=$(grep -Eo '([0-9]+) failed'  pytest-stdout.txt | awk '{s+=$1} END{print s+0}')
+          SKIPPED=$(grep -Eo '([0-9]+) skipped' pytest-stdout.txt | awk '{s+=$1} END{print s+0}')
+          DURATION=$(grep -Eo 'collected .* in [0-9.]+s' pytest-stdout.txt | sed -E 's/.* in ([0-9.]+)s/\1/')
+          HAVE_JUNIT="missing"; [[ -f reports/junit.xml ]] && HAVE_JUNIT="reports/junit.xml"
+          HAVE_COV="missing";   [[ -f coverage/coverage.xml ]] && HAVE_COV="coverage/coverage.xml"
+          cat <<'MD' >> "$GITHUB_STEP_SUMMARY"
+          ## Test results (ws)
+
+          | Metric  | Value |
+          |-------: |:----- |
+          | Result  | **${{ steps.pytest.outputs.result || 'n/a' }}** |
+          MD
+          printf "| Passed  | %s |\n" "${PASSED:-0}" >> "$GITHUB_STEP_SUMMARY"
+          printf "| Failed  | %s |\n" "${FAILED:-0}" >> "$GITHUB_STEP_SUMMARY"
+          printf "| Skipped | %s |\n" "${SKIPPED:-0}" >> "$GITHUB_STEP_SUMMARY"
+          printf "| Runtime | %s s |\n\n" "${DURATION:-n/a}" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "- JUnit: \`$HAVE_JUNIT\` (in **test-artifacts-ws**)"
+            echo "- Coverage XML: \`$HAVE_COV\` (in **test-artifacts-ws**)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  tests_playwright:
+    name: Tests — Playwright
+    runs-on: ubuntu-latest
+    needs: [compile]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -165,7 +378,7 @@ jobs:
           pytest --version | tee pytest-info.txt
           python -c "import sys,platform;print(platform.platform());print(sys.version)" | tee -a pytest-info.txt
 
-      - name: Pytest (JUnit + coverage + timings)
+      - name: Pytest (Playwright)
         id: pytest
         env:
           PYTHONPATH: .
@@ -175,18 +388,17 @@ jobs:
         run: |
           mkdir -p reports coverage htmlcov
           set -o pipefail
-          # Write inputs so they're visible later
           echo "PYTHONPATH=$PYTHONPATH" | tee run-env.txt
           echo "OPENAI_API_KEY=${OPENAI_API_KEY:+***set***}" | tee -a run-env.txt
-          # Run tests
           pytest -vv \
             --maxfail=1 \
             --durations=25 \
+            --log-cli-level=INFO --log-file=pytest.log \
             --junitxml=reports/junit.xml -o junit_family=xunit2 \
             --cov=cedarpy --cov-report=xml:coverage/coverage.xml --cov-report=term-missing \
+            tests/test_playwright_*.py \
             2> pytest-stderr.txt | tee pytest-stdout.txt
           STATUS=${PIPESTATUS[0]}
-          # Basic result flag for summaries
           if [[ $STATUS -eq 0 ]]; then
             echo "result=pass" >> "$GITHUB_OUTPUT"
           else
@@ -194,14 +406,15 @@ jobs:
             exit $STATUS
           fi
 
-      - name: Upload test artifacts
+      - name: Upload artifacts (playwright)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-artifacts
+          name: test-artifacts-playwright
           path: |
             pytest-stdout.txt
             pytest-stderr.txt
+            pytest.log
             run-env.txt
             pytest-info.txt
             reports/**
@@ -214,11 +427,11 @@ jobs:
         uses: mikepenz/action-junit-report@v4
         with:
           report_paths: "reports/junit.xml"
-          check_name: "JUnit Test Report"
+          check_name: "JUnit Test Report (playwright)"
           include_passed: true
           detailed_summary: true
 
-      - name: Summary
+      - name: Summary (playwright)
         if: always()
         shell: bash
         run: |
@@ -228,21 +441,21 @@ jobs:
           DURATION=$(grep -Eo 'collected .* in [0-9.]+s' pytest-stdout.txt | sed -E 's/.* in ([0-9.]+)s/\1/')
           HAVE_JUNIT="missing"; [[ -f reports/junit.xml ]] && HAVE_JUNIT="reports/junit.xml"
           HAVE_COV="missing";   [[ -f coverage/coverage.xml ]] && HAVE_COV="coverage/coverage.xml"
-
-          # Use a single-quoted heredoc so Markdown backticks are not executed by bash
           cat <<'MD' >> "$GITHUB_STEP_SUMMARY"
-          ## Test results
+          ## Test results (playwright)
 
           | Metric  | Value |
           |-------: |:----- |
           | Result  | **${{ steps.pytest.outputs.result || 'n/a' }}** |
           MD
-
           printf "| Passed  | %s |\n" "${PASSED:-0}" >> "$GITHUB_STEP_SUMMARY"
           printf "| Failed  | %s |\n" "${FAILED:-0}" >> "$GITHUB_STEP_SUMMARY"
           printf "| Skipped | %s |\n" "${SKIPPED:-0}" >> "$GITHUB_STEP_SUMMARY"
           printf "| Runtime | %s s |\n\n" "${DURATION:-n/a}" >> "$GITHUB_STEP_SUMMARY"
-
+          {
+            echo "- JUnit: \`$HAVE_JUNIT\` (in **test-artifacts-playwright**)"
+            echo "- Coverage XML: \`$HAVE_COV\` (in **test-artifacts-playwright**)"
+          } >> "$GITHUB_STEP_SUMMARY"
           {
             echo "- JUnit: \`$HAVE_JUNIT\` (in **test-artifacts**)"
             echo "- Coverage XML: \`$HAVE_COV\` (in **test-artifacts**)"
