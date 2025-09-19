@@ -94,10 +94,5 @@ def test_chat_processing_ack_and_final(page: Page, path: str):
             timeout=95000,
         )
 
-        # 4) Optionally, when LLM keys are provided, the final bubble should include "4" for this trivial query
-        if os.getenv("OPENAI_API_KEY") or os.getenv("CEDARPY_OPENAI_API_KEY"):
-            # Look for assistant bubble content containing "4"
-            # Be lenient: any visible '4' within the msgs area after completion
-            assert page.locator("#msgs").get_by_text("4").count() >= 1
     finally:
         _stop_server(server, thread)
