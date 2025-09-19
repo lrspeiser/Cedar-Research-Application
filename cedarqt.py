@@ -204,10 +204,19 @@ else:
 
 # Qt imports (PySide6 + QtWebEngine)
 from PySide6.QtCore import Qt, QUrl, QObject
-from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox
+from PySide6.QtWidgets import (
+    QApplication,
+    QMainWindow,
+    QMessageBox,
+    QDialog,
+    QVBoxLayout,
+    QHBoxLayout,
+    QPlainTextEdit,
+    QPushButton,
+)
 from PySide6.QtWebEngineCore import QWebEngineUrlRequestInterceptor, QWebEnginePage, QWebEngineProfile
 from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QDesktopServices, QFont, QGuiApplication
 
 class RequestLogger(QWebEngineUrlRequestInterceptor):
     def interceptRequest(self, info):  # type: ignore[override]
@@ -220,6 +229,19 @@ class RequestLogger(QWebEngineUrlRequestInterceptor):
             pass
 
 class LoggingWebPage(QWebEnginePage):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._console_logs: list[str] = []
+
+    def _append_console_log(self, entry: str) -> None:
+        try:
+            self._console_logs.append(entry)
+            # Bound memory: keep most recent 5000 entries
+            if len(self._console_logs) > 5000:
+                self._console_logs = self._console_logs[-5000:]
+        except Exception:
+            pass
+
     def javaScriptConsoleMessage(self, level, message, lineNumber, sourceID):  # type: ignore[override]
         # Map Qt levels to text
         try:
@@ -232,7 +254,13 @@ class LoggingWebPage(QWebEnginePage):
         except Exception:
             lvl = str(level)
         try:
-            print(f"[qt-console] {lvl} {sourceID}:{lineNumber} :: {message}")
+            ts = datetime.now(timezone.utc).strftime("%H:%M:%S.%fZ")
+        except Exception:
+            ts = ""
+        line = f"[{ts}] {lvl} {sourceID}:{lineNumber} :: {message}" if ts else f"{lvl} {sourceID}:{lineNumber} :: {message}"
+        self._append_console_log(line)
+        try:
+            print(f"[qt-console] {line}")
         except Exception:
             pass
         # Don't call super(); default implementation prints to stderr.
@@ -537,6 +565,76 @@ def main():
     win.setWindowTitle("CedarPy")
     win.setCentralWidget(view)
     win.resize(1200, 800)
+
+    # Helper: show large text content in a copy-friendly dialog
+    def _show_text_dialog(title: str, text: str, width: int = 1000, height: int = 700):
+        try:
+            dlg = QDialog(win)
+            dlg.setWindowTitle(title)
+            vbox = QVBoxLayout(dlg)
+            edit = QPlainTextEdit(dlg)
+            edit.setReadOnly(True)
+            edit.setPlainText(text or "")
+            try:
+                edit.setLineWrapMode(QPlainTextEdit.NoWrap)
+                mono = QFont()
+                mono.setStyleHint(QFont.Monospace)
+                mono.setFamily("Menlo")  # macOS-friendly monospace; falls back if missing
+                edit.setFont(mono)
+            except Exception:
+                pass
+            vbox.addWidget(edit)
+            hbox = QHBoxLayout()
+            copy_btn = QPushButton("Copy All", dlg)
+            close_btn = QPushButton("Close", dlg)
+            hbox.addWidget(copy_btn)
+            hbox.addStretch(1)
+            hbox.addWidget(close_btn)
+            vbox.addLayout(hbox)
+
+            def _copy_all():
+                try:
+                    QGuiApplication.clipboard().setText(edit.toPlainText())
+                except Exception:
+                    pass
+            copy_btn.clicked.connect(_copy_all)  # type: ignore
+            close_btn.clicked.connect(dlg.accept)  # type: ignore
+
+            dlg.resize(width, height)
+            dlg.exec()
+        except Exception as e:
+            try:
+                print(f"[cedarqt] dialog error: {e}")
+            except Exception:
+                pass
+
+    # Menu: View -> Console Logs / Page Source
+    try:
+        menu_view = win.menuBar().addMenu("&View")
+        act_console = menu_view.addAction("View Console Logs…")
+        act_source = menu_view.addAction("View Page Source…")
+
+        def _show_console_logs():
+            try:
+                logs_text = "\n".join(page._console_logs) if hasattr(page, "_console_logs") else "(no logs captured)"
+                _show_text_dialog("Console Logs", logs_text)
+            except Exception:
+                _show_text_dialog("Console Logs", "(failed to retrieve console logs)")
+        act_console.triggered.connect(_show_console_logs)  # type: ignore
+
+        def _show_page_source():
+            try:
+                def _got_html(html: str):
+                    _show_text_dialog("Page Source (HTML)", html)
+                page.toHtml(_got_html)
+            except Exception:
+                _show_text_dialog("Page Source (HTML)", "(failed to retrieve HTML)")
+        act_source.triggered.connect(_show_page_source)  # type: ignore
+    except Exception as e:
+        try:
+            print(f"[cedarqt] menu setup error: {e}")
+        except Exception:
+            pass
 
     # If we skipped the server, just load a static in-memory HTML to verify Qt shell works.
     if no_server:
