@@ -156,6 +156,10 @@ jobs:
           python -m playwright install --with-deps chromium
           pip list --format=freeze > pip-freeze-all.txt
 
+      - name: Verify pytest-cov is available
+        run: |
+          python -c "import pytest_cov; print('pytest-cov OK')" || { echo "pytest-cov not installed"; exit 1; }
+
       - name: Show pytest config
         run: |
           pytest --version | tee pytest-info.txt
@@ -202,9 +206,11 @@ jobs:
             pytest-info.txt
             reports/**
             coverage/**
+            pip-freeze-all.txt
 
       - name: Publish JUnit as Check (optional)
         if: always()
+        continue-on-error: true
         uses: mikepenz/action-junit-report@v4
         with:
           report_paths: "reports/junit.xml"
@@ -214,22 +220,30 @@ jobs:
 
       - name: Summary
         if: always()
+        shell: bash
         run: |
-          PASSED=$(grep -Eo '([0-9]+) passed' pytest-stdout.txt | awk '{sum+=$1} END{print sum+0}')
-          FAILED=$(grep -Eo '([0-9]+) failed' pytest-stdout.txt | awk '{sum+=$1} END{print sum+0}')
-          SKIPPED=$(grep -Eo '([0-9]+) skipped' pytest-stdout.txt | awk '{sum+=$1} END{print sum+0}')
+          PASSED=$(grep -Eo '([0-9]+) passed'  pytest-stdout.txt | awk '{s+=$1} END{print s+0}')
+          FAILED=$(grep -Eo '([0-9]+) failed'  pytest-stdout.txt | awk '{s+=$1} END{print s+0}')
+          SKIPPED=$(grep -Eo '([0-9]+) skipped' pytest-stdout.txt | awk '{s+=$1} END{print s+0}')
           DURATION=$(grep -Eo 'collected .* in [0-9.]+s' pytest-stdout.txt | sed -E 's/.* in ([0-9.]+)s/\1/')
+          HAVE_JUNIT="missing"; [[ -f reports/junit.xml ]] && HAVE_JUNIT="reports/junit.xml"
+          HAVE_COV="missing";   [[ -f coverage/coverage.xml ]] && HAVE_COV="coverage/coverage.xml"
+
+          # Use a single-quoted heredoc so Markdown backticks are not executed by bash
+          cat <<'MD' >> "$GITHUB_STEP_SUMMARY"
+          ## Test results
+
+          | Metric  | Value |
+          |-------: |:----- |
+          | Result  | **${{ steps.pytest.outputs.result || 'n/a' }}** |
+          MD
+
+          printf "| Passed  | %s |\n" "${PASSED:-0}" >> "$GITHUB_STEP_SUMMARY"
+          printf "| Failed  | %s |\n" "${FAILED:-0}" >> "$GITHUB_STEP_SUMMARY"
+          printf "| Skipped | %s |\n" "${SKIPPED:-0}" >> "$GITHUB_STEP_SUMMARY"
+          printf "| Runtime | %s s |\n\n" "${DURATION:-n/a}" >> "$GITHUB_STEP_SUMMARY"
+
           {
-            echo "## Test results"
-            echo ""
-            echo "| Metric  | Value |"
-            echo "|-------: |:----- |"
-            echo "| Result  | **${{ steps.pytest.outputs.result || 'n/a' }}** |"
-            echo "| Passed  | ${PASSED:-0} |"
-            echo "| Failed  | ${FAILED:-0} |"
-            echo "| Skipped | ${SKIPPED:-0} |"
-            echo "| Runtime | ${DURATION:-n/a} s |"
-            echo ""
-            echo "- JUnit: `reports/junit.xml` (in **test-artifacts**)"
-            echo "- Coverage XML: `coverage/coverage.xml` (in **test-artifacts**)"
+            echo "- JUnit: \`$HAVE_JUNIT\` (in **test-artifacts**)"
+            echo "- Coverage XML: \`$HAVE_COV\` (in **test-artifacts**)"
           } >> "$GITHUB_STEP_SUMMARY"
