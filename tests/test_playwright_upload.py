@@ -129,7 +129,7 @@ def test_project_upload_flow(page: Page, path: str):
                     # Fallback: fetch home and find a project link
                     home = hc.get("/").text
                     import re as _re
-                    m = _re.search(r"/project/(\\d+)", home)
+                    m = _re.search(r"/project/(\d+)", home)
                     assert m, "backend: could not find project link"
                     pid = int(m.group(1))
                     proj_url = f"/project/{pid}?branch_id=1"

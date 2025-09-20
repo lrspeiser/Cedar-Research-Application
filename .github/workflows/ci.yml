@@ -560,6 +560,8 @@ jobs:
           CEDARPY_TEST_LLM_READY: "1"
           CEDARPY_QT_HEADLESS: "1"
           CEDARPY_OPEN_BROWSER: "0"
+          QTWEBENGINE_CHROMIUM_FLAGS: "--no-sandbox --disable-gpu"
+          QTWEBENGINE_DISABLE_SANDBOX: "1"
         run: |
           pytest -vv tests/test_embedded_qt_ui.py -o junit_family=xunit2 --junitxml=reports/junit-qt.xml --maxfail=1 --log-cli-level=INFO
       - name: Upload artifacts (qt)
@@ -569,7 +571,8 @@ jobs:
           name: test-artifacts-qt
           path: |
             reports/**
-            pytest-qt.log
+            ~/Library/Logs/CedarPy/cedarqt_*.log
+            ~/Library/Logs/CedarPy/uvicorn_from_qt.log
 
   build_dmg:
     name: Build DMG (macOS)
