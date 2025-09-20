@@ -20,7 +20,8 @@ def _free_port() -> int:
 
 @pytest.mark.e2e
 @pytest.mark.timeout(120)
-@pytest.mark.skipif(os.getenv("CI", "").lower() == "true", reason="Enable after CI installs Qt runtime")
+# In CI, run this test only when explicitly enabled (macOS runner with Qt support)
+@pytest.mark.skipif(os.getenv("CI", "").lower() == "true" and os.getenv("CEDARPY_QT_CI_ENABLED", "") != "1", reason="Enable with CEDARPY_QT_CI_ENABLED=1 on macOS CI")
 def test_embedded_qt_upload_flow(tmp_path: Path):
     # Launch the embedded Chromium (QtWebEngine) app and connect via CDP
     app_port = _free_port()
