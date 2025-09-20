@@ -2415,7 +2415,7 @@ SELECT * FROM demo LIMIT 10;""")
           streamText.textContent = m.text;
           clearSpinner();
           stepAdvance('assistant:final', stream);
-        }
+        } else if (m.type === 'error') {
           finalOrError = true;
           try { if (timeoutId) clearTimeout(timeoutId); } catch(_){}
           streamText.textContent = '[error] ' + (m.error || 'unknown');

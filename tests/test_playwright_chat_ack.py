@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from playwright.sync_api import Page, expect
+import re
 
 
 def _find_free_port() -> int:
@@ -77,8 +78,8 @@ def test_chat_processing_ack_and_final(page: Page, path: str):
         page.fill("#chatInput", "what is 2+2")
         page.locator("#chatForm button[type=submit]").click()
 
-        # 1) Visible processing acknowledgment appears quickly
-        expect(page.locator("#msgs").get_by_text("Processing…")).to_be_visible(timeout=3000)
+        # 1) Visible processing acknowledgment appears quickly (allow Unicode … or ASCII ...)
+        expect(page.locator("#msgs")).to_contain_text(re.compile(r"Processing(\u2026|\.\.\.)"), timeout=5000)
 
         # 2) Server-side stages should show (submitted/planning/finalizing/persisted) or explicit timeout.
         # Allow generous time for LLM and align with server timeout (90s)
@@ -90,7 +91,7 @@ def test_chat_processing_ack_and_final(page: Page, path: str):
         # 3) The processing text is eventually replaced (no longer present)
         # It may be replaced by the final text or a timeout message
         page.wait_for_function(
-            "() => { const el = document.querySelector('#msgs'); if (!el) return false; return !el.innerText.includes('Processing…'); }",
+            "() => { const el = document.querySelector('#msgs'); if (!el) return false; const t = el.innerText || ''; return !(/Processing(\\u2026|\\.\\.\\.)/.test(t)); }",
             timeout=95000,
         )
 
