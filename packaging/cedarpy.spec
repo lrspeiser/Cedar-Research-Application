@@ -33,8 +33,7 @@ hiddenimports = list(set(hiddenimports + ['PySide6']))
 
 def _is_qt3d_entry(entry):
     try:
-        src, dest = entry
-        return ('Qt3D' in src) or ('Qt3D' in dest)
+        return 'Qt3D' in str(entry)
     except Exception:
         return False
 
