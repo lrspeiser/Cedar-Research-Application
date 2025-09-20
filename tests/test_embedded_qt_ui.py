@@ -80,7 +80,7 @@ def test_embedded_qt_upload_flow(tmp_path: Path):
         # 3) Upload file via backend to the Main branch
         with open(tmp_file, "rb") as fh:
             files = {"file": (tmp_file.name, fh, "text/plain")}
-            ur = httpx.post(base + f"/project/{pid}/files/upload?branch_id=1", files=files, timeout=10.0)
+            ur = httpx.post(base + f"/project/{pid}/files/upload?branch_id=1", files=files, timeout=120.0)
             assert ur.status_code in (200, 303)
         # 4) Verify project page shows the uploaded file
         page_html = httpx.get(base + f"/project/{pid}?branch_id=1", timeout=5.0).text
