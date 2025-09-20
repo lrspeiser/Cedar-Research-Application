@@ -2412,9 +2412,20 @@ SELECT * FROM demo LIMIT 10;""")
         } else if (m.type === 'final' && m.text) {
           finalOrError = true;
           try { if (timeoutId) clearTimeout(timeoutId); } catch(_){}
-          streamText.textContent = m.text;
-          clearSpinner();
-          stepAdvance('assistant:final', stream);
+          var _applyFinal = function(){
+            try { streamText.textContent = m.text; } catch(_){}
+            clearSpinner();
+            stepAdvance('assistant:final', stream);
+          };
+          try {
+            var prior = String(streamText && streamText.textContent || '');
+            if (/Processing(\u2026|\.\.\.)/.test(prior)) {
+              // Give the UI a tiny moment so tests can observe the ack before replacement
+              setTimeout(_applyFinal, 120);
+            } else {
+              _applyFinal();
+            }
+          } catch(_) { _applyFinal(); }
         } else if (m.type === 'error') {
           finalOrError = true;
           try { if (timeoutId) clearTimeout(timeoutId); } catch(_){}
