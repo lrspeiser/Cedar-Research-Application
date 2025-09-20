@@ -558,7 +558,6 @@ DURATION=$(awk '/collected .* in [0-9.]+s/ {for(i=1;i<=NF;i++) if ($i ~ /^[0-9.]
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CEDARPY_OPENAI_API_KEY: ${{ secrets.CEDARPY_OPENAI_API_KEY }}
           CEDARPY_TEST_LLM_READY: "1"
-          CEDARPY_QT_CI_ENABLED: "1"    # allow the test to run under CI
           CEDARPY_QT_HEADLESS: "1"
           CEDARPY_OPEN_BROWSER: "0"
         run: |
@@ -595,6 +594,71 @@ DURATION=$(awk '/collected .* in [0-9.]+s/ {for(i=1;i<=NF;i++) if ($i ~ /^[0-9.]
         with:
           name: CedarPy.dmg
           path: packaging/dist-qt/CedarPy-qt.dmg
+
+  tests_qt_dmg:
+    name: Tests — Packaged Qt DMG (macOS)
+    runs-on: macos-latest
+    needs: [build_dmg]
+    timeout-minutes: 30
+    steps:
+      - name: Download DMG artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: CedarPy.dmg
+          path: dist
+      - name: Run packaged app headless and verify HTTP
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CEDARPY_OPENAI_API_KEY: ${{ secrets.CEDARPY_OPENAI_API_KEY }}
+          CEDARPY_TEST_LLM_READY: "1"
+          CEDARPY_QT_HEADLESS: "1"
+          CEDARPY_OPEN_BROWSER: "0"
+          CEDARPY_ALLOW_MULTI: "1"
+        shell: bash
+        run: |
+          set -euo pipefail
+          DMG=$(ls dist/*.dmg | head -n1)
+          mkdir -p mnt
+          hdiutil attach "$DMG" -nobrowse -mountpoint mnt
+          APP=$(ls mnt/*.app -d | head -n1)
+          echo "Mounted app: $APP"
+          PORT=$(python - <<'PY'
+import socket
+s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()
+PY
+)
+          export CEDARPY_HOST=127.0.0.1
+          export CEDARPY_PORT=$PORT
+          BIN=$(ls "$APP/Contents/MacOS" | head -n1)
+          echo "Launching $APP/Contents/MacOS/$BIN on port $PORT"
+          "$APP/Contents/MacOS/$BIN" > app.log 2>&1 & echo $! > app.pid
+          # Wait for readiness
+          deadline=$((SECONDS+60))
+          ok=0
+          while [ $SECONDS -lt $deadline ]; do
+            if curl -fsS "http://127.0.0.1:$PORT/" >/dev/null 2>&1; then
+              ok=1; break
+            fi
+            sleep 1
+          done
+          if [ $ok -ne 1 ]; then
+            echo "Server did not start. Log:"; tail -n 200 app.log || true
+            exit 1
+          fi
+          echo "Packaged app responded at http://127.0.0.1:$PORT/"
+          # Cleanup
+          kill "$(cat app.pid)" 2>/dev/null || true
+          sleep 1
+          hdiutil detach mnt || true
+
+      - name: Upload packaged app logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qt-dmg-run-logs
+          path: |
+            app.log
+
       - name: Summary (DMG)
         if: always()
         run: |
