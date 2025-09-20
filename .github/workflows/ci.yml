@@ -492,8 +492,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-artifacts-playwright
-          merge-multiple: true
+          name: test-artifacts-playwright-linux
           path: |
             pytest-stdout.txt
             pytest-stderr.txt
@@ -739,8 +738,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-artifacts-playwright
-          merge-multiple: true
+          name: test-artifacts-playwright-macos
           path: |
             pytest-stdout.txt
             pytest-stderr.txt
