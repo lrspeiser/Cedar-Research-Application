@@ -81,6 +81,16 @@ _backend_hidden = [
 ]
 hiddenimports = list(set(hiddenimports + ['main', 'main_mini'] + _backend_hidden))
 
+# Exclude unused Qt3D modules to avoid macOS framework symlink collisions (FileExistsError)
+# See: known PyInstaller + Qt frameworks dedup issues on macOS
+excludes = [
+    'PySide6.Qt3DCore',
+    'PySide6.Qt3DAnimation',
+    'PySide6.Qt3DRender',
+    'PySide6.Qt3DInput',
+    'PySide6.Qt3DExtras',
+]
+
 # Resolve repo root relative to current working directory when PyInstaller runs
 repo_root = os.path.abspath(os.getcwd())
 
@@ -98,6 +108,7 @@ a = Analysis([
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
+    excludes=excludes,
     noarchive=False,
 )
 pyz = PYZ(a.pure, a.zipped_data,
