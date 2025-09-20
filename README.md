@@ -302,6 +302,8 @@ Notes
 
 ## Packaging (macOS DMG)
 
+See also: docs/CI.md (CI and Packaging Guide) and CHANGELOG.md (2025-09-20 CI stabilization) for pitfalls and fixes we applied to get the pipeline green and the DMG reliable.
+
 - Build locally:
   - python -m pip install -r requirements.txt
   - python -m pip install -r packaging/requirements-macos.txt
