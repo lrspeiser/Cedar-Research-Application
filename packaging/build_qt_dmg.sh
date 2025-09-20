@@ -121,9 +121,16 @@ ci_gate
 # Clean old outputs
 rm -rf "$DIST_DIR/$APP_NAME" "$DMG_PATH" "$ROOT_DIR/build" "$DIST_DIR" 2>/dev/null || true
 
-# Ensure PyInstaller is available
+# Ensure PyInstaller and app dependencies are available
 python3 -m pip install -q --upgrade pip wheel
-python3 -m pip install -q pyinstaller
+# Install application requirements (PySide6, FastAPI, etc.) if present
+if [ -f "$ROOT_DIR/requirements.txt" ]; then
+  python3 -m pip install -q -r "$ROOT_DIR/requirements.txt"
+fi
+if [ -f "$PKG_DIR/requirements-macos.txt" ]; then
+  python3 -m pip install -q -r "$PKG_DIR/requirements-macos.txt"
+fi
+python3 -m pip install -q pyinstaller pyinstaller-hooks-contrib
 
 # Build the Qt app from the PyInstaller spec that launches cedarqt.py
 # Important: run from repo root so spec's repo_root points here.
