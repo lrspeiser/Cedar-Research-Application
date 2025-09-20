@@ -136,7 +136,13 @@ python3 -m pip install -q pyinstaller pyinstaller-hooks-contrib
 # Important: run from repo root so spec's repo_root points here.
 (
   cd "$ROOT_DIR" && \
-  pyinstaller --noconfirm --clean "$PKG_DIR/cedarpy.spec"
+  pyinstaller --noconfirm --clean \
+    --exclude-module PySide6.Qt3DCore \
+    --exclude-module PySide6.Qt3DAnimation \
+    --exclude-module PySide6.Qt3DRender \
+    --exclude-module PySide6.Qt3DInput \
+    --exclude-module PySide6.Qt3DExtras \
+    "$PKG_DIR/cedarpy.spec"
 )
 
 if [ ! -d "$DIST_DIR/$APP_NAME" ]; then

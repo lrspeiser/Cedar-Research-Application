@@ -15,10 +15,6 @@ modules = [
     'PySide6.QtWebChannel',
 ]
 
-# Ensure the PySide6 namespace package itself is included so imports like
-# "import PySide6" succeed at runtime (some hooks only pull submodules).
-_pyside_d, _pyside_b, _pyside_h = collect_all('PySide6')
-
 
 datas = []
 binaries = []
@@ -29,19 +25,21 @@ for m in modules:
     binaries += b
     hiddenimports += h
 
-# Merge the top-level PySide6 package collections
-_datas = list(_pyside_d) if _pyside_d else []
-_binaries = list(_pyside_b) if _pyside_b else []
-_hidden = list(_pyside_h) if _pyside_h else []
-
-if _datas:
-    datas += _datas
-if _binaries:
-    binaries += _binaries
-if _hidden:
-    hiddenimports += _hidden
-# Also ensure the namespace import is present explicitly
+# Ensure top-level PySide6 import is present for runtime
 hiddenimports = list(set(hiddenimports + ['PySide6']))
+
+# Safety: filter out any Qt3D frameworks that may have been collected indirectly
+# (avoid macOS frameworks symlink collisions)
+
+def _is_qt3d_entry(entry):
+    try:
+        src, dest = entry
+        return ('Qt3D' in src) or ('Qt3D' in dest)
+    except Exception:
+        return False
+
+binaries = [e for e in binaries if not _is_qt3d_entry(e)]
+datas = [e for e in datas if not _is_qt3d_entry(e)]
 
 # Also collect shiboken6 support libs
 shib_d, shib_b, shib_h = collect_all('shiboken6')
