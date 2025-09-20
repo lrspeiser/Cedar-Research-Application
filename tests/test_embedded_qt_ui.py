@@ -76,7 +76,8 @@ def test_embedded_qt_upload_flow(tmp_path: Path):
                 # Find the newest project via home page
                 home = httpx.get(base + "/", timeout=2.0).text
                 import re
-                m = re.search(r"/project/(\\d+)", home)
+                # Regex fix: raw string must use a single backslash for \d
+                m = re.search(r"/project/(\d+)", home)
                 if m:
                     proj_url = f"/project/{m.group(1)}?branch_id=1"
                     page_html = httpx.get(base + proj_url, timeout=2.0).text
@@ -87,7 +88,12 @@ def test_embedded_qt_upload_flow(tmp_path: Path):
             except Exception:
                 pass
             time.sleep(0.5)
-        assert uploaded, "Harness did not complete upload flow"
+        if not uploaded:
+            raise AssertionError(
+                "Harness did not complete upload flow. "
+                f"Last home HTML length={len(home) if 'home' in locals() else 'n/a'}, "
+                f"Last project HTML length={len(last_html) if last_html else 'n/a'}"
+            )
 
     finally:
         try:
