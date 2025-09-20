@@ -2199,8 +2199,18 @@ SELECT * FROM demo LIMIT 10;""")
             try:
                 if getattr(m, 'payload_json', None) is not None:
                     import json as _json
-                    _preview_json = _json.dumps(m.payload_json, ensure_ascii=False)
-                    preview = (_preview_json[:400] + ('…' if len(_preview_json) > 400 else ''))
+                    pj = m.payload_json
+                    if isinstance(pj, dict) and 'function' in pj and ('output_to_user' in pj):
+                        try:
+                            fn = str(pj.get('function') or '')
+                            ut = str(pj.get('output_to_user') or '')
+                            preview = ((fn + ' ' + ut)[:400])
+                        except Exception:
+                            _preview_json = _json.dumps(pj, ensure_ascii=False)
+                            preview = (_preview_json[:400] + ('…' if len(_preview_json) > 400 else ''))
+                    else:
+                        _preview_json = _json.dumps(pj, ensure_ascii=False)
+                        preview = (_preview_json[:400] + ('…' if len(_preview_json) > 400 else ''))
                 else:
                     txt = m.content or ''
                     preview = (txt[:400] + ('…' if len(txt) > 400 else ''))
@@ -2383,25 +2393,25 @@ SELECT * FROM demo LIMIT 10;""")
             try { preP.textContent = JSON.stringify(m.messages || [], null, 2); } catch(_){ preP.textContent = String(m.messages || ''); }
             detailsP.appendChild(preP);
             wrapP.appendChild(metaP); wrapP.appendChild(bubP); wrapP.appendChild(detailsP);
-            if (msgs) msgs.appendChild(wrapP);
-            stepAdvance('assistant:prompt', wrapP);
-          } catch(_) { }
-        } else if (m.type === 'action') {
+        if (m.type === 'action') {
           try {
             var fn = String(m.function||'').trim();
-            var args = m.args || {};
+            var text = String(m.text||'');
             var detId = 'det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
             var wrap = document.createElement('div'); wrap.className = 'msg system';
-            var meta = document.createElement('div'); meta.className = 'meta small'; meta.innerHTML = "<span class='pill'>system</span> <span class='title' style='font-weight:600'>" + (fn==='plan' ? 'Plan created' : ('Next: ' + fn)) + "</span>";
+            var meta = document.createElement('div'); meta.className = 'meta small'; meta.innerHTML = "<span class='pill'>system</span> <span class='title' style='font-weight:600'>" + fn + "</span>";
             var bub = document.createElement('div'); bub.className = 'bubble system'; bub.setAttribute('data-details-id', detId);
             var cont = document.createElement('div'); cont.className='content'; cont.style.whiteSpace='pre-wrap';
-            cont.textContent = (fn==='plan' ? ('Plan with ' + ((args.steps||[]).length) + ' step(s). Click to view.') : ('About to run ' + fn + '. Click to view args.'));
+            cont.textContent = (fn ? (fn + ' ') : '') + text;
             bub.appendChild(cont);
             var details = document.createElement('div'); details.id = detId; details.style.display='none';
             var pre = document.createElement('pre'); pre.className='small'; pre.style.whiteSpace='pre-wrap'; pre.style.background='#f8fafc'; pre.style.padding='8px'; pre.style.borderRadius='6px';
-            try { pre.textContent = JSON.stringify(args, null, 2); } catch(_){ pre.textContent = String(args); }
+            try { pre.textContent = JSON.stringify(m.call || {}, null, 2); } catch(_){ pre.textContent = String(m.call || {}); }
             details.appendChild(pre);
             wrap.appendChild(meta); wrap.appendChild(bub); wrap.appendChild(details);
+            if (msgs) msgs.appendChild(wrap);
+            stepAdvance('system:'+fn, wrap);
+          } catch(_){ }
             if (msgs) msgs.appendChild(wrap);
             stepAdvance('system:'+fn, wrap);
           } catch(_){ }
@@ -2433,9 +2443,10 @@ SELECT * FROM demo LIMIT 10;""")
           try {
             var detIdF = m.json ? ('det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8)) : null;
             var wrapF = document.createElement('div'); wrapF.className = 'msg assistant';
-            var metaF = document.createElement('div'); metaF.className = 'meta small'; metaF.innerHTML = "<span class='pill'>assistant</span> <span class='title' style='font-weight:600'>Final</span>";
+            var fnF = (m && m.json && m.json.function) ? String(m.json.function) : 'final';
+            var metaF = document.createElement('div'); metaF.className = 'meta small'; metaF.innerHTML = "<span class='pill'>assistant</span> <span class='title' style='font-weight:600'>" + fnF + "</span>";
             var bubF = document.createElement('div'); bubF.className = 'bubble assistant'; if (detIdF) bubF.setAttribute('data-details-id', detIdF);
-            var contF = document.createElement('div'); contF.className='content'; contF.style.whiteSpace='pre-wrap'; contF.textContent = m.text;
+            var contF = document.createElement('div'); contF.className='content'; contF.style.whiteSpace='pre-wrap'; contF.textContent = (fnF ? (fnF + ' ') : '') + (m.text||'');
             bubF.appendChild(contF);
             wrapF.appendChild(metaF); wrapF.appendChild(bubF);
             if (detIdF) {
@@ -6052,7 +6063,12 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
                         except Exception: pass
                     # Emit an action bubble to the client with plan steps preview
                     try:
-                        await websocket.send_text(json.dumps({"type": "action", "function": "plan", "args": {"steps": call.get("steps") or []}}))
+                        await websocket.send_text(json.dumps({
+                            "type": "action",
+                            "function": "plan",
+                            "text": str(call.get("output_to_user") or "Plan prepared"),
+                            "call": call,
+                        }))
                     except Exception:
                         pass
                     # Ask to proceed with the first step
@@ -6072,7 +6088,12 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
             # Execute tool (only if not final/question)
             _send_info(f"tool:{name}")
             try:
-                await websocket.send_text(json.dumps({"type": "action", "function": name, "args": args or {}}))
+                await websocket.send_text(json.dumps({
+                    "type": "action",
+                    "function": name,
+                    "text": str((call_obj or {}).get("output_to_user") or f"About to run {name}"),
+                    "call": call_obj or {"function": name, "args": (args or {})}
+                }))
             except Exception:
                 pass
             fn = tools_map.get(name)
@@ -6175,10 +6196,7 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
     elif question_text:
         # For questions, continue to use 'final' type for compatibility with existing tests/clients
         await websocket.send_text(json.dumps({"type": "final", "text": question_text, "json": final_call_obj}))
-    try:
-        await websocket.send_text(json.dumps({"type": "info", "stage": "persisted"}))
-    except Exception:
-        pass
+    # Hide 'persisted' from UI (no-op stage)
     try:
         await websocket.close()
     except Exception:
