@@ -2369,7 +2369,24 @@ SELECT * FROM demo LIMIT 10;""")
         refreshTimeout();
         var m = null; try { m = JSON.parse(ev.data); } catch(_){ return; }
         if (!m) return;
-        if (m.type === 'action') {
+        if (m.type === 'prompt') {
+          try {
+            var detIdP = 'det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
+            var wrapP = document.createElement('div'); wrapP.className = 'msg assistant';
+            var metaP = document.createElement('div'); metaP.className = 'meta small'; metaP.innerHTML = "<span class='pill'>assistant</span> <span class='title' style='font-weight:600'>Assistant Prompt</span>";
+            var bubP = document.createElement('div'); bubP.className = 'bubble assistant'; bubP.setAttribute('data-details-id', detIdP);
+            var contP = document.createElement('div'); contP.className='content'; contP.style.whiteSpace='pre-wrap';
+            try { contP.textContent = 'Prepared LLM prompt (click to view JSON).'; } catch(_){}
+            bubP.appendChild(contP);
+            var detailsP = document.createElement('div'); detailsP.id = detIdP; detailsP.style.display='none';
+            var preP = document.createElement('pre'); preP.className='small'; preP.style.whiteSpace='pre-wrap'; preP.style.background='#f8fafc'; preP.style.padding='8px'; preP.style.borderRadius='6px';
+            try { preP.textContent = JSON.stringify(m.messages || [], null, 2); } catch(_){ preP.textContent = String(m.messages || ''); }
+            detailsP.appendChild(preP);
+            wrapP.appendChild(metaP); wrapP.appendChild(bubP); wrapP.appendChild(detailsP);
+            if (msgs) msgs.appendChild(wrapP);
+            stepAdvance('assistant:prompt', wrapP);
+          } catch(_) { }
+        } else if (m.type === 'action') {
           try {
             var fn = String(m.function||'').trim();
             var args = m.args || {};
@@ -2412,20 +2429,31 @@ SELECT * FROM demo LIMIT 10;""")
         } else if (m.type === 'final' && m.text) {
           finalOrError = true;
           try { if (timeoutId) clearTimeout(timeoutId); } catch(_){}
-          var _applyFinal = function(){
-            try { streamText.textContent = m.text; } catch(_){}
-            clearSpinner();
-            stepAdvance('assistant:final', stream);
-          };
+          // Render a proper assistant bubble for the final answer, with optional JSON details
           try {
-            var prior = String(streamText && streamText.textContent || '');
-            if (/Processing(\u2026|\.\.\.)/.test(prior)) {
-              // Give the UI a tiny moment so tests can observe the ack before replacement
-              setTimeout(_applyFinal, 120);
-            } else {
-              _applyFinal();
+            var detIdF = m.json ? ('det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8)) : null;
+            var wrapF = document.createElement('div'); wrapF.className = 'msg assistant';
+            var metaF = document.createElement('div'); metaF.className = 'meta small'; metaF.innerHTML = "<span class='pill'>assistant</span> <span class='title' style='font-weight:600'>Final</span>";
+            var bubF = document.createElement('div'); bubF.className = 'bubble assistant'; if (detIdF) bubF.setAttribute('data-details-id', detIdF);
+            var contF = document.createElement('div'); contF.className='content'; contF.style.whiteSpace='pre-wrap'; contF.textContent = m.text;
+            bubF.appendChild(contF);
+            wrapF.appendChild(metaF); wrapF.appendChild(bubF);
+            if (detIdF) {
+              var detailsF = document.createElement('div'); detailsF.id = detIdF; detailsF.style.display='none';
+              var preF = document.createElement('pre'); preF.className='small'; preF.style.whiteSpace='pre-wrap'; preF.style.background='#f8fafc'; preF.style.padding='8px'; preF.style.borderRadius='6px';
+              try { preF.textContent = JSON.stringify(m.json, null, 2); } catch(_){ preF.textContent = String(m.json); }
+              detailsF.appendChild(preF);
+              wrapF.appendChild(detailsF);
             }
-          } catch(_) { _applyFinal(); }
+            if (msgs) msgs.appendChild(wrapF);
+          } catch(_) {
+            // Fallback to replacing the processing text if bubble rendering fails
+            try { streamText.textContent = m.text; } catch(_){}
+          }
+          clearSpinner();
+          // Remove the temporary processing line once final is rendered
+          try { if (stream && stream.parentNode) stream.parentNode.removeChild(stream); } catch(_){}
+          stepAdvance('assistant:final', null);
         } else if (m.type === 'error') {
           finalOrError = true;
           try { if (timeoutId) clearTimeout(timeoutId); } catch(_){}
@@ -5675,6 +5703,11 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
         except Exception:
             messages.append({"role": "user", "content": "{""error"":""examples unavailable""}"})
         messages.append({"role": "user", "content": content})
+        # Emit the prepared prompt so the UI can show an "assistant prompt" bubble with full JSON
+        try:
+            await websocket.send_text(json.dumps({"type": "prompt", "messages": messages}))
+        except Exception:
+            pass
     except Exception as e:
         import traceback as _tb
         try:
@@ -5924,6 +5957,7 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
     final_text = None
     question_text = None
     session_title: Optional[str] = None
+    final_call_obj: Optional[Dict[str, Any]] = None
 
     # Overall budget: ensure we eventually time out and inform the client
     import time as _time
@@ -6027,6 +6061,7 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
             if name in ('final', 'question'):
                 if name == 'final':
                     final_text = str((args or {}).get('text') or call_obj.get('output_to_user') or '').strip() or 'Done.'
+                    final_call_obj = call_obj or final_call_obj
                     try:
                         session_title = str((args or {}).get('title') or '').strip() or None
                     except Exception:
@@ -6094,6 +6129,7 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
             if isinstance(obj2, dict) and str(obj2.get('function') or '').lower() == 'final':
                 a2 = obj2.get('args') or {}
                 final_text = str(a2.get('text') or obj2.get('output_to_user') or '').strip() or 'Done.'
+                final_call_obj = obj2 or final_call_obj
                 # Suppress noisy 'final-forced' from user UI; emit only when debug=true in payload
                 try:
                     if bool(payload.get('debug')):
@@ -6134,11 +6170,11 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
         except Exception: pass
 
     if final_text:
-        # Emit only the final message to avoid confusing 'Next: final' system bubble in the UI
-        await websocket.send_text(json.dumps({"type": "final", "text": final_text}))
+        # Emit the final message along with the final function-call JSON for UI details
+        await websocket.send_text(json.dumps({"type": "final", "text": final_text, "json": final_call_obj}))
     elif question_text:
         # For questions, continue to use 'final' type for compatibility with existing tests/clients
-        await websocket.send_text(json.dumps({"type": "final", "text": question_text}))
+        await websocket.send_text(json.dumps({"type": "final", "text": question_text, "json": final_call_obj}))
     try:
         await websocket.send_text(json.dumps({"type": "info", "stage": "persisted"}))
     except Exception:
