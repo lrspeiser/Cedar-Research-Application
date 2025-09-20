@@ -20,8 +20,10 @@ jobs:
           python -m pip install -U pip
           python -m pip install -r requirements.txt
           python -m playwright install --with-deps chromium
-      - name: Run tests
+      - name: Run tests (unit subset)
         env:
           CEDARPY_TEST_MODE: "1"
+          PYTHONPATH: .
         run: |
-          pytest -q --maxfail=1 --disable-warnings --cache-clear
+          # Run a stable subset on ubuntu (exclude playwright/qt/ws-heavy tests; those run in main CI on proper runners)
+          pytest -q -k "not playwright and not ws and not websockets and not qt" --maxfail=1 --disable-warnings --cache-clear
