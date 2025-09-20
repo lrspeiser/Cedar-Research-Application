@@ -679,6 +679,14 @@ jobs:
           MD
           printf "| Size | %s |\n" "${SZ:-n/a}" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Checkout (for tests)
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Install app + dev deps (incl. Playwright)
         run: |
           python -m pip install --upgrade pip
@@ -755,10 +763,14 @@ jobs:
         if: always()
         shell: bash
         run: |
-          PASSED=$(awk '/ passed/ {for(i=1;i<=NF;i++) if ($i ~ /^[0-9]+$/) c+=$i} END{print c+0}' pytest-stdout.txt)
-          FAILED=$(awk '/ failed/ {for(i=1;i<=NF;i++) if ($i ~ /^[0-9]+$/) c+=$i} END{print c+0}' pytest-stdout.txt)
-          SKIPPED=$(awk '/ skipped/ {for(i=1;i<=NF;i++) if ($i ~ /^[0-9]+$/) c+=$i} END{print c+0}' pytest-stdout.txt)
-          DURATION=$(awk '/collected .* in [0-9.]+s/ {for(i=1;i<=NF;i++) if ($i ~ /^[0-9.]+s$/) d=$i} END{ if (d == "") { print "n/a" } else { sub(/s$/,"", d); print d } }' pytest-stdout.txt)
+          if [[ -f pytest-stdout.txt ]]; then
+            PASSED=$(awk '/ passed/ {for(i=1;i<=NF;i++) if ($i ~ /^[0-9]+$/) c+=$i} END{print c+0}' pytest-stdout.txt)
+            FAILED=$(awk '/ failed/ {for(i=1;i<=NF;i++) if ($i ~ /^[0-9]+$/) c+=$i} END{print c+0}' pytest-stdout.txt)
+            SKIPPED=$(awk '/ skipped/ {for(i=1;i<=NF;i++) if ($i ~ /^[0-9]+$/) c+=$i} END{print c+0}' pytest-stdout.txt)
+            DURATION=$(awk '/collected .* in [0-9.]+s/ {for(i=1;i<=NF;i++) if ($i ~ /^[0-9.]+s$/) d=$i} END{ if (d == "") { print "n/a" } else { sub(/s$/,"", d); print d } }' pytest-stdout.txt)
+          else
+            PASSED=0; FAILED=0; SKIPPED=0; DURATION="n/a"
+          fi
           HAVE_JUNIT="missing"; [[ -f reports/junit.xml ]] && HAVE_JUNIT="reports/junit.xml"
           HAVE_COV="missing";   [[ -f coverage/coverage.xml ]] && HAVE_COV="coverage/coverage.xml"
           cat <<'MD' >> "$GITHUB_STEP_SUMMARY"
