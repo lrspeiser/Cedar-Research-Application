@@ -5932,6 +5932,7 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
     except Exception:
         timeout_s = 90
     t0 = _time.time()
+    timed_out = False
 
     try:
         while loop_count < 8:
@@ -5942,7 +5943,7 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
                         await websocket.send_text(json.dumps({"type": "info", "stage": "timeout"}))
                     except Exception:
                         pass
-                    final_text = f"Timed out after {timeout_s} seconds. Please try again."
+                    timed_out = True
                     break
             except Exception:
                 pass

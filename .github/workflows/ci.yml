@@ -140,11 +140,11 @@ jobs:
             echo "Artifacts: **compile-artifacts** (stdout/stderr, pip-freeze)"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  tests_unit:
-    name: Tests — unit
+  tests_backend_core:
+    name: Tests — backend core (fast, no UI/WS/LLM)
     runs-on: ubuntu-latest
     needs: [compile]
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -168,27 +168,27 @@ jobs:
           pytest --version | tee pytest-info.txt
           python -c "import sys,platform;print(platform.platform());print(sys.version)" | tee -a pytest-info.txt
 
-      - name: Pytest (unit)
+      - name: Pytest (backend core)
         id: pytest
         env:
           PYTHONPATH: .
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          CEDARPY_OPENAI_API_KEY: ${{ secrets.CEDARPY_OPENAI_API_KEY }}
-          CEDARPY_TEST_LLM_READY: "1"  # real LLM in CI; no stubs
         shell: bash
         run: |
           mkdir -p reports coverage htmlcov
           set -o pipefail
           echo "PYTHONPATH=$PYTHONPATH" | tee run-env.txt
-          echo "OPENAI_API_KEY=${OPENAI_API_KEY:+***set***}" | tee -a run-env.txt
-          # Do NOT cut tests: run everything except Playwright/Qt due to runner constraints
+          # Explicit core set (fast backend-only tests)
           pytest -vv \
             --maxfail=1 \
             --durations=25 \
             --log-cli-level=INFO --log-file=pytest.log \
             --junitxml=reports/junit.xml -o junit_family=xunit2 \
             --cov=cedarpy --cov-report=xml:coverage/coverage.xml --cov-report=term-missing \
-            -k "not playwright and not qt" \
+            tests/test_smoke.py \
+            tests/test_html_rendering.py \
+            tests/test_threads_new_json.py \
+            tests/test_shell_grep.py \
+            tests/test_doctor_mode.py \
             2> pytest-stderr.txt | tee pytest-stdout.txt
           STATUS=${PIPESTATUS[0]}
           if [[ $STATUS -eq 0 ]]; then
@@ -250,10 +250,10 @@ DURATION=$(awk '/collected .* in [0-9.]+s/ {for(i=1;i<=NF;i++) if ($i ~ /^[0-9.]
           } >> "$GITHUB_STEP_SUMMARY"
 
   tests_ws:
-    name: Tests — websocket
+    name: Tests — websocket (non-LLM)
     runs-on: ubuntu-latest
     needs: [compile]
-    timeout-minutes: 25
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -281,22 +281,18 @@ DURATION=$(awk '/collected .* in [0-9.]+s/ {for(i=1;i<=NF;i++) if ($i ~ /^[0-9.]
         id: pytest
         env:
           PYTHONPATH: .
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          CEDARPY_OPENAI_API_KEY: ${{ secrets.CEDARPY_OPENAI_API_KEY }}
-          CEDARPY_TEST_LLM_READY: "1"  # real LLM in CI; no stubs
         shell: bash
         run: |
           mkdir -p reports coverage htmlcov
           set -o pipefail
           echo "PYTHONPATH=$PYTHONPATH" | tee run-env.txt
-          echo "OPENAI_API_KEY=${OPENAI_API_KEY:+***set***}" | tee -a run-env.txt
           pytest -vv \
             --maxfail=1 \
             --durations=25 \
             --log-cli-level=INFO --log-file=pytest.log \
             --junitxml=reports/junit.xml -o junit_family=xunit2 \
             --cov=cedarpy --cov-report=xml:coverage/coverage.xml --cov-report=term-missing \
-            tests/test_ws_chat_orchestrator.py tests/test_websockets.py \
+            tests/test_websockets.py \
             2> pytest-stderr.txt | tee pytest-stdout.txt
           STATUS=${PIPESTATUS[0]}
           if [[ $STATUS -eq 0 ]]; then
@@ -355,6 +351,97 @@ DURATION=$(awk '/collected .* in [0-9.]+s/ {for(i=1;i<=NF;i++) if ($i ~ /^[0-9.]
           {
             echo "- JUnit: \`$HAVE_JUNIT\` (in **test-artifacts-ws**)"
             echo "- Coverage XML: \`$HAVE_COV\` (in **test-artifacts-ws**)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  tests_llm_backend:
+    name: Tests — LLM backend (real API)
+    runs-on: ubuntu-latest
+    needs: [compile]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - name: Install app + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+          pip list --format=freeze > pip-freeze-all.txt
+      - name: Show pytest config
+        run: |
+          pytest --version | tee pytest-info.txt
+          python -c "import sys,platform;print(platform.platform());print(sys.version)" | tee -a pytest-info.txt
+      - name: Pytest (LLM backend)
+        id: pytest
+        env:
+          PYTHONPATH: .
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CEDARPY_OPENAI_API_KEY: ${{ secrets.CEDARPY_OPENAI_API_KEY }}
+          CEDARPY_TEST_LLM_READY: "1"
+        shell: bash
+        run: |
+          mkdir -p reports coverage htmlcov
+          set -o pipefail
+          echo "PYTHONPATH=$PYTHONPATH" | tee run-env.txt
+          echo "OPENAI_API_KEY=${OPENAI_API_KEY:+***set***}" | tee -a run-env.txt
+          pytest -vv \
+            --maxfail=1 \
+            --durations=25 \
+            --log-cli-level=INFO --log-file=pytest.log \
+            --junitxml=reports/junit.xml -o junit_family=xunit2 \
+            --cov=cedarpy --cov-report=xml:coverage/coverage.xml --cov-report=term-missing \
+            tests/test_file_llm.py tests/test_ws_chat_orchestrator.py \
+            2> pytest-stderr.txt | tee pytest-stdout.txt
+      - name: Upload artifacts (llm)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-artifacts-llm
+          path: |
+            pytest-stdout.txt
+            pytest-stderr.txt
+            pytest.log
+            run-env.txt
+            pytest-info.txt
+            reports/**
+            coverage/**
+            pip-freeze-all.txt
+      - name: Publish JUnit as Check (optional)
+        if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        continue-on-error: true
+        uses: mikepenz/action-junit-report@v4
+        with:
+          report_paths: "reports/junit.xml"
+          check_name: "JUnit Test Report (LLM)"
+          include_passed: true
+          detailed_summary: true
+      - name: Summary (llm)
+        if: always()
+        shell: bash
+        run: |
+          PASSED=$(awk '/ passed/ {for(i=1;i<=NF;i++) if ($i ~ /^[0-9]+$/) c+=$i} END{print c+0}' pytest-stdout.txt)
+          FAILED=$(awk '/ failed/ {for(i=1;i<=NF;i++) if ($i ~ /^[0-9]+$/) c+=$i} END{print c+0}' pytest-stdout.txt)
+          SKIPPED=$(awk '/ skipped/ {for(i=1;i<=NF;i++) if ($i ~ /^[0-9]+$/) c+=$i} END{print c+0}' pytest-stdout.txt)
+DURATION=$(awk '/collected .* in [0-9.]+s/ {for(i=1;i<=NF;i++) if ($i ~ /^[0-9.]+s$/) d=$i} END{ if (d == "") { print "n/a" } else { sub(/s$/,"", d); print d } }' pytest-stdout.txt)
+          HAVE_JUNIT="missing"; [[ -f reports/junit.xml ]] && HAVE_JUNIT="reports/junit.xml"
+          HAVE_COV="missing";   [[ -f coverage/coverage.xml ]] && HAVE_COV="coverage/coverage.xml"
+          cat <<'MD' >> "$GITHUB_STEP_SUMMARY"
+          ## Test results (LLM backend)
+
+          | Metric  | Value |
+          |-------: |:----- |
+          | Result  | **${{ steps.pytest.outputs.result || 'n/a' }}** |
+          MD
+          printf "| Passed  | %s |\n" "${PASSED:-0}" >> "$GITHUB_STEP_SUMMARY"
+          printf "| Failed  | %s |\n" "${FAILED:-0}" >> "$GITHUB_STEP_SUMMARY"
+          printf "| Skipped | %s |\n" "${SKIPPED:-0}" >> "$GITHUB_STEP_SUMMARY"
+          printf "| Runtime | %s s |\n\n" "${DURATION:-n/a}" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "- JUnit: \`$HAVE_JUNIT\` (in **test-artifacts-llm**)"
+            echo "- Coverage XML: \`$HAVE_COV\` (in **test-artifacts-llm**)"
           } >> "$GITHUB_STEP_SUMMARY"
 
   tests_playwright:
@@ -488,7 +575,7 @@ DURATION=$(awk '/collected .* in [0-9.]+s/ {for(i=1;i<=NF;i++) if ($i ~ /^[0-9.]
   build_dmg:
     name: Build DMG (macOS)
     runs-on: macos-latest
-    needs: [tests_unit, tests_ws, tests_playwright, tests_qt_macos]
+    needs: [tests_backend_core, tests_ws, tests_llm_backend, tests_playwright, tests_qt_macos]
     timeout-minutes: 40
     steps:
       - name: Checkout
