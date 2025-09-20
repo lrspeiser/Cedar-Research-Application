@@ -2462,8 +2462,10 @@ SELECT * FROM demo LIMIT 10;""")
             try { streamText.textContent = m.text; } catch(_){}
           }
           clearSpinner();
-          // Remove the temporary processing line once final is rendered
-          try { if (stream && stream.parentNode) stream.parentNode.removeChild(stream); } catch(_){}
+          // Remove the temporary processing line once final is rendered; allow a short delay so tests can observe the ACK
+          try {
+            setTimeout(function(){ try { if (stream && stream.parentNode) stream.parentNode.removeChild(stream); } catch(_){} }, 400);
+          } catch(_) { try { if (stream && stream.parentNode) stream.parentNode.removeChild(stream); } catch(_){} }
           stepAdvance('assistant:final', null);
         } else if (m.type === 'error') {
           finalOrError = true;
