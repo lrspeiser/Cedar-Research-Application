@@ -623,7 +623,15 @@ jobs:
           DMG=$(ls dist/*.dmg | head -n1)
           mkdir -p mnt
           hdiutil attach "$DMG" -nobrowse -mountpoint mnt
-          APP=$(ls mnt/*.app -d | head -n1)
+          # Find the .app bundle at the top of the mounted volume
+          APP=$(ls -d mnt/*.app 2>/dev/null | head -n1)
+          if [[ -z "$APP" ]]; then
+            echo "No .app found in mounted DMG. Contents of mnt:"
+            ls -la mnt || true
+            # Show mounted images to help debug
+            hdiutil info | sed -n '1,200p' || true
+            exit 1
+          fi
           echo "Mounted app: $APP"
           PORT=$(python -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
           export CEDARPY_HOST=127.0.0.1
