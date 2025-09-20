@@ -66,6 +66,7 @@ def test_ws_chat_plan_execute_debug_prompt_and_final():
                 got_submitted = False
                 got_action = False
                 got_final = False
+                final_text = ""
                 for _ in range(200):
                     msg = ws.receive_text()
                     data = json.loads(msg)
@@ -83,10 +84,13 @@ def test_ws_chat_plan_execute_debug_prompt_and_final():
                         got_action = True
                     elif t == "final":
                         got_final = True
+                        final_text = str(data.get("text") or "")
                         break
                     elif t == "error":
                         pytest.fail(f"backend error: {data.get('error')}")
                 # Accept both paths: (submitted -> action -> final) or (submitted -> final)
                 assert got_debug and got_submitted and got_final
+                # Additional correctness check for arithmetic prompt: must contain '4'
+                assert "4" in final_text, f"expected '4' in final text, got: {final_text!r}"
     finally:
         _cleanup(tmp)

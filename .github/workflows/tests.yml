@@ -1,5 +1,8 @@
 name: tests
 
+# Note: This is a quick subset runner. It does NOT replace the main CI.
+# POLICY: No LLM stubs here either; use real keys from Secrets if present.
+
 on:
   push:
     branches: [ main ]
@@ -22,8 +25,11 @@ jobs:
           python -m playwright install --with-deps chromium
       - name: Run tests (unit subset)
         env:
-          CEDARPY_TEST_MODE: "1"
           PYTHONPATH: .
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CEDARPY_OPENAI_API_KEY: ${{ secrets.CEDARPY_OPENAI_API_KEY }}
+          CEDARPY_TEST_LLM_READY: "1"
         run: |
           # Run a stable subset on ubuntu (exclude playwright/qt/ws-heavy tests; those run in main CI on proper runners)
+          # Do NOT cut tests in main CI. This is only a subset for quick feedback.
           pytest -q -k "not playwright and not ws and not websockets and not qt" --maxfail=1 --disable-warnings --cache-clear

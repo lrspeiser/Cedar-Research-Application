@@ -5994,9 +5994,14 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
                 messages.append({"role": "user", "content": "Please respond with ONE function call in strict JSON."})
                 continue
 
+            # Initialize defaults so downstream references are always bound
+            name = None
+            args = {}
+            call_obj = {}
             for call in calls:
                 name = str((call.get('function') or '')).strip().lower()
                 args = call.get('args') or {}
+                call_obj = call
                 if name == 'plan':
                     _send_info('plan')
                     # Persist plan
@@ -6017,47 +6022,47 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
                         pass
                     # Ask to proceed with the first step
                     messages.append({"role": "user", "content": "Proceed with the first step now. Respond with ONE function call in strict JSON only."})
-                    break  # go to next LLM turn
+                    break  # finish handling this turn; go evaluate name/args
             if name in ('final', 'question'):
                 if name == 'final':
-                    final_text = str((args or {}).get('text') or call.get('output_to_user') or '').strip() or 'Done.'
+                    final_text = str((args or {}).get('text') or call_obj.get('output_to_user') or '').strip() or 'Done.'
                     try:
                         session_title = str((args or {}).get('title') or '').strip() or None
                     except Exception:
                         session_title = session_title or None
                 else:
-                    question_text = str((args or {}).get('text') or call.get('output_to_user') or '').strip() or 'I have a question for you.'
+                    question_text = str((args or {}).get('text') or call_obj.get('output_to_user') or '').strip() or 'I have a question for you.'
                 break
-                # Execute tool
-                _send_info(f"tool:{name}")
+            # Execute tool (only if not final/question)
+            _send_info(f"tool:{name}")
+            try:
+                await websocket.send_text(json.dumps({"type": "action", "function": name, "args": args or {}}))
+            except Exception:
+                pass
+            fn = tools_map.get(name)
+            try:
+                result = fn(args) if fn else {"ok": False, "error": f"unknown tool: {name}"}
+            except Exception as e:
                 try:
-                    await websocket.send_text(json.dumps({"type": "action", "function": name, "args": args or {}}))
+                    print(f"[ws-chat-tool-error] {name}: {type(e).__name__}: {e}")
                 except Exception:
                     pass
-                fn = tools_map.get(name)
-                try:
-                    result = fn(args) if fn else {"ok": False, "error": f"unknown tool: {name}"}
-                except Exception as e:
-                    try:
-                        print(f"[ws-chat-tool-error] {name}: {type(e).__name__}: {e}")
-                    except Exception:
-                        pass
-                    result = {"ok": False, "error": f"{type(e).__name__}: {e}"}
-                # Persist tool result
-                dbt = SessionLocal()
-                try:
-                    payload = {"function": name, "args": args, "result": result}
-                    dbt.add(ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="assistant", display_title=f"Tool: {name}", content=json.dumps(payload, ensure_ascii=False), payload_json=payload))
-                    dbt.commit()
-                except Exception:
-                    try: dbt.rollback()
-                    except Exception: pass
-                finally:
-                    try: dbt.close()
-                    except Exception: pass
-                # Feed result back to LLM
-                messages.append({"role": "user", "content": "ToolResult:"})
-                messages.append({"role": "user", "content": json.dumps({"function": name, "result": result}, ensure_ascii=False)})
+                result = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+            # Persist tool result
+            dbt = SessionLocal()
+            try:
+                payload = {"function": name, "args": args, "result": result}
+                dbt.add(ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="assistant", display_title=f"Tool: {name}", content=json.dumps(payload, ensure_ascii=False), payload_json=payload))
+                dbt.commit()
+            except Exception:
+                try: dbt.rollback()
+                except Exception: pass
+            finally:
+                try: dbt.close()
+                except Exception: pass
+            # Feed result back to LLM
+            messages.append({"role": "user", "content": "ToolResult:"})
+            messages.append({"role": "user", "content": json.dumps({"function": name, "result": result}, ensure_ascii=False)})
             if final_text or question_text:
                 break
     except Exception as e:

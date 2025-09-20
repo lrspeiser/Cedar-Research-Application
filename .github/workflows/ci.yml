@@ -1,5 +1,11 @@
 name: CI
 
+# POLICY: No stubs in CI for LLM functionality.
+# - We DO NOT set CEDARPY_TEST_MODE here.
+# - We DO set CEDARPY_TEST_LLM_READY=1 so LLM-dependent tests run against real APIs using GitHub Secrets.
+# - Do NOT re-introduce broad -k filters that drop major suites; only exclude Playwright/Qt where runners lack runtime.
+# See README (LLM classification on file upload) for key setup and notes.
+
 on:
   push:
   pull_request:
@@ -168,20 +174,21 @@ jobs:
           PYTHONPATH: .
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CEDARPY_OPENAI_API_KEY: ${{ secrets.CEDARPY_OPENAI_API_KEY }}
-          CEDARPY_TEST_MODE: "1"
+          CEDARPY_TEST_LLM_READY: "1"  # real LLM in CI; no stubs
         shell: bash
         run: |
           mkdir -p reports coverage htmlcov
           set -o pipefail
           echo "PYTHONPATH=$PYTHONPATH" | tee run-env.txt
           echo "OPENAI_API_KEY=${OPENAI_API_KEY:+***set***}" | tee -a run-env.txt
+          # Do NOT cut tests: run everything except Playwright/Qt due to runner constraints
           pytest -vv \
             --maxfail=1 \
             --durations=25 \
             --log-cli-level=INFO --log-file=pytest.log \
             --junitxml=reports/junit.xml -o junit_family=xunit2 \
             --cov=cedarpy --cov-report=xml:coverage/coverage.xml --cov-report=term-missing \
-            -k "not playwright and not ws and not websockets" \
+            -k "not playwright and not qt" \
             2> pytest-stderr.txt | tee pytest-stdout.txt
           STATUS=${PIPESTATUS[0]}
           if [[ $STATUS -eq 0 ]]; then
@@ -276,7 +283,7 @@ DURATION=$(awk '/collected .* in [0-9.]+s/ {for(i=1;i<=NF;i++) if ($i ~ /^[0-9.]
           PYTHONPATH: .
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CEDARPY_OPENAI_API_KEY: ${{ secrets.CEDARPY_OPENAI_API_KEY }}
-          CEDARPY_TEST_MODE: "1"
+          CEDARPY_TEST_LLM_READY: "1"  # real LLM in CI; no stubs
         shell: bash
         run: |
           mkdir -p reports coverage htmlcov
@@ -422,7 +429,7 @@ DURATION=$(awk '/collected .* in [0-9.]+s/ {for(i=1;i<=NF;i++) if ($i ~ /^[0-9.]
           PYTHONPATH: .
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CEDARPY_OPENAI_API_KEY: ${{ secrets.CEDARPY_OPENAI_API_KEY }}
-          CEDARPY_TEST_MODE: "1"
+          CEDARPY_TEST_LLM_READY: "1"  # real LLM in CI; no stubs
         shell: bash
         run: |
           mkdir -p reports coverage htmlcov
