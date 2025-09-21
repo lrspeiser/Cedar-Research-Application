@@ -2383,7 +2383,7 @@ SELECT * FROM demo LIMIT 10;""")
           try {
             var detIdP = 'det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
             var wrapP = document.createElement('div'); wrapP.className = 'msg assistant';
-            var metaP = document.createElement('div'); metaP.className = 'meta small'; metaP.innerHTML = "<span class='pill'>assistant</span> <span class='title' style='font-weight:600'>Assistant Prompt</span>";
+            var metaP = document.createElement('div'); metaP.className = 'meta small'; metaP.innerHTML = "<span class='pill'>assistant</span> <span class='title' style='font-weight:600'>Assistant</span>";
             var bubP = document.createElement('div'); bubP.className = 'bubble assistant'; bubP.setAttribute('data-details-id', detIdP);
             var contP = document.createElement('div'); contP.className='content'; contP.style.whiteSpace='pre-wrap';
             try { contP.textContent = 'Prepared LLM prompt (click to view JSON).'; } catch(_){}
@@ -2499,9 +2499,11 @@ SELECT * FROM demo LIMIT 10;""")
         var msgsEl = document.getElementById('msgs');
         if (msgsEl) {
           msgsEl.addEventListener('click', function(ev){
-            var b = ev.target && ev.target.closest ? ev.target.closest('.bubble') : null;
-            if (!b) return;
-            var did = b.getAttribute('data-details-id');
+            var root = ev.target && ev.target.closest ? ev.target.closest('.msg') : null;
+            if (!root) return;
+            var bubble = root.querySelector('.bubble[data-details-id]');
+            if (!bubble) return;
+            var did = bubble.getAttribute('data-details-id');
             if (!did) return;
             var el = document.getElementById(did);
             if (el) { el.style.display = (el.style.display==='none'?'block':'none'); }
