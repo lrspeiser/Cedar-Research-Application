@@ -2065,6 +2065,9 @@ def project_page_html(
     except Exception:
         plan_card_html = ""
 
+    # Build plan panel content (fallback when no plan yet)
+    plan_panel_html = plan_card_html or "<div class='card' style='padding:12px'><h3>Plan</h3><div class='muted small'>(No plan yet)</div></div>"
+
     # threads table
     thread_rows = []
     for t in threads:
@@ -2807,33 +2810,48 @@ SELECT * FROM demo LIMIT 10;""")
           </div>
 
           <div class="pane right">
-          {plan_card_html}
-          <div class="card" style="max-height:220px; overflow:auto; padding:12px">
-            <h3 style='margin-bottom:6px'>Files</h3>
-            {file_list_html}
-          </div>
-          <div style="height:8px"></div>
-          <div class="card" style='padding:12px'>
-            <h3 style='margin-bottom:6px'>Upload</h3>
-            <form method="post" action="/project/{project.id}/files/upload?branch_id={current.id}" enctype="multipart/form-data" data-testid="upload-form">
-              <input type="file" name="file" required data-testid="upload-input" />
-              <div style="height:6px"></div>
-              
-              <div style="height:6px"></div>
-              <button type="submit" data-testid="upload-submit">Upload</button>
-            </form>
-          </div>
-          <div style="height:8px"></div>
-          {sql_card}
-          <div style="height:8px"></div>
-          <div class="card" style="padding:12px">
-            <h3>Databases</h3>
-            <table class="table">
-              <thead><tr><th>Name</th><th>Branch</th><th>Created</th></tr></thead>
-              <tbody>{dataset_tbody}</tbody>
-            </table>
-          </div>
-        </div>
+            <div class="tabs" data-pane="right">
+              <a href="#" class="tab active" data-target="right-plan">Plan</a>
+              <a href="#" class="tab" data-target="right-files">Files</a>
+              <a href="#" class="tab" data-target="right-upload">Upload</a>
+              <a href="#" class="tab" data-target="right-sql">SQL</a>
+              <a href="#" class="tab" data-target="right-dbs">Databases</a>
+            </div>
+            <div class="tab-panels">
+              <div id="right-plan" class="panel">
+                {plan_panel_html}
+              </div>
+              <div id="right-files" class="panel hidden">
+                <div class="card" style="max-height:220px; overflow:auto; padding:12px">
+                  <h3 style='margin-bottom:6px'>Files</h3>
+                  {file_list_html}
+                </div>
+              </div>
+              <div id="right-upload" class="panel hidden">
+                <div class="card" style='padding:12px'>
+                  <h3 style='margin-bottom:6px'>Upload</h3>
+                  <form method="post" action="/project/{project.id}/files/upload?branch_id={current.id}" enctype="multipart/form-data" data-testid="upload-form">
+                    <input type="file" name="file" required data-testid="upload-input" />
+                    <div style="height:6px"></div>
+                    <div style="height:6px"></div>
+                    <button type="submit" data-testid="upload-submit">Upload</button>
+                  </form>
+                </div>
+              </div>
+              <div id="right-sql" class="panel hidden">
+                {sql_card}
+              </div>
+              <div id="right-dbs" class="panel hidden">
+                <div class="card" style="padding:12px">
+                  <h3>Databases</h3>
+                  <table class="table">
+                    <thead><tr><th>Name</th><th>Branch</th><th>Created</th></tr></thead>
+                    <tbody>{dataset_tbody}</tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div
       </div>
     </div>
 
