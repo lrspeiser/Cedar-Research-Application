@@ -2399,6 +2399,12 @@ SELECT * FROM demo LIMIT 10;""")
             var detailsP = document.createElement('div'); detailsP.id = detIdP; detailsP.style.display='none';
             var preP = document.createElement('pre'); preP.className='small'; preP.style.whiteSpace='pre-wrap'; preP.style.background='#f8fafc'; preP.style.padding='8px'; preP.style.borderRadius='6px';
             try { preP.textContent = JSON.stringify(m.messages || [], null, 2); } catch(_){ preP.textContent = String(m.messages || ''); }
+            // Action bar for details: Copy JSON
+            var barP = document.createElement('div'); barP.className='small'; barP.style.margin='6px 0 8px 0';
+            var copyBtnP = document.createElement('button'); copyBtnP.textContent='Copy JSON'; copyBtnP.className='secondary';
+            copyBtnP.addEventListener('click', function(){ try { navigator.clipboard.writeText(preP.textContent); } catch(_){} });
+            barP.appendChild(copyBtnP);
+            detailsP.appendChild(barP);
             detailsP.appendChild(preP);
             wrapP.appendChild(metaP); wrapP.appendChild(bubP); wrapP.appendChild(detailsP);
             if (msgs) msgs.appendChild(wrapP);
@@ -2472,10 +2478,26 @@ SELECT * FROM demo LIMIT 10;""")
                     var bar = document.createElement('div'); bar.style.marginTop='8px';
                     var runBtn = document.createElement('button'); runBtn.textContent='Run with edited prompt';
                     var cancelBtn = document.createElement('button'); cancelBtn.textContent='Cancel'; cancelBtn.className='secondary'; cancelBtn.style.marginLeft='8px';
-                    bar.appendChild(runBtn); bar.appendChild(cancelBtn); pane.appendChild(bar);
+                    var copyBtnM = document.createElement('button'); copyBtnM.textContent='Copy JSON'; copyBtnM.className='secondary'; copyBtnM.style.marginLeft='8px';
+                    var restoreBtn = document.createElement('button'); restoreBtn.textContent='Restore default'; restoreBtn.className='secondary'; restoreBtn.style.marginLeft='8px';
+                    bar.appendChild(runBtn); bar.appendChild(cancelBtn); bar.appendChild(copyBtnM); bar.appendChild(restoreBtn); pane.appendChild(bar);
+                    // Schema hint
+                    var hint = document.createElement('pre'); hint.className='small'; hint.style.whiteSpace='pre-wrap'; hint.style.background='#f8fafc'; hint.style.padding='8px'; hint.style.borderRadius='6px'; hint.style.marginTop='8px';
+                    hint.textContent = [
+                      'Messages JSON schema (simplified):',
+                      '[',
+                      '  { "role": "system|user|assistant", "content": "string" },',
+                      '  ...',
+                      ']',
+                      'You may add multiple user entries (Resources/History/Context/examples) followed by the current user message.'
+                    ].join('\n');
+                    pane.appendChild(hint);
                     overlay.appendChild(pane);
                     document.body.appendChild(overlay);
                     cancelBtn.addEventListener('click', function(){ try { overlay.remove(); } catch(_){} });
+                    copyBtnM.addEventListener('click', function(){ try { navigator.clipboard.writeText(ta.value||''); } catch(_){} });
+                    var _orig = null; try { _orig = JSON.stringify(last, null, 2); } catch(_) { _orig = '[]'; }
+                    restoreBtn.addEventListener('click', function(){ try { ta.value = _orig; } catch(_){} });
                     runBtn.addEventListener('click', function(){
                       try {
                         var txt = document.getElementById('promptEditArea').value || '[]';
@@ -2499,6 +2521,12 @@ SELECT * FROM demo LIMIT 10;""")
               var detailsF = document.createElement('div'); detailsF.id = detIdF; detailsF.style.display='none';
               var preF = document.createElement('pre'); preF.className='small'; preF.style.whiteSpace='pre-wrap'; preF.style.background='#f8fafc'; preF.style.padding='8px'; preF.style.borderRadius='6px';
               try { preF.textContent = JSON.stringify(m.json, null, 2); } catch(_){ preF.textContent = String(m.json); }
+              // Action bar for details: Copy JSON
+              var barF = document.createElement('div'); barF.className='small'; barF.style.margin='6px 0 8px 0';
+              var copyBtnF = document.createElement('button'); copyBtnF.textContent='Copy JSON'; copyBtnF.className='secondary';
+              copyBtnF.addEventListener('click', function(){ try { navigator.clipboard.writeText(preF.textContent); } catch(_){} });
+              barF.appendChild(copyBtnF);
+              detailsF.appendChild(barF);
               detailsF.appendChild(preF);
               wrapF.appendChild(detailsF);
             }
