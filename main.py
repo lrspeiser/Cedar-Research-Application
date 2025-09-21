@@ -1411,14 +1411,13 @@ def layout(title: str, body: str, header_label: Optional[str] = None, header_lin
         f"<a href='/'>&#8203;Projects</a> | "
         f"<a href='/shell{nav_qs}'>Shell</a> | "
         f"<a href='/merge{nav_qs}'>Merge</a> | "
-        f"<a href='/threads{nav_qs}'>Threads</a> | "
         f"<a href='/changelog{nav_qs}'>Changelog</a> | "
         f"<a href='/log{nav_qs}'>Log</a> | "
         f"<a href='/settings'>Settings</a>"
     )
 
     # Client logging hook (console/errors -> /api/client-log)
-  client_log_js = """
+    client_log_js = """
 <script>
 (function(){
   if (window.__cedarpyClientLogInitialized) return; window.__cedarpyClientLogInitialized = true;
@@ -1513,6 +1512,35 @@ def layout(title: str, body: str, header_label: Optional[str] = None, header_lin
     @media (max-width: 900px) {{ .two-col {{ grid-template-columns: 1fr; }} }}
   </style>
   {client_log_js}
+  <script>
+  (function(){{
+    function activateTab(tab) {{
+      try {{
+        var pane = tab.closest('.pane') || document;
+        var tabs = tab.parentElement.querySelectorAll('.tab');
+        tabs.forEach(function(t){{ t.classList.remove('active'); }});
+        tab.classList.add('active');
+        var target = tab.getAttribute('data-target');
+        if (!target) return;
+        var panelsRoot = pane.querySelector('.tab-panels');
+        if (!panelsRoot) return;
+        panelsRoot.querySelectorAll('.panel').forEach(function(p){{ p.classList.add('hidden'); }});
+        var el = pane.querySelector('#' + target);
+        if (el) el.classList.remove('hidden');
+      }} catch(e) {{ try {{ console.error('[ui] tab error', e); }} catch(_) {{}} }}
+    }}
+    function initTabs(){{
+      document.querySelectorAll('.tabs .tab').forEach(function(tab){{
+        tab.addEventListener('click', function(ev){{ ev.preventDefault(); activateTab(tab); }});
+      }});
+    }}
+    if (document.readyState === 'loading') {{
+      document.addEventListener('DOMContentLoaded', initTabs, {{ once: true }});
+    }} else {{
+      initTabs();
+    }}
+  }})();
+  </script>
 </head>
 <body>
   <header>
@@ -2080,6 +2108,7 @@ def project_page_html(
     thread_messages: Optional[List[ThreadMessage]] = None,
     msg: Optional[str] = None,
     sql_result_block: Optional[str] = None,
+    last_msgs_map: Optional[Dict[int, List[ThreadMessage]]] = None,
 ) -> str:
     # See PROJECT_SEPARATION_README.md
     # branch tabs
@@ -2321,6 +2350,63 @@ SELECT * FROM demo LIMIT 10;""")
         cls = "tab active" if (selected_thread and t.id == selected_thread.id) else "tab"
         thr_tabs.append(f"<a href='/project/{project.id}?branch_id={current.id}" + (f"&file_id={selected_file.id}" if selected_file else "") + f"&thread_id={t.id}' class='{cls}'>{escape(t.title)}</a>")
     thr_tabs_html = " ".join(thr_tabs) + f" <a href='/project/{project.id}/threads/new?branch_id={current.id}" + (f"&dataset_id={selected_dataset.id}" if selected_dataset else (f"&file_id={selected_file.id}" if selected_file else "")) + "' class='tab new thread-create' title='New Thread'>+</a>"
+
+    # Build "All Chats" list panel (thread previews)
+    all_chats_items = []
+    try:
+        lm = last_msgs_map or {}
+        for t in threads:
+            try:
+                previews = lm.get(t.id) or []
+            except Exception:
+                previews = []
+            # Render up to 3 small bubbles as a preview
+            bub_html_parts = []
+            idxp = 0
+            for m in previews[-3:]:
+                idxp += 1
+                try:
+                    role_raw = (getattr(m, 'role', '') or '').strip().lower()
+                    role_css = 'user' if role_raw == 'user' else ('assistant' if role_raw == 'assistant' else 'system')
+                except Exception:
+                    role_css = 'assistant'
+                try:
+                    txt = (getattr(m, 'content', '') or '')
+                    # Prefer display_title when present
+                    title_txt = getattr(m, 'display_title', None)
+                    if title_txt:
+                        txt = f"{title_txt}: " + txt
+                    preview = (txt[:140] + ('…' if len(txt) > 140 else ''))
+                except Exception:
+                    preview = ''
+                bub_html_parts.append(
+                    f"<div class='bubble {role_css}' style='font-size:12px; padding:6px 8px; border-radius:12px; max-width:360px;'><div class='content' style='white-space:pre-wrap'>{escape(preview)}</div></div>"
+                )
+            bub_html = "".join(bub_html_parts) or "<div class='muted small'>(No messages)</div>"
+            branch_name = ''
+            try:
+                branch_name = t.branch.name if t.branch else ''
+            except Exception:
+                branch_name = ''
+            active_style = " style='background:#eef2ff'" if (selected_thread and t.id == selected_thread.id) else ""
+            link = f"/project/{project.id}?branch_id={current.id}&thread_id={t.id}"
+            all_chats_items.append(
+                f"<div class='thread-item' style='border-bottom:1px solid var(--border); padding:10px 0'{active_style}>"
+                f"  <div style='display:flex; align-items:center; gap:8px; justify-content:space-between'>"
+                f"    <div style='font-weight:600'><a href='{link}' style='text-decoration:none; color:inherit'>{escape(t.title)}</a></div>"
+                f"    <div class='small muted'>{escape(branch_name)}</div>"
+                f"  </div>"
+                f"  <div class='bubbles' style='display:flex; gap:6px; flex-wrap:wrap; margin-top:6px'>{bub_html}</div>"
+                f"</div>"
+            )
+    except Exception:
+        pass
+    all_chats_panel_html = (
+        "<div class='card' style='padding:12px'>"
+        "  <h3 style='margin-bottom:6px'>All Chats</h3>"
+        + ("".join(all_chats_items) or "<div class='muted small'>(No threads yet)</div>")
+        + "</div>"
+    )
 
     # Render thread messages
     msgs = thread_messages or []
@@ -2955,6 +3041,7 @@ SELECT * FROM demo LIMIT 10;""")
           <div class="pane" style="display:flex; flex-direction:column; min-height:0">
             <div class="tabs" data-pane="left">
               <a href="#" class="tab active" data-target="left-chat">Chat</a>
+              <a href="#" class="tab" data-target="left-allchats">All Chats</a>
             </div>
             <div class="tab-panels" style="flex:1; min-height:0">
               <div id="left-chat" class="panel">
@@ -2984,8 +3071,11 @@ SELECT * FROM demo LIMIT 10;""")
                 {script_js}
                 { ("<div class='card' style='margin-top:8px; padding:12px'><h3>File Details</h3>" + left_details + "</div>") if selected_file else "" }
               </div>
+              <div id="left-allchats" class="panel hidden">
+                {all_chats_panel_html}
+              </div>
             </div>
-          </div>
+          </div
 
           <div class="pane right">
             <div class="tabs" data-pane="right">
@@ -3029,7 +3119,7 @@ SELECT * FROM demo LIMIT 10;""")
                 </div>
               </div>
             </div>
-          </div
+          </div>
       </div>
     </div>
 
@@ -5364,7 +5454,38 @@ def view_project(project_id: int, branch_id: Optional[int] = None, msg: Optional
     except Exception:
         selected_thread = None
 
-    return layout(project.title, project_page_html(project, branches, current, files, threads, datasets, selected_file=selected_file, selected_dataset=selected_dataset, selected_thread=selected_thread, thread_messages=thread_messages, msg=msg), header_label=project.title, header_link=f"/project/{project.id}?branch_id={current.id}", nav_query=f"project_id={project.id}&branch_id={current.id}")
+    # Build per-thread recent messages for the All Chats panel (last 3 messages each)
+    last_msgs_map: Dict[int, List[ThreadMessage]] = {}
+    try:
+        for t in threads:
+            try:
+                recs = db.query(ThreadMessage).filter(ThreadMessage.project_id == project.id, ThreadMessage.thread_id == t.id).order_by(ThreadMessage.created_at.desc()).limit(3).all()
+                last_msgs_map[t.id] = list(reversed(recs))
+            except Exception:
+                last_msgs_map[t.id] = []
+    except Exception:
+        last_msgs_map = {}
+
+    return layout(
+        project.title,
+        project_page_html(
+            project,
+            branches,
+            current,
+            files,
+            threads,
+            datasets,
+            selected_file=selected_file,
+            selected_dataset=selected_dataset,
+            selected_thread=selected_thread,
+            thread_messages=thread_messages,
+            msg=msg,
+            last_msgs_map=last_msgs_map,
+        ),
+        header_label=project.title,
+        header_link=f"/project/{project.id}?branch_id={current.id}",
+        nav_query=f"project_id={project.id}&branch_id={current.id}"
+    )
 
 
 @app.post("/project/{project_id}/branches/create")

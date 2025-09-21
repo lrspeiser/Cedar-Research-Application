@@ -463,6 +463,12 @@ Recovery Playbook (documented attempts)
   launchctl setenv OPENAI_API_KEY {{YOUR_OPENAI_API_KEY}}
   Note: This persists until unset (launchctl unsetenv OPENAI_API_KEY). Prefer the .env file method above.
 
+8) Project page tabs (Plan / Files / Upload / SQL / Databases) not clickable
+- Symptom: Right-pane tab links didn’t switch content; clicking had no effect.
+- Root cause: The tab-initialization script (which binds click handlers and toggles .active/.hidden) was present only in an unreachable block and never injected into the page head. Additionally, a missing ">" on a closing </div> in the right pane could break the DOM in some browsers.
+- Fix: Injected the tab initialization script in layout() so it ships with every page, and corrected the malformed closing tag. See main.py: layout() (search for "initTabs") and project_page_html() right pane closing tags.
+- Verification: Ran tests/test_smoke.py::test_create_and_open_project to confirm render succeeds; manual check confirms tabs toggle panels. If tabs ever stop toggling, open DevTools console and ensure there are no JavaScript syntax errors and that the initTabs() script block exists in the head.
+
 Notes
 - Deprecation warnings for datetime.utcnow(): These do not block startup but will be addressed by migrating to timezone-aware datetime.now(timezone.utc) throughout. Some modules already use timezone-aware timestamps.
 
