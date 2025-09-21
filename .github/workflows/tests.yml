@@ -29,7 +29,11 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CEDARPY_OPENAI_API_KEY: ${{ secrets.CEDARPY_OPENAI_API_KEY }}
           CEDARPY_TEST_LLM_READY: "1"
+          CEDARPY_DATA_DIR: ${{ runner.temp }}/CedarPyData  # ensure writable registry/files on CI runners
+          CEDARPY_DATABASE_URL: sqlite:///${{ runner.temp }}/CedarPyData/cedarpy-registry.db
         run: |
+          # Ensure data dir exists explicitly (defensive)
+          mkdir -p "$RUNNER_TEMP/CedarPyData"
           # Run a stable subset on ubuntu (exclude playwright/qt/ws-heavy tests; those run in main CI on proper runners)
           # Do NOT cut tests in main CI. This is only a subset for quick feedback.
           pytest -q -k "not playwright and not ws and not websockets and not qt" --maxfail=1 --disable-warnings --cache-clear
