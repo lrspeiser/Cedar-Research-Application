@@ -1814,6 +1814,11 @@ def _is_trivial_math(msg: str) -> bool:
             var name = f ? f.name : '(none)';
             var size = f ? String(f.size) : '';
             console.log('[ui] file selected', name, size);
+            // Auto-open the right Upload tab so the submit stays visible/testable
+            try {
+              var upTab = document.querySelector(".tabs[data-pane='right'] .tab[data-target='right-upload']");
+              if (upTab) { upTab.click(); }
+            } catch(_) {}
           } catch(e) { console.error('[ui] file select error', e); }
         });
       }
@@ -2882,7 +2887,7 @@ SELECT * FROM demo LIMIT 10;""")
             <div class="tabs" data-pane="right">
               <a href="#" class="tab active" data-target="right-plan">Plan</a>
               <a href="#" class="tab" data-target="right-files">Files</a>
-              <a href="#" class="tab" data-target="right-upload">Upload</a>
+              <a href=\"#\" class=\"tab\" data-target=\"right-upload\" data-testid=\"open-uploader\">Upload</a>
               <a href="#" class="tab" data-target="right-sql">SQL</a>
               <a href="#" class="tab" data-target="right-dbs">Databases</a>
             </div>
