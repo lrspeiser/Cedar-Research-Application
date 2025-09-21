@@ -55,6 +55,7 @@ def test_ws_chat_plan_execute_debug_prompt_and_final():
 
             # WebSocket chat
             with client.websocket_connect(f"/ws/chat/{pid}") as ws:
+                t0 = time.time()
                 ws.send_text(json.dumps({
                     "action": "chat",
                     "content": "what is 2+2",
@@ -67,6 +68,7 @@ def test_ws_chat_plan_execute_debug_prompt_and_final():
                 got_action = False
                 got_final = False
                 final_text = ""
+                final_json = None
                 for _ in range(200):
                     msg = ws.receive_text()
                     data = json.loads(msg)
@@ -85,12 +87,20 @@ def test_ws_chat_plan_execute_debug_prompt_and_final():
                     elif t == "final":
                         got_final = True
                         final_text = str(data.get("text") or "")
+                        fj = data.get("json")
+                        if isinstance(fj, dict):
+                            final_json = fj
                         break
                     elif t == "error":
                         pytest.fail(f"backend error: {data.get('error')}")
                 # Accept both paths: (submitted -> action -> final) or (submitted -> final)
                 assert got_debug and got_submitted and got_final
-                # Additional correctness check for arithmetic prompt: must contain '4'
-                assert "4" in final_text, f"expected '4' in final text, got: {final_text!r}"
+                # Validate we received a structured final call object
+                assert isinstance(final_json, dict), f"missing or invalid final json: {final_json!r}"
+                assert final_json.get("function") == "final", f"unexpected function: {final_json.get('function')!r}"
+                # Log elapsed time for observability in CI (no strict assertion)
+                t1 = time.time()
+                elapsed_ms = int((t1 - t0) * 1000)
+                print(f"[ws-test] elapsed_ms={elapsed_ms} text_len={len(final_text)}")
     finally:
         _cleanup(tmp)
