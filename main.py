@@ -1418,37 +1418,52 @@ def layout(title: str, body: str, header_label: Optional[str] = None, header_lin
     )
 
     # Client logging hook (console/errors -> /api/client-log)
-    client_log_js = """
+  client_log_js = """
 <script>
 (function(){
   if (window.__cedarpyClientLogInitialized) return; window.__cedarpyClientLogInitialized = true;
   const endpoint = '/api/client-log';
+  // Lightweight pub/sub for client logs so chat UI can mirror logs under the Processing line
+  window.__cedarLogSubscribers = window.__cedarLogSubscribers || [];
+  window.__cedarLogBuffer = window.__cedarLogBuffer || [];
+  function emitLog(payload){
+    try {
+      window.__cedarLogBuffer.push(payload);
+      if (window.__cedarLogBuffer.length > 2000) { window.__cedarLogBuffer.shift(); }
+      (window.__cedarLogSubscribers||[]).forEach(function(fn){ try { fn(payload); } catch(_){} });
+    } catch(_) {}
+  }
+  window.subscribeCedarLogs = function(fn){ try { (window.__cedarLogSubscribers||[]).push(fn); } catch(_){} };
+  window.unsubscribeCedarLogs = function(fn){ try { var a=window.__cedarLogSubscribers||[]; var i=a.indexOf(fn); if(i>=0) a.splice(i,1); } catch(_){} };
+
   function post(payload){
     try {
       const body = JSON.stringify(payload);
       if (navigator.sendBeacon) {
         const blob = new Blob([body], {type: 'application/json'});
         navigator.sendBeacon(endpoint, blob);
-        return;
+      } else {
+        fetch(endpoint, {method: 'POST', headers: {'Content-Type': 'application/json'}, body, keepalive: true}).catch(function(){});
       }
-      fetch(endpoint, {method: 'POST', headers: {'Content-Type': 'application/json'}, body, keepalive: true}).catch(function(){});
     } catch(e) {}
   }
   function base(level, message, origin, extra){
-    post(Object.assign({
+    var pl = Object.assign({
       when: new Date().toISOString(),
       level: String(level||'info'),
       message: String(message||''),
       url: String(location.href||''),
       userAgent: navigator.userAgent || '',
       origin: origin || 'console'
-    }, extra||{}));
+    }, extra||{});
+    post(pl);
+    emitLog(pl);
   }
   var orig = { log: console.log, info: console.info, warn: console.warn, error: console.error };
   console.log = function(){ try { base('info', Array.from(arguments).join(' '), 'console.log'); } catch(e){}; return orig.log.apply(console, arguments); };
   console.info = function(){ try { base('info', Array.from(arguments).join(' '), 'console.info'); } catch(e){}; return orig.info.apply(console, arguments); };
   console.warn = function(){ try { base('warn', Array.from(arguments).join(' '), 'console.warn'); } catch(e){}; return orig.warn.apply(console, arguments); };
-  console.error = function(){ try { base('error', Array.from(arguments).join(' '), 'console.error'); } catch(e){}; return orig.error.apply(console, arguments); };
+  console.error = function(){ try { base('error', Array.from(arguments).join(' '), 'console.error', { stack: (arguments && arguments[0] && arguments[0].stack) ? String(arguments[0].stack) : null }); } catch(e){}; return orig.error.apply(console, arguments); };
   window.addEventListener('error', function(ev){
     try { base('error', ev.message || 'window.onerror', 'window.onerror', { line: ev.lineno||null, column: ev.colno||null, stack: ev.error && ev.error.stack ? String(ev.error.stack) : null }); } catch(e){}
   }, true);
@@ -2489,6 +2504,15 @@ SELECT * FROM demo LIMIT 10;""")
       var pill = document.createElement('span'); pill.className = 'pill'; pill.textContent = 'assistant';
       var streamText = document.createElement('span');
       stream.appendChild(pill); stream.appendChild(document.createTextNode(' ')); stream.appendChild(streamText);
+      // Add a collapsible details area for streaming console logs under Processing
+      var procDetId = 'proc_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
+      stream.setAttribute('data-details-id', procDetId);
+      stream.style.cursor = 'pointer';
+      stream.title = 'Click to toggle processing details (logs)';
+      stream.addEventListener('click', function(){ try { var e=document.getElementById(procDetId); if(e){ e.style.display=(e.style.display==='none'?'block':'none'); } } catch(_){} });
+      var procDetails = document.createElement('div'); procDetails.id = procDetId; procDetails.style.display='none';
+      var procPre = document.createElement('pre'); procPre.className='small'; procPre.style.whiteSpace='pre-wrap'; procPre.style.background='#0b1021'; procPre.style.color='#e6e6e6'; procPre.style.padding='8px'; procPre.style.borderRadius='6px'; procPre.style.maxHeight='260px'; procPre.style.overflow='auto';
+      procDetails.appendChild(procPre);
       // Initial visible ACK to the user
       var spin = null;
       try {
@@ -2529,8 +2553,22 @@ SELECT * FROM demo LIMIT 10;""")
         });
         stream.appendChild(cancelBtn);
       } catch(_){ }
-      if (msgs) msgs.appendChild(stream);
+      if (msgs) { msgs.appendChild(stream); msgs.appendChild(procDetails); }
       stepAdvance('assistant:processing', stream);
+      // Subscribe to client console logs while this WS session is active
+      var logSub = function(pl){
+        try {
+          var line = '[' + (pl.level||'INFO') + '] ' + (pl.message||'');
+          var when = (pl.when||'').replace('T',' ').replace('Z','')
+          if (when) line = when + ' ' + line;
+          procPre.textContent += (procPre.textContent ? '\n' : '') + line;
+          // Trim lines to last 8000 chars to avoid runaway growth
+          if (procPre.textContent.length > 8000) {
+            procPre.textContent = procPre.textContent.slice(-8000);
+          }
+        } catch(_){}
+      };
+      try { if (window.subscribeCedarLogs) window.subscribeCedarLogs(logSub); } catch(_){}
 
       var lastW = null;
       var stagesSeen = {};
@@ -2797,10 +2835,19 @@ SELECT * FROM demo LIMIT 10;""")
           try { if (timeoutId) clearTimeout(timeoutId); } catch(_){}
           streamText.textContent = '[error] ' + (m.error || 'unknown');
           clearSpinner();
+          try {
+            // Also append a system bubble with error details for visibility in the thread
+            var wrapE = document.createElement('div'); wrapE.className = 'msg system';
+            var metaE = document.createElement('div'); metaE.className = 'meta small'; metaE.innerHTML = "<span class='pill'>system</span> <span class='title' style='font-weight:600'>error</span>";
+            var bubE = document.createElement('div'); bubE.className = 'bubble system';
+            var contE = document.createElement('div'); contE.className = 'content'; contE.style.whiteSpace = 'pre-wrap'; contE.textContent = String(m.error||'unknown');
+            bubE.appendChild(contE); wrapE.appendChild(metaE); wrapE.appendChild(bubE);
+            if (msgs) msgs.appendChild(wrapE);
+          } catch(_){}
         }
       };
       ws.onerror = function(){ try { streamText.textContent = (streamText.textContent||'') + ' [ws-error]'; } catch(_){} };
-      ws.onclose = function(){ try { if (currentStep && currentStep.node && !timedOut) { annotateTime(currentStep.node, _now() - currentStep.t0); currentStep = null; } if (!finalOrError && !timedOut) { streamText.textContent = (streamText.textContent||'') + ' [closed]'; } } catch(_){} };
+      ws.onclose = function(){ try { if (window.unsubscribeCedarLogs && logSub) window.unsubscribeCedarLogs(logSub); } catch(_){}; try { if (currentStep && currentStep.node && !timedOut) { annotateTime(currentStep.node, _now() - currentStep.t0); currentStep = null; } if (!finalOrError && !timedOut) { streamText.textContent = (streamText.textContent||'') + ' [closed]'; } } catch(_){} };
     } catch(e) {}
   }
   document.addEventListener('DOMContentLoaded', function(){
