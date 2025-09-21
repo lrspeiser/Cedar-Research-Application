@@ -25,6 +25,7 @@ from typing import Optional, List, Dict, Any, Tuple
 from collections import deque
 
 from fastapi import FastAPI, Request, UploadFile, File, Form, Depends, Header, HTTPException, Body, WebSocket, WebSocketDisconnect
+from starlette.websockets import WebSocketState
 from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -5673,6 +5674,30 @@ def thread_chat(project_id: int, request: Request, content: str = Form(...), thr
 # ----------------------------------------------------------------------------------
 # WebSocket chat streaming endpoint (word-by-word)
 # ----------------------------------------------------------------------------------
+async def _ws_send_safe(ws: WebSocket, text: str) -> bool:
+    try:
+        if getattr(ws, 'client_state', None) != WebSocketState.CONNECTED:
+            return False
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            # Outside of loop; fallback
+            pass
+        try:
+            # Attempt send; catch RuntimeError from closed/closing socket
+            import json as _json  # ensure json exists in scope used elsewhere
+        except Exception:
+            pass
+        try:
+            # starlette will raise RuntimeError if closing/closed
+            return bool((await ws.send_text(text)) or True)
+        except RuntimeError:
+            return False
+        except Exception:
+            return False
+    except Exception:
+        return False
+
 @app.websocket("/ws/chat/{project_id}")
 async def ws_chat_stream(websocket: WebSocket, project_id: int):
     await websocket.accept()
@@ -5690,7 +5715,7 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
         br_id = payload.get("branch_id")
         thr_id = payload.get("thread_id")
     except Exception:
-        await websocket.send_text(json.dumps({"type": "error", "error": "invalid payload"}))
+        await _ws_send_safe(websocket, json.dumps({"type": "error", "error": "invalid payload"}))
         await websocket.close(); return
 
     SessionLocal = sessionmaker(bind=_get_project_engine(project_id), autoflush=False, autocommit=False, future=True)
@@ -5722,7 +5747,7 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
 
     # Inform client that the request has been submitted
     try:
-        await websocket.send_text(json.dumps({"type": "info", "stage": "submitted"}))
+        await _ws_send_safe(websocket, json.dumps({"type": "info", "stage": "submitted"}))
         try:
             print("[ws-chat] submitted")
         except Exception:
@@ -5746,7 +5771,7 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
         finally:
             try: db2.close()
             except Exception: pass
-        await websocket.send_text(json.dumps({"type": "error", "error": "missing_key"}))
+        await _ws_send_safe(websocket, json.dumps({"type": "error", "error": "missing_key"}))
         await websocket.close(); return
 
     # Build context/resources/history using a fresh session
@@ -5904,7 +5929,7 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
             messages.append({"role": "user", "content": content})
         # Emit the prepared prompt so the UI can show an "assistant prompt" bubble with full JSON
         try:
-            await websocket.send_text(json.dumps({"type": "prompt", "messages": messages, "thread_id": thr.id}))
+            await _ws_send_safe(websocket, json.dumps({"type": "prompt", "messages": messages, "thread_id": thr.id}))
         except Exception:
             pass
     except Exception as e:
@@ -5914,7 +5939,7 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
         except Exception:
             pass
         try:
-            await websocket.send_text(json.dumps({"type": "error", "error": f"{type(e).__name__}: {e}"}))
+            await _ws_send_safe(websocket, json.dumps({"type": "error", "error": f"{type(e).__name__}: {e}"}))
         except Exception:
             pass
         try:
@@ -5931,7 +5956,7 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
     # Optional: emit debug prompt for testing
     try:
         if bool(payload.get('debug')):
-            await websocket.send_text(json.dumps({"type": "debug", "prompt": messages}))
+            await _ws_send_safe(websocket, json.dumps({"type": "debug", "prompt": messages}))
             try:
                 print("[ws-chat] debug-sent")
             except Exception:
@@ -5944,7 +5969,7 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
 
     # Orchestrated plan/execute loop (non-streaming JSON)
     try:
-        await websocket.send_text(json.dumps({"type": "info", "stage": "planning"}))
+        await _ws_send_safe(websocket, json.dumps({"type": "info", "stage": "planning"}))
         try:
             print("[ws-chat] planning-sent")
         except Exception:
@@ -5960,7 +5985,7 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
 
     def _send_info(label: str):
         try:
-            return asyncio.create_task(websocket.send_text(json.dumps({"type": "info", "stage": label})))
+            return asyncio.create_task(_ws_send_safe(websocket, json.dumps({"type": "info", "stage": label})))
         except Exception:
             return None
 
@@ -6174,7 +6199,16 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
             try:
                 if (_time.time() - t0) > timeout_s:
                     try:
-                        await websocket.send_text(json.dumps({"type": "info", "stage": "timeout"}))
+                        await _ws_send_safe(websocket, json.dumps({"type": "info", "stage": "timeout"}))
+                    except Exception:
+                        pass
+                    # Provide a final assistant-style message so UI/test can click the Assistant bubble even on timeout
+                    try:
+                        final_text_local = "timeout (LLM exceeded 90s). Please retry."
+                        # Set globals used later to emit a 'final' bubble
+                        nonlocal final_text, final_call_obj
+                        final_text = final_text_local
+                        final_call_obj = {"function": "final", "args": {"text": final_text_local, "title": "Assistant"}}
                     except Exception:
                         pass
                     timed_out = True
@@ -6277,7 +6311,7 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
             # Execute tool (only if not final/question)
             _send_info(f"tool:{name}")
             try:
-                await websocket.send_text(json.dumps({
+                await _ws_send_safe(websocket, json.dumps({
                     "type": "action",
                     "function": name,
                     "text": str((call_obj or {}).get("output_to_user") or f"About to run {name}"),
@@ -6317,7 +6351,7 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
         except Exception:
             pass
         try:
-            await websocket.send_text(json.dumps({"type": "error", "error": f"{type(e).__name__}: {e}"}))
+            await _ws_send_safe(websocket, json.dumps({"type": "error", "error": f"{type(e).__name__}: {e}"}))
         except Exception:
             pass
         try:
@@ -6343,7 +6377,7 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
                 # Suppress noisy 'final-forced' from user UI; emit only when debug=true in payload
                 try:
                     if bool(payload.get('debug')):
-                        await websocket.send_text(json.dumps({"type": "info", "stage": "final-forced"}))
+                        await _ws_send_safe(websocket, json.dumps({"type": "info", "stage": "final-forced"}))
                 except Exception:
                     pass
         except Exception:
@@ -6351,7 +6385,7 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
 
     # Finalize
     try:
-        await websocket.send_text(json.dumps({"type": "info", "stage": "finalizing"}))
+        await _ws_send_safe(websocket, json.dumps({"type": "info", "stage": "finalizing"}))
     except Exception:
         pass
 
@@ -6381,10 +6415,10 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
 
     if final_text:
         # Emit the final message along with the final function-call JSON for UI details
-        await websocket.send_text(json.dumps({"type": "final", "text": final_text, "json": final_call_obj}))
+        await _ws_send_safe(websocket, json.dumps({"type": "final", "text": final_text, "json": final_call_obj}))
     elif question_text:
         # For questions, continue to use 'final' type for compatibility with existing tests/clients
-        await websocket.send_text(json.dumps({"type": "final", "text": question_text, "json": final_call_obj}))
+        await _ws_send_safe(websocket, json.dumps({"type": "final", "text": question_text, "json": final_call_obj}))
     # Hide 'persisted' from UI (no-op stage)
     try:
         await websocket.close()
