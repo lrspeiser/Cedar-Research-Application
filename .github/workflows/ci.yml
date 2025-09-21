@@ -381,6 +381,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CEDARPY_OPENAI_API_KEY: ${{ secrets.CEDARPY_OPENAI_API_KEY }}
           CEDARPY_TEST_LLM_READY: "1"
+          CEDARPY_TEST_MODE: "0"  # Force real LLM (no stubs). See README: "CI test mode (deterministic LLM stubs)".
         shell: bash
         run: |
           mkdir -p reports coverage htmlcov
@@ -474,6 +475,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CEDARPY_OPENAI_API_KEY: ${{ secrets.CEDARPY_OPENAI_API_KEY }}
           CEDARPY_TEST_LLM_READY: "1"  # real LLM in CI; no stubs
+          CEDARPY_TEST_MODE: "0"       # Force real LLM (no stubs). See README: "CI test mode (deterministic LLM stubs)".
         shell: bash
         run: |
           mkdir -p reports coverage htmlcov
