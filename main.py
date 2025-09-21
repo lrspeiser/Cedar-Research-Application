@@ -2805,12 +2805,17 @@ SELECT * FROM demo LIMIT 10;""")
                 if (paneU) {
                   var callU = m.call || {};
                   var stepsU = Array.isArray(callU.steps) ? callU.steps : [];
-                  var rowsU = stepsU.map(function(st){
+                  var rowsU = stepsU.map(function(st, idx){
                     try {
                       var f = String((st && st.function) || '');
                       var ti = String((st && st.title) || '');
                       var stStatus = String((st && st.status) || 'in queue');
-                      return "<tr><td class='small'>"+f+"</td><td>"+ti+"</td><td class='small muted'>"+stStatus+"</td></tr>";
+                      var desc = String((st && st.description) || '');
+                      var goal = String((st && st.goal_outcome) || '');
+                      var args = st && st.args ? JSON.stringify(st.args) : '{}';
+                      var did = 'plan_det_' + idx + '_' + Math.random().toString(36).slice(2,6);
+                      return "<tr class='plan-row' data-det-id='"+did+"'><td class='small'>"+f+"</td><td>"+ti+"</td><td class='small muted'>"+stStatus+"</td></tr>"+
+                             "<tr id='"+did+"' class='plan-detail' style='display:none'><td colspan='3'><div class='small'><b>Description:</b> "+desc+"<br><b>Goal:</b> "+goal+"<br><b>Args:</b> <code class='small'>"+args.replace(/</g,'&lt;')+"</code></div></td></tr>";
                     } catch(_){ return ""; }
                   }).join('');
                   if (!rowsU) rowsU = "<tr><td colspan='3' class='muted small'>(no steps)</td></tr>";
@@ -2819,6 +2824,9 @@ SELECT * FROM demo LIMIT 10;""")
                                "<table class='table'><thead><tr><th>Func</th><th>Title</th><th>Status</th></tr></thead><tbody>"+rowsU+"</tbody></table>"+
                                "</div>";
                   paneU.innerHTML = htmlU;
+                  try {
+                    paneU.querySelectorAll('.plan-row').forEach(function(r){ r.addEventListener('click', function(){ var id=r.getAttribute('data-det-id'); var e = id && document.getElementById(id); if(e){ e.style.display=(e.style.display==='none'?'table-row':'none'); } }); });
+                  } catch(_) {}
                 }
               } catch(_){ }
               stepAdvance('system:'+fn, null);
@@ -2827,10 +2835,31 @@ SELECT * FROM demo LIMIT 10;""")
 
             var detId = 'det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
             var wrap = document.createElement('div'); wrap.className = 'msg system';
-            var meta = document.createElement('div'); meta.className = 'meta small'; meta.innerHTML = "<span class='pill'>system</span> <span class='title' style='font-weight:600'>" + fn + "</span>";
+            // Improved titles for special actions
+            var displayTitle = fn;
+            try {
+              if (fn === 'tool_result') {
+                var cf = m && m.call && m.call.function ? String(m.call.function) : '';
+                displayTitle = cf ? ('Tool Result: ' + cf) : 'Tool Result';
+              } else if (fn === 'submit_step') {
+                displayTitle = 'Submitting Step';
+              } else if (fn === 'plan') {
+                displayTitle = 'Plan';
+              }
+            } catch(_){}
+            var meta = document.createElement('div'); meta.className = 'meta small'; meta.innerHTML = "<span class='pill'>system</span> <span class='title' style='font-weight:600'>" + displayTitle + "</span>";
             var bub = document.createElement('div'); bub.className = 'bubble system'; bub.setAttribute('data-details-id', detId);
             var cont = document.createElement('div'); cont.className='content'; cont.style.whiteSpace='pre-wrap';
-            cont.textContent = (fn ? (fn + ' ') : '') + text;
+            if (fn === 'plan' && m.call && m.call.steps && Array.isArray(m.call.steps)) {
+              try {
+                var rows = m.call.steps.map(function(st){ var f=String(st.function||''); var ti=String(st.title||''); var de=String(st.description||''); var stS=String(st.status||'in queue'); return "- ["+stS+"] "+f+": "+ti+ (de? (" — "+de):''); }).join('\n');
+                cont.textContent = 'Plan:\n' + rows;
+              } catch(_){ cont.textContent = (fn ? (fn + ' ') : '') + text; }
+            } else if (fn === 'submit_step' || fn === 'tool_result') {
+              cont.textContent = text;
+            } else {
+              cont.textContent = (fn ? (fn + ' ') : '') + text;
+            }
             bub.appendChild(cont);
             var details = document.createElement('div'); details.id = detId; details.style.display='none';
             var pre = document.createElement('pre'); pre.className='small'; pre.style.whiteSpace='pre-wrap'; pre.style.background='#f8fafc'; pre.style.padding='8px'; pre.style.borderRadius='6px';
@@ -2847,12 +2876,17 @@ SELECT * FROM demo LIMIT 10;""")
                 if (pane) {
                   var call = m.call || {};
                   var steps = Array.isArray(call.steps) ? call.steps : [];
-                  var rows = steps.map(function(st){
+                  var rows = steps.map(function(st, idx){
                     try {
                       var f = String((st && st.function) || '');
                       var ti = String((st && st.title) || '');
                       var stStatus = String((st && st.status) || 'in queue');
-                      return "<tr><td class='small'>"+f+"</td><td>"+ti+"</td><td class='small muted'>"+stStatus+"</td></tr>";
+                      var desc = String((st && st.description) || '');
+                      var goal = String((st && st.goal_outcome) || '');
+                      var args = st && st.args ? JSON.stringify(st.args) : '{}';
+                      var did = 'plan_det_p_' + idx + '_' + Math.random().toString(36).slice(2,6);
+                      return "<tr class='plan-row' data-det-id='"+did+"'><td class='small'>"+f+"</td><td>"+ti+"</td><td class='small muted'>"+stStatus+"</td></tr>"+
+                             "<tr id='"+did+"' class='plan-detail' style='display:none'><td colspan='3'><div class='small'><b>Description:</b> "+desc+"<br><b>Goal:</b> "+goal+"<br><b>Args:</b> <code class='small'>"+args.replace(/</g,'&lt;')+"</code></div></td></tr>";
                     } catch(_){ return ""; }
                   }).join('');
                   if (!rows) rows = "<tr><td colspan='3' class='muted small'>(no steps)</td></tr>";
@@ -2861,6 +2895,9 @@ SELECT * FROM demo LIMIT 10;""")
                              "<table class='table'><thead><tr><th>Func</th><th>Title</th><th>Status</th></tr></thead><tbody>"+rows+"</tbody></table>"+
                              "</div>";
                   pane.innerHTML = html;
+                  try {
+                    pane.querySelectorAll('.plan-row').forEach(function(r){ r.addEventListener('click', function(){ var id=r.getAttribute('data-det-id'); var e = id && document.getElementById(id); if(e){ e.style.display=(e.style.display==='none'?'table-row':'none'); } }); });
+                  } catch(_) {}
                   // Ensure the Plan tab is visible
                   try {
                     var tab = document.querySelector(".tabs[data-pane='right'] .tab[data-target='right-plan']");
@@ -6290,6 +6327,27 @@ async def _ws_send_safe(ws: WebSocket, text: str) -> bool:
 @app.websocket("/ws/chat/{project_id}")
 async def ws_chat_stream(websocket: WebSocket, project_id: int):
     await websocket.accept()
+    # Queue-based event streaming to the client
+    import asyncio as _aio
+    event_q: _aio.Queue[str] = _aio.Queue()
+    async def _sender():
+        try:
+            while True:
+                item = await event_q.get()
+                if item is None:
+                    break
+                try:
+                    await _ws_send_safe(websocket, item)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    sender_task = _aio.create_task(_sender())
+    def _enqueue(obj: dict):
+        try:
+            event_q.put_nowait(json.dumps(obj))
+        except Exception:
+            pass
     try:
         try:
             print(f"[ws-chat] accepted project_id={project_id}")
@@ -6304,13 +6362,22 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
         br_id = payload.get("branch_id")
         thr_id = payload.get("thread_id")
     except Exception:
-        await _ws_send_safe(websocket, json.dumps({"type": "error", "error": "invalid payload"}))
-        await websocket.close(); return
+        _enqueue({"type": "error", "error": "invalid payload"})
+        try:
+            await event_q.put(None)
+            await sender_task
+        except Exception:
+            pass
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+        return
 
     # Immediately inform client that the request is submitted and planning has started (for responsiveness)
     try:
-        await _ws_send_safe(websocket, json.dumps({"type": "info", "stage": "submitted", "t": datetime.utcnow().isoformat()+"Z"}))
-        await _ws_send_safe(websocket, json.dumps({"type": "info", "stage": "planning", "t": datetime.utcnow().isoformat()+"Z"}))
+        _enqueue({"type": "info", "stage": "submitted", "t": datetime.utcnow().isoformat()+"Z"})
+        _enqueue({"type": "info", "stage": "planning", "t": datetime.utcnow().isoformat()+"Z"})
         try:
             print("[ws-chat] submitted+planning-sent-early")
         except Exception:
@@ -6361,8 +6428,17 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
         finally:
             try: db2.close()
             except Exception: pass
-        await _ws_send_safe(websocket, json.dumps({"type": "error", "error": "missing_key"}))
-        await websocket.close(); return
+        _enqueue({"type": "error", "error": "missing_key"})
+        try:
+            await event_q.put(None)
+            await sender_task
+        except Exception:
+            pass
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+        return
 
     # Build context/resources/history using a fresh session
     db2 = SessionLocal()
@@ -6460,7 +6536,10 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
         sys_prompt = """
 You are an orchestrator that ALWAYS uses the LLM on each user prompt.
 
-Decision on first turn: If the query is trivially answerable (e.g., simple arithmetic), respond with a single {"function":"final"} call. Otherwise, your FIRST response MUST be a {"function":"plan"} object. Do NOT narrate that you will plan; RETURN the plan object itself.
+Decision on first turn:
+- If the query is trivially answerable (e.g., simple arithmetic), respond with a single {"function":"final"}.
+- If the query is AMBIGUOUS or requires user info BEFORE planning, respond with a single {"function":"question"} to clarify. DO THIS BEFORE returning a plan.
+- Otherwise, your FIRST response MUST be a {"function":"plan"} object. Do NOT narrate that you will plan; RETURN the plan object itself.
 
 Plan requirements (STRICT JSON):
 - The plan is an executable list of function steps (web, download, extract, image, db, code, notes, compose, question, final).
@@ -6475,7 +6554,7 @@ Plan requirements (STRICT JSON):
 
 Execution rules:
 - We will execute steps in-order. For each step, you must return EXACTLY ONE function call with a fully-specified 'args'.
-- When a step completes, set its status to 'done'. If a step needs more work, set status 'in process' (or keep 'currently running') and we will re-issue that step with the updated thread context. If the step fails, set 'failed' and either repair or rewrite the plan.
+- When a step completes, set its status to 'done'. If a step needs more work, set status 'currently running' (or 'in process') and we will re-issue that step with the updated thread context. If the step fails, set 'failed' and either repair or rewrite the plan.
 - Strongly prefer using 'web'+'download'+'extract' to gather sources, 'db' for queries/aggregation, and 'code' for local processing when it improves quality or precision. Do not fabricate results—ground answers via these functions when relevant.
 
 Response formatting:
@@ -6582,7 +6661,7 @@ Response formatting:
             messages.append({"role": "user", "content": content})
         # Emit the prepared prompt so the UI can show an "assistant prompt" bubble with full JSON
         try:
-            await _ws_send_safe(websocket, json.dumps({"type": "prompt", "messages": messages, "thread_id": thr.id}))
+            _enqueue({"type": "prompt", "messages": messages, "thread_id": thr.id})
         except Exception:
             pass
     except Exception as e:
@@ -6592,7 +6671,12 @@ Response formatting:
         except Exception:
             pass
         try:
-            await _ws_send_safe(websocket, json.dumps({"type": "error", "error": f"{type(e).__name__}: {e}"}))
+            _enqueue({"type": "error", "error": f"{type(e).__name__}: {e}"})
+        except Exception:
+            pass
+        try:
+            await event_q.put(None)
+            await sender_task
         except Exception:
             pass
         try:
@@ -6609,7 +6693,7 @@ Response formatting:
     # Optional: emit debug prompt for testing
     try:
         if bool(payload.get('debug')):
-            await _ws_send_safe(websocket, json.dumps({"type": "debug", "prompt": messages}))
+            _enqueue({"type": "debug", "prompt": messages})
             try:
                 print("[ws-chat] debug-sent")
             except Exception:
@@ -6628,9 +6712,10 @@ Response formatting:
 
     def _send_info(label: str):
         try:
-            return asyncio.create_task(_ws_send_safe(websocket, json.dumps({"type": "info", "stage": label})))
+            _enqueue({"type": "info", "stage": label})
         except Exception:
-            return None
+            pass
+        return None
 
     # Tool executors
     def tool_web(args: dict) -> dict:
@@ -6892,7 +6977,7 @@ Response formatting:
             try:
                 if (_time.time() - t0) > timeout_s:
                     try:
-                        await _ws_send_safe(websocket, json.dumps({"type": "info", "stage": "timeout"}))
+                        _enqueue({"type": "info", "stage": "timeout"})
                     except Exception:
                         pass
                     # Provide a final assistant-style message so UI/test can click the Assistant bubble even on timeout
@@ -6932,8 +7017,17 @@ Response formatting:
                     print(f"[ws-chat-llm-error] {type(e).__name__}: {e}")
                 except Exception:
                     pass
-                await websocket.send_text(json.dumps({"type": "error", "error": f"{type(e).__name__}: {e}"}))
-                await websocket.close(); return
+                _enqueue({"type": "error", "error": f"{type(e).__name__}: {e}"})
+                try:
+                    await event_q.put(None)
+                    await sender_task
+                except Exception:
+                    pass
+                try:
+                    await websocket.close()
+                except Exception:
+                    pass
+                return
 
             # Persist assistant JSON response for traceability
             dbj = SessionLocal()
@@ -7022,6 +7116,10 @@ Response formatting:
                             record_changelog(dbp, project_id, branch.id, "chat.plan", {"call": call}, {"plan": call, "run_summary": call.get("changelog_summary")})
                         except Exception:
                             pass
+                        try:
+                            _enqueue({"type": "action", "function": "plan", "text": "Plan created", "call": call})
+                        except Exception:
+                            pass
                     except Exception:
                         try: dbp.rollback()
                         except Exception: pass
@@ -7041,6 +7139,12 @@ Response formatting:
                                 st.pop('finished_at', None)
                                 if not st.get('status'):
                                     st['status'] = 'in queue'
+                                try:
+                                    s = str(st.get('status') or '').strip().lower()
+                                    if s in {'in process','processing','running'}:
+                                        st['status'] = 'currently running'
+                                except Exception:
+                                    pass
                             except Exception:
                                 pass
                             norm_steps.append(st)
@@ -7052,12 +7156,12 @@ Response formatting:
                                 plan_ctx["steps"][0]["started_at"] = datetime.utcnow().isoformat()+"Z"
                             except Exception:
                                 pass
-                        await websocket.send_text(json.dumps({
+                        _enqueue({
                             "type": "action",
                             "function": "plan_update",
                             "text": "Plan started",
                             "call": {"steps": plan_ctx["steps"]},
-                        }))
+                        })
                     except Exception:
                         pass
 
@@ -7067,6 +7171,15 @@ Response formatting:
                         if step:
                             fn = str(step.get("function") or "").strip().lower()
                             tmpl = (examples_json.get(fn) if isinstance(examples_json, dict) else None) or {"function": fn, "args": {}}
+                            try:
+                                _enqueue({
+                                    "type": "action",
+                                    "function": "submit_step",
+                                    "text": f"Submitting Step 1: {step.get('title') or fn}",
+                                    "call": {"step": step, "template": {"function": tmpl.get("function"), "args": tmpl.get("args") or {}}}
+                                })
+                            except Exception:
+                                pass
                             messages.append({"role": "user", "content": "Execute plan step 1 NOW. Respond with ONE function call ONLY matching this template (STRICT JSON):"})
                             messages.append({"role": "user", "content": json.dumps({"function": tmpl.get("function"), "args": tmpl.get("args") or {}}, ensure_ascii=False)})
                     except Exception:
@@ -7087,12 +7200,12 @@ Response formatting:
             # Execute tool (only if not final/question)
             _send_info(f"tool:{name}")
             try:
-                await _ws_send_safe(websocket, json.dumps({
+                _enqueue({
                     "type": "action",
                     "function": name,
                     "text": str((call_obj or {}).get("output_to_user") or f"About to run {name}"),
                     "call": call_obj or {"function": name, "args": (args or {})}
-                }))
+                })
             except Exception:
                 pass
             fn = tools_map.get(name)
@@ -7123,12 +7236,12 @@ Response formatting:
             # Emit condensed tool_result action
             try:
                 summ = f"{name} {'ok' if bool(result.get('ok')) else 'error'}"
-                await _ws_send_safe(websocket, json.dumps({
+                _enqueue({
                     "type": "action",
                     "function": "tool_result",
                     "text": summ,
                     "call": {"function": name, "args": args, "result": {k: result.get(k) for k in list(result.keys())[:6]}},
-                }))
+                })
             except Exception:
                 pass
 
@@ -7144,12 +7257,12 @@ Response formatting:
                             pass
                         # Send plan_update to refresh right panel
                         try:
-                            await _ws_send_safe(websocket, json.dumps({
+                            _enqueue({
                                 "type": "action",
                                 "function": "plan_update",
                                 "text": "Plan updated",
                                 "call": {"steps": plan_ctx["steps"]},
-                            }))
+                            })
                         except Exception:
                             pass
                         # If done and more steps remain, advance to next step and nudge with template
@@ -7162,19 +7275,25 @@ Response formatting:
                             except Exception:
                                 pass
                             try:
-                                await _ws_send_safe(websocket, json.dumps({
+                                _enqueue({
                                     "type": "action",
                                     "function": "plan_update",
                                     "text": "Proceeding to next step",
                                     "call": {"steps": plan_ctx["steps"]},
-                                }))
+                                })
                             except Exception:
                                 pass
-                            # Nudge model to return the next function call exactly matching template
+                            # Announce next step
                             try:
                                 next_step = plan_ctx["steps"][plan_ctx["ptr"]]
                                 nfn = str(next_step.get("function") or "").strip().lower()
                                 tmpl = (examples_json.get(nfn) if isinstance(examples_json, dict) else None) or {"function": nfn, "args": {}}
+                                _enqueue({
+                                    "type": "action",
+                                    "function": "submit_step",
+                                    "text": f"Submitting Step {plan_ctx['ptr']+1}: {next_step.get('title') or nfn}",
+                                    "call": {"step": next_step, "template": {"function": tmpl.get("function"), "args": tmpl.get("args") or {}}}
+                                })
                                 messages.append({"role": "user", "content": f"Execute plan step {plan_ctx['ptr']+1} NOW. Respond with ONE function call ONLY matching this template (STRICT JSON):"})
                                 messages.append({"role": "user", "content": json.dumps({"function": tmpl.get("function"), "args": tmpl.get("args") or {}}, ensure_ascii=False)})
                             except Exception:
@@ -7185,6 +7304,12 @@ Response formatting:
                                 cur_step = plan_ctx["steps"][idx]
                                 cfn = str(cur_step.get("function") or "").strip().lower()
                                 tmpl = (examples_json.get(cfn) if isinstance(examples_json, dict) else None) or {"function": cfn, "args": {}}
+                                _enqueue({
+                                    "type": "action",
+                                    "function": "submit_step",
+                                    "text": f"Re-attempting Step {idx+1}: {cur_step.get('title') or cfn}",
+                                    "call": {"step": cur_step, "template": {"function": tmpl.get("function"), "args": tmpl.get("args") or {}}}
+                                })
                                 messages.append({"role": "user", "content": f"Re-attempt plan step {idx+1}. Respond with ONE function call ONLY matching this template (STRICT JSON):"})
                                 messages.append({"role": "user", "content": json.dumps({"function": tmpl.get("function"), "args": tmpl.get("args") or {}}, ensure_ascii=False)})
                             except Exception:
@@ -7203,7 +7328,12 @@ Response formatting:
         except Exception:
             pass
         try:
-            await _ws_send_safe(websocket, json.dumps({"type": "error", "error": f"{type(e).__name__}: {e}"}))
+            _enqueue({"type": "error", "error": f"{type(e).__name__}: {e}"})
+        except Exception:
+            pass
+        try:
+            await event_q.put(None)
+            await sender_task
         except Exception:
             pass
         try:
@@ -7229,7 +7359,7 @@ Response formatting:
                 # Suppress noisy 'final-forced' from user UI; emit only when debug=true in payload
                 try:
                     if bool(payload.get('debug')):
-                        await _ws_send_safe(websocket, json.dumps({"type": "info", "stage": "final-forced"}))
+                        _enqueue({"type": "info", "stage": "final-forced"})
                 except Exception:
                     pass
         except Exception:
@@ -7237,7 +7367,7 @@ Response formatting:
 
     # Finalize
     try:
-        await _ws_send_safe(websocket, json.dumps({"type": "info", "stage": "finalizing"}))
+        _enqueue({"type": "info", "stage": "finalizing"})
     except Exception:
         pass
 
@@ -7279,13 +7409,18 @@ Response formatting:
     if final_text:
         # Emit the final message along with the final function-call JSON for UI details
         try:
-            await _ws_send_safe(websocket, json.dumps({"type": "final", "text": final_text, "json": final_call_obj, "prompt": messages}))
+            _enqueue({"type": "final", "text": final_text, "json": final_call_obj, "prompt": messages})
         except Exception:
-            await _ws_send_safe(websocket, json.dumps({"type": "final", "text": final_text, "json": final_call_obj}))
+            _enqueue({"type": "final", "text": final_text, "json": final_call_obj})
     elif question_text:
         # For questions, continue to use 'final' type for compatibility with existing tests/clients
-        await _ws_send_safe(websocket, json.dumps({"type": "final", "text": question_text, "json": final_call_obj}))
-    # Hide 'persisted' from UI (no-op stage)
+        _enqueue({"type": "final", "text": question_text, "json": final_call_obj})
+    # Stop sender and close socket
+    try:
+        await event_q.put(None)
+        await sender_task
+    except Exception:
+        pass
     try:
         await websocket.close()
     except Exception:
