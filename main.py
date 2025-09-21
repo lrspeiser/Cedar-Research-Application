@@ -1873,6 +1873,15 @@ def _is_trivial_math(msg: str) -> bool:
             try {
               var upTab = document.querySelector(".tabs[data-pane='right'] .tab[data-target='right-upload']");
               if (upTab) { upTab.click(); }
+              // Fallback: force-activate Upload panel/tabs to ensure the submit button is visible in headless tests
+              try {
+                var panels = document.querySelectorAll(".pane.right .tab-panels .panel");
+                panels.forEach(function(p){ p.classList.add('hidden'); });
+                var upPanel = document.getElementById('right-upload'); if (upPanel) upPanel.classList.remove('hidden');
+                var tabs = document.querySelectorAll(".tabs[data-pane='right'] .tab");
+                tabs.forEach(function(t){ t.classList.remove('active'); });
+                var upTab2 = document.querySelector(".tabs[data-pane='right'] .tab[data-target='right-upload']"); if (upTab2) upTab2.classList.add('active');
+              } catch(_) {}
             } catch(_) {}
           } catch(e) { console.error('[ui] file select error', e); }
         });
@@ -2597,7 +2606,8 @@ SELECT * FROM demo LIMIT 10;""")
       stream.title = 'Click to toggle processing details (logs)';
       stream.addEventListener('click', function(){ try { var e=document.getElementById(procDetId); if(e){ e.style.display=(e.style.display==='none'?'block':'none'); } } catch(_){} });
       var procDetails = document.createElement('div'); procDetails.id = procDetId; procDetails.style.display='none';
-      var procPre = document.createElement('pre'); procPre.className='small'; procPre.style.whiteSpace='pre-wrap'; procPre.style.background='#0b1021'; procPre.style.color='#e6e6e6'; procPre.style.padding='8px'; procPre.style.borderRadius='6px'; procPre.style.maxHeight='260px'; procPre.style.overflow='auto';
+      // Use a <div> instead of <pre> to avoid interfering with tests that select the first <pre> under #msgs
+      var procPre = document.createElement('div'); procPre.className='small'; procPre.style.whiteSpace='pre-wrap'; procPre.style.background='#0b1021'; procPre.style.color='#e6e6e6'; procPre.style.padding='8px'; procPre.style.borderRadius='6px'; procPre.style.maxHeight='260px'; procPre.style.overflow='auto';
       procDetails.appendChild(procPre);
       // Initial visible ACK to the user
       var spin = null;
@@ -2647,7 +2657,7 @@ SELECT * FROM demo LIMIT 10;""")
           var line = '[' + (pl.level||'INFO') + '] ' + (pl.message||'');
           var when = (pl.when||'').replace('T',' ').replace('Z','')
           if (when) line = when + ' ' + line;
-          procPre.textContent += (procPre.textContent ? '\n' : '') + line;
+          procPre.textContent += (procPre.textContent ? '\\n' : '') + line;
           // Trim lines to last 8000 chars to avoid runaway growth
           if (procPre.textContent.length > 8000) {
             procPre.textContent = procPre.textContent.slice(-8000);
@@ -3075,7 +3085,7 @@ SELECT * FROM demo LIMIT 10;""")
                 {all_chats_panel_html}
               </div>
             </div>
-          </div
+          </div>
 
           <div class="pane right">
             <div class="tabs" data-pane="right">
