@@ -6270,6 +6270,17 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
         await _ws_send_safe(websocket, json.dumps({"type": "error", "error": "invalid payload"}))
         await websocket.close(); return
 
+    # Immediately inform client that the request is submitted and planning has started (for responsiveness)
+    try:
+        await _ws_send_safe(websocket, json.dumps({"type": "info", "stage": "submitted"}))
+        await _ws_send_safe(websocket, json.dumps({"type": "info", "stage": "planning"}))
+        try:
+            print("[ws-chat] submitted+planning-sent-early")
+        except Exception:
+            pass
+    except Exception:
+        pass
+
     SessionLocal = sessionmaker(bind=_get_project_engine(project_id), autoflush=False, autocommit=False, future=True)
     branch = None
     thr = None
@@ -6296,16 +6307,6 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
     finally:
         try: db.close()
         except Exception: pass
-
-    # Inform client that the request has been submitted
-    try:
-        await _ws_send_safe(websocket, json.dumps({"type": "info", "stage": "submitted"}))
-        try:
-            print("[ws-chat] submitted")
-        except Exception:
-            pass
-    except Exception:
-        pass
 
     client, model = _llm_client_config()
     if not client:
@@ -6581,17 +6582,7 @@ Keep total turns <= 3 and ALWAYS end with a single {"function":"final"} call con
             pass
 
     # Orchestrated plan/execute loop (non-streaming JSON)
-    try:
-        await _ws_send_safe(websocket, json.dumps({"type": "info", "stage": "planning"}))
-        try:
-            print("[ws-chat] planning-sent")
-        except Exception:
-            pass
-    except Exception as e:
-        try:
-            print(f"[ws-chat-planinfo-error] {type(e).__name__}: {e}")
-        except Exception:
-            pass
+    # (planning event already sent early for responsiveness)
 
     import urllib.request as _req
     import re as _re
