@@ -6782,6 +6782,11 @@ Keep total turns <= 3 and ALWAYS end with a single {"function":"final"} call con
 
     # Always use the LLM. Optionally use a smaller/faster model for the first decision (plan vs final).
     fast_model = os.getenv("CEDARPY_FAST_MODEL", "gpt-5-mini")
+    # Default: use fast model for all WS turns unless explicitly disabled
+    try:
+        use_fast_all = str(os.getenv("CEDARPY_WS_USE_FAST", "1")).strip().lower() not in {"", "0", "false", "no", "off"}
+    except Exception:
+        use_fast_all = True
 
     try:
         while (not final_text) and (not question_text) and (loop_count < max_turns):
@@ -6812,8 +6817,16 @@ Keep total turns <= 3 and ALWAYS end with a single {"function":"final"} call con
                     print("[ws-chat] llm-call")
                 except Exception:
                     pass
-                # Use a faster model for the first decision turn if configured
-                use_model = (fast_model or model) if (loop_count == 0 and fast_model) else model
+                # Use a faster model (gpt-5-mini by default). If not using fast for all, use fast for the first turn only.
+                if use_fast_all and fast_model:
+                    use_model = fast_model
+                else:
+                    # Fix: loop_count is incremented pre-call; first turn === 1
+                    use_model = (fast_model or model) if (loop_count == 1 and fast_model) else model
+                try:
+                    print(f"[ws-chat] using-model={use_model}")
+                except Exception:
+                    pass
                 resp = client.chat.completions.create(model=use_model, messages=messages)
                 raw = (resp.choices[0].message.content or "").strip()
             except Exception as e:
