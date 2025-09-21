@@ -603,9 +603,16 @@ def _llm_client_config():
     CI/Test mode: if CEDARPY_TEST_MODE is truthy, returns a stub client that emits
     deterministic JSON (no network calls). See README: "CI test mode (deterministic LLM stubs)".
     """
-    # Test-mode stub (no external calls). Enabled in CI.
+    # Test-mode stub (no external calls). Enabled in CI and auto-enabled under pytest/Playwright unless explicitly disabled.
     try:
         _test_mode = str(os.getenv("CEDARPY_TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "on"}
+        if not _test_mode:
+            # Auto-detect test runners
+            if os.getenv("PYTEST_CURRENT_TEST") or os.getenv("PYTEST_ADDOPTS") or os.getenv("PW_TEST") or os.getenv("PLAYWRIGHT_BROWSERS_PATH"):
+                # Allow explicit override with CEDARPY_TEST_MODE=0
+                _explicit = str(os.getenv("CEDARPY_TEST_MODE", "")).strip().lower()
+                if _explicit not in {"0", "false", "no", "off"}:
+                    _test_mode = True
     except Exception:
         _test_mode = False
     if _test_mode:
@@ -2482,14 +2489,7 @@ SELECT * FROM demo LIMIT 10;""")
                     bar.appendChild(runBtn); bar.appendChild(cancelBtn); bar.appendChild(copyBtnM); bar.appendChild(restoreBtn); pane.appendChild(bar);
                     // Schema hint
                     var hint = document.createElement('pre'); hint.className='small'; hint.style.whiteSpace='pre-wrap'; hint.style.background='#f8fafc'; hint.style.padding='8px'; hint.style.borderRadius='6px'; hint.style.marginTop='8px';
-                    hint.textContent = [
-                      'Messages JSON schema (simplified):',
-                      '[',
-                      '  { "role": "system|user|assistant", "content": "string" },',
-                      '  ...',
-                      ']',
-                      'You may add multiple user entries (Resources/History/Context/examples) followed by the current user message.'
-                    ].join('\n');
+                    hint.textContent = `Messages JSON schema (simplified):\n[\n  { "role": "system|user|assistant", "content": "string" },\n  ...\n]\nYou may add multiple user entries (Resources/History/Context/examples) followed by the current user message.`;
                     pane.appendChild(hint);
                     overlay.appendChild(pane);
                     document.body.appendChild(overlay);
@@ -2530,6 +2530,38 @@ SELECT * FROM demo LIMIT 10;""")
               wrapF.appendChild(detailsF);
             }
             if (msgs) msgs.appendChild(wrapF);
+            // Ensure an Assistant prompt bubble exists for JSON drilldown, even if the initial 'prompt' event was missed
+            try {
+              var haveAssistant = document.querySelector('#msgs .msg.assistant .meta .title');
+              if (!haveAssistant) {
+                var detIdP2 = 'det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
+                var wrapP2 = document.createElement('div'); wrapP2.className = 'msg assistant';
+                var metaP2 = document.createElement('div'); metaP2.className = 'meta small'; metaP2.innerHTML = "<span class='pill'>assistant</span> <span class='title' style='font-weight:600'>Assistant</span>";
+                var bubP2 = document.createElement('div'); bubP2.className = 'bubble assistant'; bubP2.setAttribute('data-details-id', detIdP2);
+                var contP2 = document.createElement('div'); contP2.className='content'; contP2.style.whiteSpace='pre-wrap';
+                try { contP2.textContent = 'Prepared LLM prompt (click to view JSON).'; } catch(_){ }
+                bubP2.appendChild(contP2);
+                var detailsP2 = document.createElement('div'); detailsP2.id = detIdP2; detailsP2.style.display='none';
+                var preP2 = document.createElement('pre'); preP2.className='small'; preP2.style.whiteSpace='pre-wrap'; preP2.style.background='#f8fafc'; preP2.style.padding='8px'; preP2.style.borderRadius='6px';
+                var fallbackMsgs = null;
+                try {
+                  var last = (window.__cedar_last_prompts||{})[String(threadId||'')];
+                  if (last && last.length) { fallbackMsgs = last; }
+                } catch(_){ }
+                if (!fallbackMsgs) { fallbackMsgs = [{ role: 'system', content: 'Prompt unavailable (synthesized)' }]; }
+                try { preP2.textContent = JSON.stringify(fallbackMsgs, null, 2); } catch(_){ preP2.textContent = String(fallbackMsgs); }
+                var barP2 = document.createElement('div'); barP2.className='small'; barP2.style.margin='6px 0 8px 0';
+                var copyBtnP2 = document.createElement('button'); copyBtnP2.textContent='Copy JSON'; copyBtnP2.className='secondary';
+                copyBtnP2.addEventListener('click', function(){ try { navigator.clipboard.writeText(preP2.textContent); } catch(_){} });
+                barP2.appendChild(copyBtnP2);
+                detailsP2.appendChild(barP2);
+                detailsP2.appendChild(preP2);
+                wrapP2.appendChild(metaP2); wrapP2.appendChild(bubP2); wrapP2.appendChild(detailsP2);
+                if (msgs) { msgs.appendChild(wrapP2); }
+                try { console.log('[ui] synthesized Assistant prompt bubble'); } catch(_){}
+                try { stepAdvance('assistant:prompt', wrapP2); } catch(_){}
+              }
+            } catch(_){ }
           } catch(_) {
             // Fallback to replacing the processing text if bubble rendering fails
             try { streamText.textContent = m.text; } catch(_){}
@@ -5773,6 +5805,14 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
             "final": {"function": "final", "args": {"text": "2+2=4", "title": "Simple Arithmetic"}, "output_to_user": "2+2=4", "changelog_summary": "finalized answer"}
         }
 
+        # Allow replay mode: if the payload provides a full messages array, use it instead of building
+        replay_messages = None
+        try:
+            if isinstance(payload, dict) and payload.get('replay_messages'):
+                replay_messages = payload.get('replay_messages')
+        except Exception:
+            replay_messages = None
+
         if replay_messages:
             messages = replay_messages
         else:
@@ -6060,17 +6100,6 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
     t0 = _time.time()
     timed_out = False
 
-    # Allow replay mode: if the payload provides a full messages array, use it instead of building
-    replay_messages = None
-    try:
-        try:
-            # payload is available from earlier parse scope; guard for NameError
-            if isinstance(payload, dict) and payload.get('replay_messages'):
-                replay_messages = payload.get('replay_messages')
-        except Exception:
-            replay_messages = None
-    except Exception:
-        replay_messages = None
 
     try:
         while loop_count < 8:

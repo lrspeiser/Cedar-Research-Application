@@ -27,6 +27,40 @@ LOG_DIR_DEFAULT = os.path.join(os.path.expanduser("~"), "Library", "Logs", "Ceda
 # See README.md section "Single-instance lock and stale lock recovery" for details.
 LOCK_PATH = os.path.join(os.getenv("CEDARPY_LOG_DIR", LOG_DIR_DEFAULT), "cedarqt.lock")
 
+# Pre-check stale lock early and remember a note to log once logging is initialized
+STALE_LOCK_NOTE = None
+try:
+    if os.path.exists(LOCK_PATH):
+        existing_pid = None
+        try:
+            with open(LOCK_PATH, "r") as f:
+                content = f.read().strip()
+                digits = "".join(ch for ch in content if ch.isdigit())
+                if digits:
+                    existing_pid = int(digits)
+        except Exception as e:
+            STALE_LOCK_NOTE = f"[cedarqt] lock read error, treating as stale: {e}"
+        # Remove if not alive
+        try:
+            import errno as _errno
+            alive = False
+            if existing_pid is not None:
+                try:
+                    os.kill(existing_pid, 0)
+                    alive = True
+                except OSError as e:
+                    alive = (e.errno == _errno.EPERM)
+            if not alive:
+                try:
+                    os.remove(LOCK_PATH)
+                    STALE_LOCK_NOTE = f"[cedarqt] removed stale lock: {LOCK_PATH} (pid={existing_pid})"
+                except Exception as e:
+                    STALE_LOCK_NOTE = f"[cedarqt] failed to remove stale lock {LOCK_PATH}: {e}"
+        except Exception:
+            pass
+except Exception:
+    pass
+
 
 def _init_logging() -> str:
     log_dir = os.getenv("CEDARPY_LOG_DIR", LOG_DIR_DEFAULT)
@@ -40,6 +74,8 @@ def _init_logging() -> str:
     print(f"[cedarqt] sys.executable={sys.executable}")
     print(f"[cedarqt] cwd={os.getcwd()}")
     print(f"[cedarqt] lock_path={LOCK_PATH} pid={os.getpid()}")
+    if STALE_LOCK_NOTE:
+        print(STALE_LOCK_NOTE)
     return log_path
 
 _log_path = _init_logging()
@@ -142,11 +178,38 @@ def _acquire_single_instance_lock(lock_path: str):
     """Attempt to acquire a single-instance lock.
 
     Strategy:
+    - Pre-check for an existing lock file and remove if the PID is not alive (logs "removed stale lock").
     - Try O_EXCL create; if it exists, check PID liveness from the file.
     - If PID not running or file unreadable/unparsable, remove and retry ONCE.
     - If still failing after one retry, exit gracefully.
     """
     os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+
+    # Pre-check: if file exists, validate PID and remove stale
+    try:
+        if os.path.exists(lock_path):
+            existing_pid = None
+            try:
+                with open(lock_path, "r") as f:
+                    content = f.read().strip()
+                    digits = "".join(ch for ch in content if ch.isdigit())
+                    if digits:
+                        existing_pid = int(digits)
+            except Exception as e:
+                print(f"[cedarqt] lock read error, treating as stale: {e}")
+            if existing_pid is not None and _pid_is_running(existing_pid):
+                print(f"[cedarqt] another instance detected via {lock_path} (pid={existing_pid}); exiting")
+                sys.exit(0)
+            else:
+                try:
+                    os.remove(lock_path)
+                    print(f"[cedarqt] removed stale lock: {lock_path} (pid={existing_pid})")
+                except Exception as e:
+                    print(f"[cedarqt] failed to remove stale lock {lock_path}: {e}; exiting")
+                    sys.exit(0)
+    except Exception as e:
+        print(f"[cedarqt] pre-check lock error: {e}")
+
     flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
 
     def _try_create():
