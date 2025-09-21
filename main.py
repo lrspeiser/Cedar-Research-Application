@@ -2791,6 +2791,34 @@ SELECT * FROM demo LIMIT 10;""")
           try {
             var fn = String(m.function||'').trim();
             var text = String(m.text||'');
+
+            // Lightweight plan updates should not create extra bubbles
+            if (fn === 'plan_update') {
+              try {
+                var paneU = document.getElementById('right-plan');
+                if (paneU) {
+                  var callU = m.call || {};
+                  var stepsU = Array.isArray(callU.steps) ? callU.steps : [];
+                  var rowsU = stepsU.map(function(st){
+                    try {
+                      var f = String((st && st.function) || '');
+                      var ti = String((st && st.title) || '');
+                      var stStatus = String((st && st.status) || 'in queue');
+                      return "<tr><td class='small'>"+f+"</td><td>"+ti+"</td><td class='small muted'>"+stStatus+"</td></tr>";
+                    } catch(_){ return ""; }
+                  }).join('');
+                  if (!rowsU) rowsU = "<tr><td colspan='3' class='muted small'>(no steps)</td></tr>";
+                  var htmlU = "<div class='card' style='padding:12px'>"+
+                               "<h3 style='margin-bottom:6px'>Plan</h3>"+
+                               "<table class='table'><thead><tr><th>Func</th><th>Title</th><th>Status</th></tr></thead><tbody>"+rowsU+"</tbody></table>"+
+                               "</div>";
+                  paneU.innerHTML = htmlU;
+                }
+              } catch(_){ }
+              stepAdvance('system:'+fn, null);
+              return;
+            }
+
             var detId = 'det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
             var wrap = document.createElement('div'); wrap.className = 'msg system';
             var meta = document.createElement('div'); meta.className = 'meta small'; meta.innerHTML = "<span class='pill'>system</span> <span class='title' style='font-weight:600'>" + fn + "</span>";
@@ -6426,27 +6454,29 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
         sys_prompt = """
 You are an orchestrator that ALWAYS uses the LLM on each user prompt.
 
-Decision on first turn: If the query is trivially answerable (e.g., simple arithmetic), respond with a single {"function":"final"} call. Otherwise, your FIRST response MUST be a {"function":"plan"} object laying out the steps. Do NOT narrate that you will plan; RETURN the plan object itself.
+Decision on first turn: If the query is trivially answerable (e.g., simple arithmetic), respond with a single {"function":"final"} call. Otherwise, your FIRST response MUST be a {"function":"plan"} object. Do NOT narrate that you will plan; RETURN the plan object itself.
 
-Plan/step schema (STRICT JSON):
-- function: 'plan' | 'web' | 'download' | 'extract' | 'image' | 'db' | 'code' | 'notes' | 'compose' | 'question' | 'final'
-- title: short title of the task
-- description: detailed description of the task
-- goal_outcome: what success looks like for this task
-- status: one of 'in queue' | 'currently running' | 'done' | 'failed'
-- state: one of 'new plan' | 'diff change'
-- steps (for function=='plan'): array of step objects, each with the SAME fields above plus an 'args' object appropriate for that step's function. The array MUST be non-empty.
-- output_to_user: short text shown to the user summarizing what will happen
-- changelog_summary: one-line summary for the changelog
-- Thread_title: concise (<= 5 words) specific title for the theme of this conversation
+Plan requirements (STRICT JSON):
+- The plan is an executable list of function steps (web, download, extract, image, db, code, notes, compose, question, final).
+- The LLM may rewrite or refine the plan at any time based on tool results (adaptive planning).
+- Schema for plan/steps:
+  - function: 'plan' | 'web' | 'download' | 'extract' | 'image' | 'db' | 'code' | 'notes' | 'compose' | 'question' | 'final'
+  - title, description, goal_outcome
+  - status: 'in queue' | 'currently running' | 'done' | 'failed'
+  - state: 'new plan' | 'diff change'
+  - steps (for function=='plan'): non-empty array of step objects with the SAME fields above plus an 'args' object appropriate for that step's function.
+  - output_to_user, changelog_summary.
 
-When executing steps, respond with exactly ONE function call per turn (e.g., 'code', 'db', 'download', etc.), including an 'args' object that is fully specified.
-For 'code', include: language, packages (list), and source. For 'db', include: sql.
-Use the provided Resources (files, databases), History (recent thread), Notes, and Changelog to craft accurate steps.
-Keep total turns <= 3 and ALWAYS end with a single {"function":"final"} call containing:
-- args.text: user-visible answer
-- args.title: 3-6 words
-- args.run_summary: 3-6 bullet lines that summarize everything done in this run (tools executed, files created, DB tables/rows affected, notable outputs/errors).
+Execution rules:
+- We will execute steps in-order. For each step, you must return EXACTLY ONE function call with a fully-specified 'args'.
+- When a step completes, set its status to 'done'. If a step needs more work, set status 'in process' (or keep 'currently running') and we will re-issue that step with the updated thread context. If the step fails, set 'failed' and either repair or rewrite the plan.
+- Strongly prefer using 'web'+'download'+'extract' to gather sources, 'db' for queries/aggregation, and 'code' for local processing when it improves quality or precision. Do not fabricate results—ground answers via these functions when relevant.
+
+Response formatting:
+- Respond with STRICT JSON only (no prose), one function object per turn.
+- For 'code', include: language, packages (list), and source. For 'db', include: sql.
+- Always end the session with a single {"function":"final"} that includes args.text (answer), args.title (3–6 words), and args.run_summary (bulleted summary of actions and outcomes).
+        """
         """
 
         examples_json = {
@@ -6790,6 +6820,8 @@ Keep total turns <= 3 and ALWAYS end with a single {"function":"final"} call con
     question_text = None
     session_title: Optional[str] = None
     final_call_obj: Optional[Dict[str, Any]] = None
+    # In-session plan tracking (steps, pointer)
+    plan_ctx: Dict[str, Any] = {"steps": [], "ptr": None}
 
     # Overall budget: ensure we eventually time out and inform the client
     import time as _time
@@ -6939,7 +6971,6 @@ Keep total turns <= 3 and ALWAYS end with a single {"function":"final"} call con
                         steps = None
                     if not steps or not isinstance(steps, list) or len(steps) == 0:
                         messages.append({"role": "user", "content": "Your plan MUST include a non-empty steps array. Respond NOW with exactly one JSON object: {\"function\":\"plan\", ... , \"steps\":[...]} and NO commentary."})
-                        # Do not emit an action bubble or persist yet; request a corrected plan in the next turn
                         name = None; args = {}; call_obj = {}
                         continue
                     # Persist plan
@@ -6947,7 +6978,6 @@ Keep total turns <= 3 and ALWAYS end with a single {"function":"final"} call con
                     try:
                         dbp.add(ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="assistant", display_title="Plan", content=json.dumps(call, ensure_ascii=False), payload_json=call))
                         dbp.commit()
-                        # Write changelog entry for the prepared plan
                         try:
                             record_changelog(dbp, project_id, branch.id, "chat.plan", {"call": call}, {"plan": call, "run_summary": call.get("changelog_summary")})
                         except Exception:
@@ -6958,17 +6988,37 @@ Keep total turns <= 3 and ALWAYS end with a single {"function":"final"} call con
                     finally:
                         try: dbp.close()
                         except Exception: pass
-                    # Emit an action bubble to the client with plan steps preview
+
+                    # Update in-session plan state and set first step to running
                     try:
+                        plan_ctx["steps"] = steps
+                        plan_ctx["ptr"] = 0
+                        if plan_ctx["steps"]:
+                            try:
+                                plan_ctx["steps"][0]["status"] = "currently running"
+                            except Exception:
+                                pass
+                        # Send a lightweight plan_update action (no extra bubble on client)
                         await websocket.send_text(json.dumps({
                             "type": "action",
-                            "function": "plan",
-                            "text": str(call.get("output_to_user") or "Plan prepared"),
-                            "call": call,
+                            "function": "plan_update",
+                            "text": "Plan started",
+                            "call": {"steps": plan_ctx["steps"]},
                         }))
                     except Exception:
                         pass
-                    # Do NOT auto-proceed; allow main model to execute steps on the next turn
+
+                    # Nudge the model to execute step 1 now with an explicit one-function template
+                    try:
+                        step = (plan_ctx["steps"] or [])[0] if plan_ctx.get("ptr") == 0 else None
+                        if step:
+                            fn = str(step.get("function") or "").strip().lower()
+                            tmpl = (examples_json.get(fn) if isinstance(examples_json, dict) else None) or {"function": fn, "args": {}}
+                            messages.append({"role": "user", "content": "Execute plan step 1 NOW. Respond with ONE function call ONLY matching this template (STRICT JSON):"})
+                            messages.append({"role": "user", "content": json.dumps({"function": tmpl.get("function"), "args": tmpl.get("args") or {}}, ensure_ascii=False)})
+                    except Exception:
+                        pass
+
                     break  # finish handling this turn; go evaluate name/args
             if name in ('final', 'question'):
                 if name == 'final':
@@ -7018,6 +7068,64 @@ Keep total turns <= 3 and ALWAYS end with a single {"function":"final"} call con
             finally:
                 try: dbt.close()
                 except Exception: pass
+
+            # Update plan step status and prompt next step if applicable
+            try:
+                if isinstance(plan_ctx.get("ptr"), int) and plan_ctx.get("steps"):
+                    idx = int(plan_ctx["ptr"]) if plan_ctx["ptr"] is not None else None
+                    if idx is not None and 0 <= idx < len(plan_ctx["steps"]):
+                        try:
+                            plan_ctx["steps"][idx]["status"] = "done" if bool(result.get("ok")) else "failed"
+                        except Exception:
+                            pass
+                        # Send plan_update to refresh right panel
+                        try:
+                            await _ws_send_safe(websocket, json.dumps({
+                                "type": "action",
+                                "function": "plan_update",
+                                "text": "Plan updated",
+                                "call": {"steps": plan_ctx["steps"]},
+                            }))
+                        except Exception:
+                            pass
+                        # If done and more steps remain, advance to next step and nudge with template
+                        if bool(result.get("ok")) and (idx + 1) < len(plan_ctx["steps"]):
+                            plan_ctx["ptr"] = idx + 1
+                            try:
+                                plan_ctx["steps"][plan_ctx["ptr"]]["status"] = "currently running"
+                            except Exception:
+                                pass
+                            try:
+                                await _ws_send_safe(websocket, json.dumps({
+                                    "type": "action",
+                                    "function": "plan_update",
+                                    "text": "Proceeding to next step",
+                                    "call": {"steps": plan_ctx["steps"]},
+                                }))
+                            except Exception:
+                                pass
+                            # Nudge model to return the next function call exactly matching template
+                            try:
+                                next_step = plan_ctx["steps"][plan_ctx["ptr"]]
+                                nfn = str(next_step.get("function") or "").strip().lower()
+                                tmpl = (examples_json.get(nfn) if isinstance(examples_json, dict) else None) or {"function": nfn, "args": {}}
+                                messages.append({"role": "user", "content": f"Execute plan step {plan_ctx['ptr']+1} NOW. Respond with ONE function call ONLY matching this template (STRICT JSON):"})
+                                messages.append({"role": "user", "content": json.dumps({"function": tmpl.get("function"), "args": tmpl.get("args") or {}}, ensure_ascii=False)})
+                            except Exception:
+                                pass
+                        elif not bool(result.get("ok")):
+                            # Re-attempt current step with explicit template
+                            try:
+                                cur_step = plan_ctx["steps"][idx]
+                                cfn = str(cur_step.get("function") or "").strip().lower()
+                                tmpl = (examples_json.get(cfn) if isinstance(examples_json, dict) else None) or {"function": cfn, "args": {}}
+                                messages.append({"role": "user", "content": f"Re-attempt plan step {idx+1}. Respond with ONE function call ONLY matching this template (STRICT JSON):"})
+                                messages.append({"role": "user", "content": json.dumps({"function": tmpl.get("function"), "args": tmpl.get("args") or {}}, ensure_ascii=False)})
+                            except Exception:
+                                pass
+            except Exception:
+                pass
+
             # Feed result back to LLM
             messages.append({"role": "user", "content": "ToolResult:"})
             messages.append({"role": "user", "content": json.dumps({"function": name, "result": result}, ensure_ascii=False)})
