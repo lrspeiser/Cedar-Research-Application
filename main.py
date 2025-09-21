@@ -7083,6 +7083,7 @@ Response formatting:
             name = None
             args = {}
             call_obj = {}
+            plan_handled = False
             for call in calls:
                 name = str((call.get('function') or '')).strip().lower()
                 args = call.get('args') or {}
@@ -7182,10 +7183,17 @@ Response formatting:
                                 pass
                             messages.append({"role": "user", "content": "Execute plan step 1 NOW. Respond with ONE function call ONLY matching this template (STRICT JSON):"})
                             messages.append({"role": "user", "content": json.dumps({"function": tmpl.get("function"), "args": tmpl.get("args") or {}}, ensure_ascii=False)})
+                            messages.append({"role": "user", "content": "Important: Do NOT use placeholders (e.g., image_file: \"${uploaded_file}\"). If a required file/image id is not available in Resources, return {\"function\":\"question\"} asking the user to upload or select the file. Use only concrete args (e.g., image_id, file_id, sql). STRICT JSON only."})
                     except Exception:
                         pass
 
-                    break  # finish handling this turn; go evaluate name/args
+                    plan_handled = True
+                    name = None; args = {}; call_obj = {}
+                    break
+            # If we handled a plan this turn, skip executing any tool and continue the loop
+            if plan_handled:
+                continue
+
             if name in ('final', 'question'):
                 if name == 'final':
                     final_text = str((args or {}).get('text') or call_obj.get('output_to_user') or '').strip() or 'Done.'
@@ -7196,8 +7204,23 @@ Response formatting:
                         session_title = session_title or None
                 else:
                     question_text = str((args or {}).get('text') or call_obj.get('output_to_user') or '').strip() or 'I have a question for you.'
+                # Mark current plan step done when it was a 'question' step
+                try:
+                    if name == 'question' and isinstance(plan_ctx.get("ptr"), int) and plan_ctx.get("steps"):
+                        idxq = int(plan_ctx["ptr"]) if plan_ctx["ptr"] is not None else None
+                        if idxq is not None and 0 <= idxq < len(plan_ctx["steps"]):
+                            plan_ctx["steps"][idxq]["status"] = "done"
+                            plan_ctx["steps"][idxq]["finished_at"] = datetime.utcnow().isoformat()+"Z"
+                            _enqueue({"type": "action", "function": "plan_update", "text": "Plan updated", "call": {"steps": plan_ctx["steps"]}})
+                except Exception:
+                    pass
                 break
             # Execute tool (only if not final/question)
+            # Validate function name and args; skip invalid/missing
+            if (not name) or (name == 'plan') or (name not in tools_map):
+                messages.append({"role": "user", "content": "Invalid or missing function. Respond NOW with ONE strict JSON object {\"function\": \"<tool>\", \"args\": { ... }} using concrete args only (no placeholders). If you need a file that is not present, use {\"function\":\"question\"} to ask the user to upload/select it."})
+                continue
+
             _send_info(f"tool:{name}")
             try:
                 _enqueue({
