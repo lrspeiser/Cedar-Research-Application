@@ -2684,7 +2684,7 @@ SELECT * FROM demo LIMIT 10;""")
                 var wrapC = document.createElement('div'); wrapC.className = 'msg assistant';
                 var metaC = document.createElement('div'); metaC.className = 'meta small'; metaC.innerHTML = "<span class='pill'>assistant</span> <span class='title' style='font-weight:600'>Cancelled</span>";
                 var bubC = document.createElement('div'); bubC.className = 'bubble assistant';
-                var contC = document.createElement('div'); contC.className = 'content'; contC.style.whiteSpace = 'pre-wrap'; contC.textContent = 'final ' + String(data.text||'');
+                var contC = document.createElement('div'); contC.className = 'content'; contC.style.whiteSpace = 'pre-wrap'; contC.textContent = String(data.text||'');
                 bubC.appendChild(contC); wrapC.appendChild(metaC); wrapC.appendChild(bubC);
                 if (msgs) msgs.appendChild(wrapC);
               } catch(_){}
@@ -2714,6 +2714,7 @@ SELECT * FROM demo LIMIT 10;""")
       var stagesSeen = {};
       var wsScheme = (location.protocol === 'https:') ? 'wss' : 'ws';
       var ws = new WebSocket(wsScheme + '://' + location.host + '/ws/chat/' + PROJECT_ID);
+      var wsStartMs = _now();
 
       // Client-side watchdog to ensure the user always sees progress or a timeout
       var timeoutMs = __WS_TIMEOUT_MS__; // mirrors server CEDARPY_CHAT_TIMEOUT_SECONDS
@@ -2725,7 +2726,11 @@ SELECT * FROM demo LIMIT 10;""")
         try { if (timeoutId) clearTimeout(timeoutId); } catch(_){}
         timeoutId = setTimeout(function(){
           if (!finalOrError) {
-            try { streamText.textContent = '[timeout] Took too long. Please try again.'; } catch(_){ }
+            try {
+              var budgetS = Math.round(timeoutMs/1000);
+              var elapsedS = (function(){ try { return (( _now() - (wsStartMs||0) )/1000).toFixed(1); } catch(_) { return 'unknown'; } })();
+              streamText.textContent = '[timeout] Took too long. Exceeded ' + budgetS + 's budget; elapsed ' + elapsedS + 's. Please try again.';
+            } catch(_){ }
             clearSpinner();
             stepAdvance('timeout', stream);
             finalOrError = true; timedOut = true;
@@ -2736,6 +2741,7 @@ SELECT * FROM demo LIMIT 10;""")
 
       ws.onopen = function(){
         try {
+          wsStartMs = _now();
           refreshTimeout();
           // Do not print a local 'submitted'; rely on server info events for true order
           if (replay) {
@@ -6303,8 +6309,8 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
 
     # Immediately inform client that the request is submitted and planning has started (for responsiveness)
     try:
-        await _ws_send_safe(websocket, json.dumps({"type": "info", "stage": "submitted"}))
-        await _ws_send_safe(websocket, json.dumps({"type": "info", "stage": "planning"}))
+        await _ws_send_safe(websocket, json.dumps({"type": "info", "stage": "submitted", "t": datetime.utcnow().isoformat()+"Z"}))
+        await _ws_send_safe(websocket, json.dumps({"type": "info", "stage": "planning", "t": datetime.utcnow().isoformat()+"Z"}))
         try:
             print("[ws-chat] submitted+planning-sent-early")
         except Exception:
@@ -6630,17 +6636,52 @@ Response formatting:
     def tool_web(args: dict) -> dict:
         q = (args or {}).get("query")
         url = (args or {}).get("url")
+        # Query-based search via DuckDuckGo HTML (best-effort)
+        if q and not url:
+            try:
+                import urllib.parse as _u
+                search_url = "https://duckduckgo.com/html/?q=" + _u.quote(str(q))
+                with _req.urlopen(search_url, timeout=25) as resp:
+                    body = resp.read().decode('utf-8', errors='replace')
+                hrefs = list(set(_re.findall(r'href=[\"\']([^\"\']+)', body)))
+                results = []
+                try:
+                    from urllib.parse import urlparse as _up, parse_qs as _pqs, unquote as _unq
+                except Exception:
+                    _up = None
+                for h in hrefs:
+                    try:
+                        if 'duckduckgo.com' in h and 'uddg=' in h and _up:
+                            uo = _up(h)
+                            qs = _pqs(uo.query)
+                            if 'uddg' in qs:
+                                real = _unq(qs['uddg'][0])
+                                if real.startswith('http'):
+                                    results.append({"url": real})
+                        elif h.startswith('http') and 'duckduckgo.com' not in h:
+                            results.append({"url": h})
+                    except Exception:
+                        continue
+                # Deduplicate while preserving order
+                seen = set(); uniq = []
+                for r in results:
+                    u = r.get('url')
+                    if u and u not in seen:
+                        seen.add(u); uniq.append(r)
+                return {"ok": True, "query": q, "results": uniq[:10], "count": len(uniq[:10])}
+            except Exception as e:
+                return {"ok": False, "error": f"{type(e).__name__}: {e}"}
         if url:
             try:
                 with _req.urlopen(url, timeout=25) as resp:
                     body = resp.read().decode('utf-8', errors='replace')
-                    links = list(set(_re.findall(r'href=["\']([^"\']+)', body)))
+                    links = list(set(_re.findall(r'href=[\"\']([^\"\']+)', body)))
                     title_m = _re.search(r'<title[^>]*>(.*?)</title>', body, _re.IGNORECASE | _re.DOTALL)
                     title = title_m.group(1).strip() if title_m else ''
                     return {"ok": True, "url": url, "title": title, "links": links[:200], "bytes": len(body)}
             except Exception as e:
                 return {"ok": False, "error": f"{type(e).__name__}: {e}"}
-        return {"ok": False, "error": "web.search not configured; provide args.url"}
+        return {"ok": False, "error": "web: provide args.url to fetch, or args.query to search."}
 
     def tool_download(args: dict) -> dict:
         urls = (args or {}).get("urls") or []
@@ -6990,14 +7031,27 @@ Response formatting:
 
                     # Update in-session plan state and set first step to running
                     try:
-                        plan_ctx["steps"] = steps
+                        # Normalize steps: add step_id and clear timing
+                        norm_steps = []
+                        for i, st in enumerate(steps, start=1):
+                            try:
+                                st = dict(st)
+                                st['step_id'] = i
+                                st.pop('started_at', None)
+                                st.pop('finished_at', None)
+                                if not st.get('status'):
+                                    st['status'] = 'in queue'
+                            except Exception:
+                                pass
+                            norm_steps.append(st)
+                        plan_ctx["steps"] = norm_steps
                         plan_ctx["ptr"] = 0
                         if plan_ctx["steps"]:
                             try:
                                 plan_ctx["steps"][0]["status"] = "currently running"
+                                plan_ctx["steps"][0]["started_at"] = datetime.utcnow().isoformat()+"Z"
                             except Exception:
                                 pass
-                        # Send a lightweight plan_update action (no extra bubble on client)
                         await websocket.send_text(json.dumps({
                             "type": "action",
                             "function": "plan_update",
@@ -7056,7 +7110,6 @@ Response formatting:
                 payload = {"function": name, "args": args, "result": result}
                 dbt.add(ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="assistant", display_title=f"Tool: {name}", content=json.dumps(payload, ensure_ascii=False), payload_json=payload))
                 dbt.commit()
-                # Write per-tool changelog entry
                 try:
                     record_changelog(dbt, project_id, branch.id, f"chat.{name}", {"function": name, "args": args}, {"result": result, "run_summary": (call_obj or {}).get("changelog_summary")})
                 except Exception:
@@ -7067,6 +7120,17 @@ Response formatting:
             finally:
                 try: dbt.close()
                 except Exception: pass
+            # Emit condensed tool_result action
+            try:
+                summ = f"{name} {'ok' if bool(result.get('ok')) else 'error'}"
+                await _ws_send_safe(websocket, json.dumps({
+                    "type": "action",
+                    "function": "tool_result",
+                    "text": summ,
+                    "call": {"function": name, "args": args, "result": {k: result.get(k) for k in list(result.keys())[:6]}},
+                }))
+            except Exception:
+                pass
 
             # Update plan step status and prompt next step if applicable
             try:
@@ -7075,6 +7139,7 @@ Response formatting:
                     if idx is not None and 0 <= idx < len(plan_ctx["steps"]):
                         try:
                             plan_ctx["steps"][idx]["status"] = "done" if bool(result.get("ok")) else "failed"
+                            plan_ctx["steps"][idx]["finished_at"] = datetime.utcnow().isoformat()+"Z"
                         except Exception:
                             pass
                         # Send plan_update to refresh right panel
@@ -7092,6 +7157,8 @@ Response formatting:
                             plan_ctx["ptr"] = idx + 1
                             try:
                                 plan_ctx["steps"][plan_ctx["ptr"]]["status"] = "currently running"
+                                plan_ctx["steps"][plan_ctx["ptr"]]["started_at"] = datetime.utcnow().isoformat()+"Z"
+                                plan_ctx["steps"][plan_ctx["ptr"]].pop("finished_at", None)
                             except Exception:
                                 pass
                             try:
