@@ -2402,12 +2402,7 @@ SELECT * FROM demo LIMIT 10;""")
 
     left_details = _file_detail_panel(selected_file)
 
-    # Thread tabs (above left panel)
-    thr_tabs = []
-    for t in threads:
-        cls = "tab active" if (selected_thread and t.id == selected_thread.id) else "tab"
-        thr_tabs.append(f"<a href='/project/{project.id}?branch_id={current.id}" + (f"&file_id={selected_file.id}" if selected_file else "") + f"&thread_id={t.id}' class='{cls}'>{escape(t.title)}</a>")
-    thr_tabs_html = " ".join(thr_tabs) + f" <a href='/project/{project.id}/threads/new?branch_id={current.id}" + (f"&dataset_id={selected_dataset.id}" if selected_dataset else (f"&file_id={selected_file.id}" if selected_file else "")) + "' class='tab new thread-create' title='New Thread'>+</a>"
+    # Thread tabs removed per new design — switching threads happens via the "All Chats" tab.
 
     # Build "All Chats" list panel (thread previews)
     all_chats_items = []
@@ -3134,10 +3129,9 @@ SELECT * FROM demo LIMIT 10;""")
             </div>
             <div class="tab-panels" style="flex:1; min-height:0">
               <div id="left-chat" class="panel">
-                <div class='tabbar thread-tabs' style='margin-bottom:6px'>{thr_tabs_html}</div>
                 <h3>Chat</h3>
                 <style>
-                  /* Chat area grows to fill viewport; input stays at bottom regardless of window size */
+                /* Chat area grows to fill viewport; input stays at bottom regardless of window size */
                   #left-chat {{ display:flex; flex-direction:column; flex:1; min-height:0; }}
                   #left-chat .chat-log {{ flex:1; display:flex; flex-direction:column; gap:8px; overflow-y:auto; padding-bottom:6px; }}
                   #left-chat .chat-input {{ margin-top:auto; padding-top:6px; background:#fff; }}
@@ -3150,9 +3144,6 @@ SELECT * FROM demo LIMIT 10;""")
                   .bubble.user {{ background:#d9fdd3; border-color:#b2e59a; }}
                   .bubble.assistant {{ background:#ffffff; border-color:#e6e6e6; }}
                   .bubble.system {{ background:#e7f3ff; border-color:#cfe8ff; }}
-                  .thread-tabs .tab {{ display:inline-block; padding:6px 10px; border:1px solid var(--border); border-bottom:none; border-radius:6px 6px 0 0; background:#f3f4f6; color:#111; margin-right:4px; }}
-                  .thread-tabs .tab.active {{ background:#fff; font-weight:600; }}
-                  .thread-tabs .tab.new {{ background:#e5f6ff; }}
                 </style>
                 {flash_html}
                 <div id='msgs' class='chat-log'>{msgs_html}</div>
@@ -5926,6 +5917,17 @@ def ask_orchestrator(project_id: int, request: Request, query: str = Form(...), 
             db.add(ThreadMessage(project_id=project.id, branch_id=branch.id, thread_id=thr.id, role="assistant", content=_json.dumps(resp, ensure_ascii=False), display_title="Ask: JSON")); db.commit()
         except Exception:
             db.rollback()
+        # If the assistant provided a Thread_title, update the thread's title
+        try:
+            tt = str((resp or {}).get("Thread_title") or "").strip()
+            if tt:
+                thr_db = db.query(Thread).filter(Thread.id == thr.id, Thread.project_id == project.id).first()
+                if thr_db:
+                    thr_db.title = tt[:100]
+                    db.commit()
+        except Exception:
+            try: db.rollback()
+            except Exception: pass
 
         text_visible = str(resp.get("Text Visible To User") or "").strip()
         last_text_visible = text_visible or last_text_visible
@@ -6081,7 +6083,8 @@ def thread_chat(project_id: int, request: Request, content: str = Form(...), thr
                 "For more complex queries, or ones that require precise numerical answers, begin with the \"plan\" function.\n"
                 "Within \"plan\" indicate the functions you will use for each step.\n"
                 "Functions include web, download, extract, image, db, code, shell, notes, compose, question, final.\n"
-                "In every response, output STRICT JSON and always include output_to_user and changelog_summary.\n"
+        "In every response, output STRICT JSON and always include output_to_user and changelog_summary.\n"
+        "Also include a field named Thread_title with a concise (<=5 words) specific title for the theme of this conversation.\n"
                 "Include examples for each function so the system can parse it afterwards.\n"
                 "We pass Resources (files/dbs), History (recent conversation), and Context (selected file/DB) with each query.\n"
                 "All data systems are queriable via db/download/extract—provide concrete, executable specs.\n"
@@ -6435,6 +6438,7 @@ Plan/step schema (STRICT JSON):
 - steps (for function=='plan'): array of step objects, each with the SAME fields above plus an 'args' object appropriate for that step's function. The array MUST be non-empty.
 - output_to_user: short text shown to the user summarizing what will happen
 - changelog_summary: one-line summary for the changelog
+- Thread_title: concise (<= 5 words) specific title for the theme of this conversation
 
 When executing steps, respond with exactly ONE function call per turn (e.g., 'code', 'db', 'download', etc.), including an 'args' object that is fully specified.
 For 'code', include: language, packages (list), and source. For 'db', include: sql.
@@ -6878,6 +6882,25 @@ Keep total turns <= 3 and ALWAYS end with a single {"function":"final"} call con
                 obj = json.loads(raw)
             except Exception:
                 obj = None
+            # Update thread title from Thread_title on the first turn when available
+            try:
+                if (loop_count == 1) and isinstance(obj, dict):
+                    _tt = str(obj.get('Thread_title') or '').strip()
+                    if _tt:
+                        dbt1 = SessionLocal()
+                        try:
+                            thr_db = dbt1.query(Thread).filter(Thread.id == thr.id, Thread.project_id == project_id).first()
+                            if thr_db:
+                                thr_db.title = _tt[:100]
+                                dbt1.commit()
+                        except Exception:
+                            try: dbt1.rollback()
+                            except Exception: pass
+                        finally:
+                            try: dbt1.close()
+                            except Exception: pass
+            except Exception:
+                pass
             if isinstance(obj, list):
                 calls = [c for c in obj if isinstance(c, dict)]
             elif isinstance(obj, dict):
