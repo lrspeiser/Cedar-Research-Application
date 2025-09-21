@@ -6674,15 +6674,28 @@ def _run_langextract_ingest_background(project_id: int, branch_id: int, file_id:
         from sqlalchemy.orm import sessionmaker as _sessionmaker
         import json as _json
         import cedar_langextract as _lx
+        import sqlalchemy.exc as sa_exc  # type: ignore
     except Exception:
         return
     try:
         SessionLocal = _sessionmaker(bind=_get_project_engine(project_id), autoflush=False, autocommit=False, future=True)
         dbj = SessionLocal()
-    except Exception:
+    except Exception as e:
+        try:
+            print(f"[lx-ingest-skip] failed to open project DB: {e}")
+        except Exception:
+            pass
         return
     try:
-        rec = dbj.query(FileEntry).filter(FileEntry.id == int(file_id), FileEntry.project_id == project_id).first()
+        try:
+            rec = dbj.query(FileEntry).filter(FileEntry.id == int(file_id), FileEntry.project_id == project_id).first()
+        except Exception as e:
+            # Handle cases where tables are not ready yet
+            try:
+                print(f"[lx-ingest-skip] db not ready: {e}")
+            except Exception:
+                pass
+            return
         if not rec:
             return
         # Ensure schema in this per-project DB
@@ -6847,8 +6860,23 @@ def upload_file(project_id: int, request: Request, file: UploadFile = File(...),
                 print(f"[upload-api] classified structure={record.structure or ''} ai_title={(record.ai_title or '')[:80]}")
             except Exception:
                 pass
-            # Persist assistant message with result
-            tm2 = ThreadMessage(project_id=project.id, branch_id=branch.id, thread_id=thr.id, role="assistant", display_title="File analyzed", content=json.dumps(ai), payload_json=ai)
+            # Persist assistant message with result (title must start with "File analyzed" for tests)
+            disp_title = f"File analyzed — {record.structure or 'unknown'}"
+            tm2 = ThreadMessage(
+                project_id=project.id,
+                branch_id=branch.id,
+                thread_id=thr.id,
+                role="assistant",
+                display_title=disp_title,
+                content=json.dumps({
+                    "event": "file_analyzed",
+                    "file_id": record.id,
+                    "structure": record.structure,
+                    "ai_title": record.ai_title,
+                    "ai_category": record.ai_category,
+                }),
+                payload_json=ai,
+            )
             db.add(tm2); db.commit()
         else:
             record.ai_processing = False
@@ -6913,7 +6941,12 @@ def upload_file(project_id: int, request: Request, file: UploadFile = File(...),
         _lx_ingest_enabled = str(os.getenv("CEDARPY_LX_INGEST", "1")).strip().lower() not in {"", "0", "false", "no", "off"}
     except Exception:
         _lx_ingest_enabled = True
-    if _lx_ingest_enabled:
+    # Also honor CEDARPY_LANGEXTRACT_BG for CI-controlled gating
+    try:
+        _lx_bg_on = str(os.getenv("CEDARPY_LANGEXTRACT_BG", "1")).strip().lower() not in {"", "0", "false", "no", "off"}
+    except Exception:
+        _lx_bg_on = True
+    if _lx_ingest_enabled and _lx_bg_on:
         try:
             db.add(ThreadMessage(project_id=project.id, branch_id=branch.id, thread_id=thr.id, role="system", display_title="Indexing file chunks...", content=json.dumps({"action":"langextract_ingest","file_id": record.id, "display_name": original_name})))
             db.commit()
