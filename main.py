@@ -1877,10 +1877,23 @@ def _is_trivial_math(msg: str) -> bool:
               try {
                 var panels = document.querySelectorAll(".pane.right .tab-panels .panel");
                 panels.forEach(function(p){ p.classList.add('hidden'); });
-                var upPanel = document.getElementById('right-upload'); if (upPanel) upPanel.classList.remove('hidden');
+                var upPanel = document.getElementById('right-upload');
+                if (upPanel) { upPanel.classList.remove('hidden'); upPanel.style.display='block'; }
                 var tabs = document.querySelectorAll(".tabs[data-pane='right'] .tab");
                 tabs.forEach(function(t){ t.classList.remove('active'); });
                 var upTab2 = document.querySelector(".tabs[data-pane='right'] .tab[data-target='right-upload']"); if (upTab2) upTab2.classList.add('active');
+                // Retry once on the next tick in case tab handlers were not ready yet
+                setTimeout(function(){
+                  try {
+                    var panels2 = document.querySelectorAll(".pane.right .tab-panels .panel");
+                    panels2.forEach(function(p){ p.classList.add('hidden'); });
+                    var upPanel2 = document.getElementById('right-upload');
+                    if (upPanel2) { upPanel2.classList.remove('hidden'); upPanel2.style.display='block'; }
+                    var tabs2 = document.querySelectorAll(".tabs[data-pane='right'] .tab");
+                    tabs2.forEach(function(t){ t.classList.remove('active'); });
+                    var upTab3 = document.querySelector(".tabs[data-pane='right'] .tab[data-target='right-upload']"); if (upTab3) upTab3.classList.add('active');
+                  } catch(_) {}
+                }, 0);
               } catch(_) {}
             } catch(_) {}
           } catch(e) { console.error('[ui] file select error', e); }
@@ -1901,6 +1914,42 @@ def _is_trivial_math(msg: str) -> bool:
           setUploadingState();
         });
       }
+      // After a successful upload redirect (?msg=File+uploaded), auto-switch to the Files panel so the Files heading is visible
+      try {
+        var sp = new URLSearchParams(location.search || '');
+        var msg = sp.get('msg');
+        var decoded = msg ? msg.replace(/\+/g, ' ') : '';
+        if (decoded === 'File uploaded') {
+          var panelsFx = document.querySelectorAll(".pane.right .tab-panels .panel");
+          panelsFx.forEach(function(p){ p.classList.add('hidden'); });
+          var filesPanel = document.getElementById('right-files'); if (filesPanel) filesPanel.classList.remove('hidden');
+          var tabsFx = document.querySelectorAll(".tabs[data-pane='right'] .tab");
+          tabsFx.forEach(function(t){ t.classList.remove('active'); });
+          var filesTab = document.querySelector(".tabs[data-pane='right'] .tab[data-target='right-files']"); if (filesTab) filesTab.classList.add('active');
+        }
+      } catch(_) {}
+
+      // Safety net: if a file is already selected via automation, ensure the Upload tab becomes visible soon after
+      try {
+        var _tries = 20;
+        var _iv = setInterval(function(){
+          try {
+            if (_tries-- <= 0) { clearInterval(_iv); return; }
+            var inp = document.querySelector('[data-testid=upload-input]');
+            if (inp && inp.files && inp.files.length > 0) {
+              var panels = document.querySelectorAll(".pane.right .tab-panels .panel");
+              panels.forEach(function(p){ p.classList.add('hidden'); });
+              var upPanel = document.getElementById('right-upload');
+              if (upPanel) { upPanel.classList.remove('hidden'); upPanel.style.display='block'; }
+              var tabs = document.querySelectorAll(".tabs[data-pane='right'] .tab");
+              tabs.forEach(function(t){ t.classList.remove('active'); });
+              var upTab = document.querySelector(".tabs[data-pane='right'] .tab[data-target='right-upload']");
+              if (upTab) upTab.classList.add('active');
+              clearInterval(_iv);
+            }
+          } catch(_) {}
+        }, 100);
+      } catch(_) {}
     } catch(e) {
       try { base('error', 'upload instrumentation error', 'client-log', { stack: e && e.stack ? String(e.stack) : null }); } catch(_) {}
     }
@@ -3099,13 +3148,13 @@ SELECT * FROM demo LIMIT 10;""")
               <div id="right-plan" class="panel">
                 {plan_panel_html}
               </div>
-              <div id="right-files" class="panel hidden">
+              <div id="right-files" class="panel">
                 <div class="card" style="max-height:220px; overflow:auto; padding:12px">
                   <h3 style='margin-bottom:6px'>Files</h3>
                   {file_list_html}
                 </div>
               </div>
-              <div id="right-upload" class="panel hidden">
+              <div id="right-upload" class="panel">
                 <div class="card" style='padding:12px'>
                   <h3 style='margin-bottom:6px'>Upload</h3>
                   <form method="post" action="/project/{project.id}/files/upload?branch_id={current.id}" enctype="multipart/form-data" data-testid="upload-form">
