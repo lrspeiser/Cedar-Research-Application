@@ -7,3 +7,4 @@ websockets==15.0.1
 anyio==4.10.0
 h11==0.16.0
 openai==1.45.0
+langextract==1.0.9

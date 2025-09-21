@@ -321,6 +321,73 @@ def _migrate_thread_messages_columns(engine_obj):
         pass
 
 
+def _migrate_project_langextract_tables(engine_obj):
+    """Create per-project tables for LangExtract chunk storage and FTS.
+    Best-effort; ignore errors if unavailable.
+    """
+    try:
+        with engine_obj.begin() as conn:
+            # doc_chunks base table
+            conn.exec_driver_sql(
+                """
+                CREATE TABLE IF NOT EXISTS doc_chunks (
+                  id TEXT PRIMARY KEY,
+                  file_id INTEGER NOT NULL,
+                  char_start INTEGER NOT NULL,
+                  char_end INTEGER NOT NULL,
+                  text TEXT NOT NULL,
+                  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                  UNIQUE(file_id, char_start, char_end)
+                )
+                """
+            )
+            # doc_chunks_fts
+            conn.exec_driver_sql(
+                """
+                CREATE VIRTUAL TABLE IF NOT EXISTS doc_chunks_fts USING fts5(
+                  chunk_id UNINDEXED,
+                  file_id UNINDEXED,
+                  text,
+                  tokenize = 'porter'
+                )
+                """
+            )
+            # Triggers (guard if they already exist)
+            def _tr_exists(name: str) -> bool:
+                res = conn.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='trigger' AND name=?", (name,))
+                return res.fetchone() is not None
+            if not _tr_exists("doc_chunks_ai"):
+                conn.exec_driver_sql(
+                    """
+                    CREATE TRIGGER doc_chunks_ai AFTER INSERT ON doc_chunks BEGIN
+                      INSERT INTO doc_chunks_fts(rowid, chunk_id, file_id, text)
+                      VALUES (new.rowid, new.id, new.file_id, new.text);
+                    END;
+                    """
+                )
+            if not _tr_exists("doc_chunks_ad"):
+                conn.exec_driver_sql(
+                    """
+                    CREATE TRIGGER doc_chunks_ad AFTER DELETE ON doc_chunks BEGIN
+                      INSERT INTO doc_chunks_fts(doc_chunks_fts, rowid, chunk_id, file_id, text)
+                      VALUES ('delete', old.rowid, old.id, old.file_id, old.text);
+                    END;
+                    """
+                )
+            if not _tr_exists("doc_chunks_au"):
+                conn.exec_driver_sql(
+                    """
+                    CREATE TRIGGER doc_chunks_au AFTER UPDATE ON doc_chunks BEGIN
+                      INSERT INTO doc_chunks_fts(doc_chunks_fts, rowid, chunk_id, file_id, text)
+                      VALUES ('delete', old.rowid, old.id, old.file_id, old.text);
+                      INSERT INTO doc_chunks_fts(rowid, chunk_id, file_id, text)
+                      VALUES (new.rowid, new.id, new.file_id, new.text);
+                    END;
+                    """
+                )
+    except Exception:
+        pass
+
 def ensure_project_initialized(project_id: int) -> None:
     """Ensure the per-project database and storage exist and are seeded.
     See PROJECT_SEPARATION_README.md
@@ -332,6 +399,7 @@ def ensure_project_initialized(project_id: int) -> None:
         # Lightweight migrations for this project DB
         _migrate_project_files_ai_columns(eng)
         _migrate_thread_messages_columns(eng)
+        _migrate_project_langextract_tables(eng)
         # Seed project row and Main branch if missing
         SessionLocal = sessionmaker(bind=eng, autoflush=False, autocommit=False, future=True)
         pdb = SessionLocal()
@@ -355,6 +423,7 @@ def ensure_project_initialized(project_id: int) -> None:
         _ensure_project_storage(project_id)
         _migrate_project_files_ai_columns(eng)
         _migrate_thread_messages_columns(eng)
+        _migrate_project_langextract_tables(eng)
     except Exception:
         pass
 
@@ -6595,6 +6664,55 @@ def _run_tabular_import_background(project_id: int, branch_id: int, file_id: int
         import json as _json
     except Exception:
         return
+
+
+def _run_langextract_ingest_background(project_id: int, branch_id: int, file_id: int, thread_id: int) -> None:
+    """Background worker to build per-file chunk index using LangExtract.
+    Best-effort; logs progress into the thread and changelog.
+    """
+    try:
+        from sqlalchemy.orm import sessionmaker as _sessionmaker
+        import json as _json
+        import cedar_langextract as _lx
+    except Exception:
+        return
+    try:
+        SessionLocal = _sessionmaker(bind=_get_project_engine(project_id), autoflush=False, autocommit=False, future=True)
+        dbj = SessionLocal()
+    except Exception:
+        return
+    try:
+        rec = dbj.query(FileEntry).filter(FileEntry.id == int(file_id), FileEntry.project_id == project_id).first()
+        if not rec:
+            return
+        # Ensure schema in this per-project DB
+        try:
+            _lx.ensure_langextract_schema(_get_project_engine(project_id))
+        except Exception:
+            pass
+        # Convert file to text (use interpreter metadata for fallback)
+        text = _lx.file_to_text(rec.storage_path or "", rec.display_name, rec.metadata_json or {})
+        try:
+            max_chars = int(os.getenv("CEDARPY_LX_MAX_CHARS", "1500"))
+        except Exception:
+            max_chars = 1500
+        chunks = _lx.chunk_document_insert(_get_project_engine(project_id), int(rec.id), text, max_char_buffer=max_chars)
+        # Persist assistant message with result
+        try:
+            title = f"Index built — {chunks} chunk(s)"
+            dbj.add(ThreadMessage(project_id=project_id, branch_id=branch_id, thread_id=thread_id, role="assistant", display_title=title, content=_json.dumps({"ok": True, "chunks": chunks})))
+            dbj.commit()
+        except Exception:
+            try: dbj.rollback()
+            except Exception: pass
+        # Changelog entry
+        try:
+            record_changelog(dbj, project_id, branch_id, "file.langextract_ingest", {"file_id": file_id}, {"chunks": chunks, "bytes": len(text or '')})
+        except Exception:
+            pass
+    finally:
+        try: dbj.close()
+        except Exception: pass
     try:
         SessionLocal = _sessionmaker(bind=_get_project_engine(project_id), autoflush=False, autocommit=False, future=True)
         dbj = SessionLocal()
@@ -6787,6 +6905,26 @@ def upload_file(project_id: int, request: Request, file: UploadFile = File(...),
         except Exception as e2:
             try:
                 print(f"[tabular-bg-error] {type(e2).__name__}: {e2}")
+            except Exception:
+                pass
+
+    # LangExtract indexing (background) — enabled by default; set CEDARPY_LX_INGEST=0 to disable
+    try:
+        _lx_ingest_enabled = str(os.getenv("CEDARPY_LX_INGEST", "1")).strip().lower() not in {"", "0", "false", "no", "off"}
+    except Exception:
+        _lx_ingest_enabled = True
+    if _lx_ingest_enabled:
+        try:
+            db.add(ThreadMessage(project_id=project.id, branch_id=branch.id, thread_id=thr.id, role="system", display_title="Indexing file chunks...", content=json.dumps({"action":"langextract_ingest","file_id": record.id, "display_name": original_name})))
+            db.commit()
+        except Exception:
+            db.rollback()
+        try:
+            import threading as _threading
+            _threading.Thread(target=_run_langextract_ingest_background, args=(project.id, branch.id, record.id, thr.id), daemon=True).start()
+        except Exception as e3:
+            try:
+                print(f"[lx-ingest-bg-error] {type(e3).__name__}: {e3}")
             except Exception:
                 pass
 

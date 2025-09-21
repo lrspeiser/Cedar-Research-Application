@@ -1,3 +1,4 @@
 PyInstaller>=6.6
 setuptools>=69.0
 wheel>=0.43.0
+langextract>=1.0.9
