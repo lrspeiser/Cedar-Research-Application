@@ -6477,7 +6477,6 @@ Response formatting:
 - For 'code', include: language, packages (list), and source. For 'db', include: sql.
 - Always end the session with a single {"function":"final"} that includes args.text (answer), args.title (3–6 words), and args.run_summary (bulleted summary of actions and outcomes).
         """
-        """
 
         examples_json = {
             "plan": {
