@@ -2532,8 +2532,14 @@ SELECT * FROM demo LIMIT 10;""")
             if (msgs) msgs.appendChild(wrapF);
             // Ensure an Assistant prompt bubble exists for JSON drilldown, even if the initial 'prompt' event was missed
             try {
-              var haveAssistant = document.querySelector('#msgs .msg.assistant .meta .title');
-              if (!haveAssistant) {
+              // Only synthesize if no existing Assistant-titled message exists. The final bubble's title may be 'final' or a function name,
+              // so do not treat that as satisfying the Assistant prompt presence check.
+              var titles = Array.from(document.querySelectorAll('#msgs .msg.assistant .meta .title'));
+              var haveAssistantTitle = false;
+              try {
+                haveAssistantTitle = titles.some(function(el){ return String(el.textContent||'').trim().toLowerCase() === 'assistant'; });
+              } catch(_){ haveAssistantTitle = false; }
+              if (!haveAssistantTitle) {
                 var detIdP2 = 'det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
                 var wrapP2 = document.createElement('div'); wrapP2.className = 'msg assistant';
                 var metaP2 = document.createElement('div'); metaP2.className = 'meta small'; metaP2.innerHTML = "<span class='pill'>assistant</span> <span class='title' style='font-weight:600'>Assistant</span>";
@@ -2557,7 +2563,7 @@ SELECT * FROM demo LIMIT 10;""")
                 detailsP2.appendChild(barP2);
                 detailsP2.appendChild(preP2);
                 wrapP2.appendChild(metaP2); wrapP2.appendChild(bubP2); wrapP2.appendChild(detailsP2);
-                if (msgs) { msgs.appendChild(wrapP2); }
+                if (msgs) { try { msgs.insertBefore(wrapP2, wrapF); } catch(_) { msgs.appendChild(wrapP2); } }
                 try { console.log('[ui] synthesized Assistant prompt bubble'); } catch(_){}
                 try { stepAdvance('assistant:prompt', wrapP2); } catch(_){}
               }
