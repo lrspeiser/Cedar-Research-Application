@@ -1648,40 +1648,6 @@ def _llm_reach_reason() -> str:
     except Exception:
         return "unknown"
 
-# Cheap fast-path for trivial arithmetic to avoid planner latency for prompts like "what is 2+2".
-# Returns a string answer (e.g., "4") or None if not applicable.
-# See README (WS chat fast-paths) for rationale and maintenance notes.
-# This is intentionally conservative and only handles two-operand integer arithmetic.
-# If expanded, keep it deterministic and side-effect free.
-from typing import Optional as _Optional
-
-def _try_fast_math(msg: str) -> _Optional[str]:
-    try:
-        import re as _re
-        import operator as _op
-        OPS = {"+": _op.add, "-": _op.sub, "*": _op.mul, "x": _op.mul, "×": _op.mul, "/": _op.truediv}
-        s = (msg or "").strip().lower()
-        m = _re.match(r"^(what\s+is\s+)?(-?\d+)\s*([+\-*/x×])\s*(-?\d+)\s*\??$", s)
-        if not m:
-            return None
-        a = int(m.group(2)); op = m.group(3); b = int(m.group(4))
-        if op not in OPS:
-            return None
-        val = OPS[op](a, b)
-        # Normalize integer-like floats to int strings
-        try:
-            fv = float(val)
-            if fv.is_integer():
-                return str(int(fv))
-            # Limit precision for division results
-            return f"{fv:.6g}"
-        except Exception:
-            try:
-                return str(int(val))
-            except Exception:
-                return str(val)
-    except Exception:
-        return None
 
 
 
@@ -2045,6 +2011,48 @@ def project_page_html(
             </tr>
         """)
     files_tbody = ''.join(file_rows) if file_rows else '<tr><td colspan="6" class="muted">No files yet.</td></tr>'
+
+    # extract latest plan from selected thread messages (if any)
+    plan_card_html = ""
+    try:
+        if thread_messages:
+            last_plan = None
+            for m in reversed(thread_messages):
+                try:
+                    pj = m.payload_json if hasattr(m, 'payload_json') else None
+                except Exception:
+                    pj = None
+                if isinstance(pj, dict) and str(pj.get('function') or '').lower() == 'plan':
+                    last_plan = pj
+                    break
+            if last_plan:
+                # Render a compact plan card for the right column
+                try:
+                    pt = html.escape(str(last_plan.get('title') or 'Plan'))
+                except Exception:
+                    pt = 'Plan'
+                steps = last_plan.get('steps') or []
+                rows = []
+                si = 0
+                for st in steps[:10]:
+                    si += 1
+                    fn = html.escape(str((st or {}).get('function') or ''))
+                    ti = html.escape(str((st or {}).get('title') or ''))
+                    st_status = html.escape(str((st or {}).get('status') or 'in queue'))
+                    rows.append(f"<tr><td class='small'>{fn}</td><td>{ti}</td><td class='small muted'>{st_status}</td></tr>")
+                tbody = ''.join(rows) or "<tr><td colspan='3' class='muted small'>(no steps)</td></tr>"
+                plan_card_html = f"""
+                <div class='card' style='padding:12px'>
+                  <h3 style='margin-bottom:6px'>Plan</h3>
+                  <div class='small muted' style='margin-bottom:6px'>{pt}</div>
+                  <table class='table'>
+                    <thead><tr><th>Func</th><th>Title</th><th>Status</th></tr></thead>
+                    <tbody>{tbody}</tbody>
+                  </table>
+                </div>
+                """
+    except Exception:
+        plan_card_html = ""
 
     # threads table
     thread_rows = []
@@ -2782,6 +2790,7 @@ SELECT * FROM demo LIMIT 10;""")
           </div>
 
           <div class="pane right">
+          {plan_card_html}
           <div class="card" style="max-height:220px; overflow:auto; padding:12px">
             <h3 style='margin-bottom:6px'>Files</h3>
             {file_list_html}
@@ -5883,44 +5892,98 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
         except Exception:
             pass
 
+        # Gather Notes and Changelog (recent)
+        notes = []
+        try:
+            recent_notes = db2.query(Note).filter(Note.project_id==project_id, Note.branch_id==branch.id).order_by(Note.created_at.desc()).limit(50).all()
+            for n in reversed(recent_notes):
+                notes.append({"id": n.id, "tags": (n.tags or []), "content": (n.content or "")[:1000], "created_at": n.created_at.isoformat() if getattr(n, 'created_at', None) else None})
+        except Exception:
+            notes = []
+        changelog = []
+        try:
+            with RegistrySessionLocal() as reg:
+                ents = reg.query(ChangelogEntry).filter(ChangelogEntry.project_id==project_id, ChangelogEntry.branch_id==branch.id).order_by(ChangelogEntry.created_at.desc()).limit(50).all()
+                for ce in reversed(ents):
+                    try:
+                        when = ce.created_at.isoformat() if getattr(ce, 'created_at', None) else None
+                    except Exception:
+                        when = None
+                    changelog.append({"when": when, "action": ce.action, "summary": (ce.summary_text or "")[:500]})
+        except Exception:
+            changelog = []
+
         # Research tool system prompt and examples
-        sys_prompt = (
-            "This is a research tool to help people understand the breadth of existing research in the area,\n"
-            "collect and analyze data, and build out reports and visuals to help communicate their findings.\n"
-            "You will have a number of tools to select from when responding to a user.\n"
-            "For simple queries, you can answer with the \"final\" function.\n"
-            "For more complex queries, or ones that require precise numerical answers, begin with the \"plan\" function.\n"
-            "Within \"plan\" indicate the functions you will use for each step.\n"
-            "Functions include: \n"
-            "- web: run a web search and obtain a webpage with all links extracted.\n"
-            "- download: download one or more URLs.\n"
-            "- extract: take a file (e.g., PDF) and break it into claims (unique findings) and citations (references).\n"
-            "- image: analyze a provided image.\n"
-            "- db: execute an SQL statement against the built-in DB.\n"
-            "- code: execute code; specify language, required packages, and the code.\n"
-            "- shell: execute a shell script.\n"
-            "- notes: write notes organized by themes.\n"
-            "- compose: write the paper from notes.\n"
-            "- question: ask a question of the user.\n"
-            "- final: the last step in the plan.\n"
-            "In every response, output STRICT JSON. Always include output_to_user (what to show the user) and changelog_summary.\n"
-            "Also include a concise session title in the \"final\" function args as \"title\" (3-6 words, Title Case).\n"
-            "Include examples of the JSON schema for each function so the system can parse it afterwards.\n"
-            "We will pass with each query: (a) a list of files and databases you can access (Resources), (b) recent conversation history (History), and (c) optional Context (selected file/DB).\n"
-            "All data systems are queriable by you via the db/download/extract functions. Provide concrete, executable specs for those.\n"
-            "IMPORTANT: Constrain yourself to at most 3 turns in total. Always end with a \"final\" function within 3 turns, especially for simple queries like arithmetic.\n"
-        )
+        sys_prompt = """
+You are an orchestrator that ALWAYS uses the LLM on each user prompt.
+
+Decision on first turn: If the query is trivially answerable (e.g., simple arithmetic), respond with a single {"function":"final"} call. Otherwise, your FIRST response MUST be a {"function":"plan"} object laying out the steps.
+
+Plan/step schema (STRICT JSON):
+- function: 'plan' | 'web' | 'download' | 'extract' | 'image' | 'db' | 'code' | 'notes' | 'compose' | 'question' | 'final'
+- title: short title of the task
+- description: detailed description of the task
+- goal_outcome: what success looks like for this task
+- status: one of 'in queue' | 'currently running' | 'done' | 'failed'
+- state: one of 'new plan' | 'diff change'
+- steps (for function=='plan'): array of step objects, each with the SAME fields above plus an 'args' object appropriate for that step's function.
+- output_to_user: short text shown to the user summarizing what will happen
+- changelog_summary: one-line summary for the changelog
+
+When executing steps, respond with exactly ONE function call per turn (e.g., 'code', 'db', 'download', etc.), including an 'args' object that is fully specified.
+For 'code', include: language, packages (list), and source. For 'db', include: sql.
+Use the provided Resources (files, databases), History (recent thread), Notes, and Changelog to craft accurate steps.
+Keep total turns <= 3 and ALWAYS end with a single {"function":"final"} call containing args.text (user-visible answer) and args.title (3-6 words).
+        """
 
         examples_json = {
             "plan": {
                 "function": "plan",
+                "title": "Analyze Files and Summarize",
+                "description": "Gather relevant files, extract key findings, compute simple stats, and write a short summary.",
+                "goal_outcome": "A concise answer with references to analyzed files",
+                "status": "in queue",
+                "state": "new plan",
                 "steps": [
-                    {"description": "Search for recent survey papers", "will_call": ["web", "download", "extract"]},
-                    {"description": "Aggregate key findings and compute statistics", "will_call": ["db", "code"]},
-                    {"description": "Write summary", "will_call": ["compose", "final"]}
+                    {
+                        "function": "web",
+                        "title": "Search recent survey",
+                        "description": "Find a relevant survey article to provide context",
+                        "goal_outcome": "One authoritative survey URL",
+                        "status": "in queue",
+                        "state": "new plan",
+                        "args": {"query": "site:nature.com CRISPR review 2024"}
+                    },
+                    {
+                        "function": "download",
+                        "title": "Download article",
+                        "description": "Download the selected article for analysis",
+                        "goal_outcome": "PDF saved to project files",
+                        "status": "in queue",
+                        "state": "new plan",
+                        "args": {"urls": ["https://example.org/paper.pdf"]}
+                    },
+                    {
+                        "function": "extract",
+                        "title": "Extract claims/citations",
+                        "description": "Extract key claims and references",
+                        "goal_outcome": "Structured list of claims and citations",
+                        "status": "in queue",
+                        "state": "new plan",
+                        "args": {"file_id": 123}
+                    },
+                    {
+                        "function": "final",
+                        "title": "Write the answer",
+                        "description": "Produce the final answer",
+                        "goal_outcome": "Clear, concise answer",
+                        "status": "in queue",
+                        "state": "new plan",
+                        "args": {"text": "<answer>", "title": "<3-6 words>"}
+                    }
                 ],
                 "output_to_user": "High-level plan with steps and intended tools",
-                "changelog_summary": "created plan with 3 steps"
+                "changelog_summary": "created plan"
             },
             "web": {"function": "web", "args": {"query": "site:nature.com CRISPR review 2024"}, "output_to_user": "Searched web", "changelog_summary": "web search"},
             "download": {"function": "download", "args": {"urls": ["https://example.org/paper.pdf"]}, "output_to_user": "Queued 1 download", "changelog_summary": "download requested"},
@@ -5948,14 +6011,18 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
         else:
             messages = [
                 {"role": "system", "content": sys_prompt},
-                {"role": "user",   "content": "Resources:"},
+                {"role": "user",   "content": "Resources (files, databases):"},
                 {"role": "user",   "content": json.dumps(resources, ensure_ascii=False)},
-                {"role": "user",   "content": "History:"},
-                {"role": "user",   "content": json.dumps(history, ensure_ascii=False)}
+                {"role": "user",   "content": "History (recent thread messages):"},
+                {"role": "user",   "content": json.dumps(history, ensure_ascii=False)},
+                {"role": "user",   "content": "Notes (recent):"},
+                {"role": "user",   "content": json.dumps(notes, ensure_ascii=False)},
+                {"role": "user",   "content": "Changelog (recent):"},
+                {"role": "user",   "content": json.dumps(changelog, ensure_ascii=False)}
             ]
             if ctx:
                 try:
-                    messages.append({"role": "user", "content": "Context:"})
+                    messages.append({"role": "user", "content": "Context (focused file/DB):"})
                     messages.append({"role": "user", "content": json.dumps(ctx, ensure_ascii=False)})
                 except Exception:
                     pass
@@ -6235,24 +6302,11 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
     t0 = _time.time()
     timed_out = False
 
-    # Trivial arithmetic fast-path: compute immediately if applicable
-    fast_result = None
-    try:
-        fast_result = _try_fast_math(content)
-    except Exception:
-        fast_result = None
-    if fast_result is not None:
-        try:
-            final_text = str(fast_result)
-        except Exception:
-            final_text = fast_result
-        try:
-            final_call_obj = {"function": "final", "args": {"text": final_text, "title": "Simple Arithmetic"}, "meta": {"fastpath": "math"}}
-        except Exception:
-            final_call_obj = {"function": "final", "args": {"text": final_text}, "meta": {"fastpath": "math"}}
+    # Always use the LLM. Optionally use a smaller/faster model for the first decision (plan vs final).
+    fast_model = os.getenv("CEDARPY_FAST_MODEL", "gpt-5-mini")
 
     try:
-        while (fast_result is None) and (not final_text) and (not question_text) and (loop_count < max_turns):
+        while (not final_text) and (not question_text) and (loop_count < max_turns):
             # Timeout guard (pre-turn)
             try:
                 if (_time.time() - t0) > timeout_s:
@@ -6279,7 +6333,9 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
                     print("[ws-chat] llm-call")
                 except Exception:
                     pass
-                resp = client.chat.completions.create(model=model, messages=messages)
+                # Use a faster model for the first decision turn if configured
+                use_model = (fast_model or model) if (loop_count == 0 and fast_model) else model
+                resp = client.chat.completions.create(model=use_model, messages=messages)
                 raw = (resp.choices[0].message.content or "").strip()
             except Exception as e:
                 try:
