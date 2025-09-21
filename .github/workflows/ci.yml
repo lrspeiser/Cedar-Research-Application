@@ -107,13 +107,21 @@ jobs:
         run: |
           echo "::group::python -m compileall"
           set -o pipefail
-          python -m compileall -q . > compile-stdout.txt 2> compile-stderr.txt || STATUS=$?
+          # Temporarily disable -e so we can capture compileall's exit code
+          set +e
+          python -m compileall -q . > compile-stdout.txt 2> compile-stderr.txt
+          STATUS=$?
+          set -e
           echo "::endgroup::"
-          if [[ -z "$STATUS" ]]; then
-            echo "result=pass" >> "$GITHUB_OUTPUT"
-          else
+
+          # Print a short, helpful summary if there were failures
+          if [[ $STATUS -ne 0 ]]; then
+            echo "Some files failed to byte-compile. First 200 lines of stderr:"
+            sed -n '1,200p' compile-stderr.txt || true
             echo "result=fail" >> "$GITHUB_OUTPUT"
             exit $STATUS
+          else
+            echo "result=pass" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Upload compile artifacts
