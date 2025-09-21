@@ -1254,8 +1254,20 @@ def add_version(db: Session, entity_type: str, entity_id: int, data: dict):
 
 def record_changelog(db: Session, project_id: int, branch_id: int, action: str, input_payload: Dict[str, Any], output_payload: Dict[str, Any]):
     """Persist a changelog entry and try to LLM-summarize it. Best-effort; stores even if summary fails.
+    Prefers a model-provided run_summary (string or list of strings) when present in output_payload.
     """
-    summary = _llm_summarize_action(action, input_payload, output_payload)
+    # Prefer explicit run_summary if provided; else generate via LLM
+    summary: Optional[str] = None
+    try:
+        rs = (output_payload or {}).get("run_summary") if isinstance(output_payload, dict) else None
+        if isinstance(rs, list):
+            summary = " • ".join([str(x) for x in rs])
+        elif isinstance(rs, str):
+            summary = rs.strip()
+    except Exception:
+        summary = None
+    if not summary:
+        summary = _llm_summarize_action(action, input_payload, output_payload)
     try:
         entry = ChangelogEntry(
             project_id=project_id,
@@ -2446,6 +2458,7 @@ SELECT * FROM demo LIMIT 10;""")
           node.appendChild(t);
         } catch(_) {}
       }
+      var stepsHistory = [];
       function stepAdvance(label, node){
         var now = _now();
         try {
@@ -2453,7 +2466,9 @@ SELECT * FROM demo LIMIT 10;""")
             var dt = now - currentStep.t0;
             annotateTime(currentStep.node, dt);
             try {
-              console.log('[perf] ' + JSON.stringify({ project: PROJECT_ID, thread: threadId||null, from: currentStep.label, to: label, dt_ms: Math.round(dt) }));
+              var rec = { project: PROJECT_ID, thread: threadId||null, from: currentStep.label, to: String(label||''), dt_ms: Math.round(dt) };
+              stepsHistory.push({ from: rec.from, to: rec.to, dt_ms: rec.dt_ms });
+              console.log('[perf] ' + JSON.stringify(rec));
             } catch(_) {}
           }
         } catch(_){ }
@@ -2479,6 +2494,40 @@ SELECT * FROM demo LIMIT 10;""")
       try {
         streamText.textContent = 'Processing…';
         spin = document.createElement('span'); spin.className = 'spinner'; spin.style.marginLeft = '6px'; stream.appendChild(spin);
+        // Add Cancel button next to spinner
+        var cancelBtn = document.createElement('button'); cancelBtn.textContent = 'Cancel'; cancelBtn.className = 'secondary'; cancelBtn.style.marginLeft = '8px';
+        cancelBtn.addEventListener('click', async function(){
+          try {
+            // Close out timing for current step
+            var now = _now();
+            if (currentStep && currentStep.node) {
+              var dt = now - currentStep.t0;
+              annotateTime(currentStep.node, dt);
+              try { stepsHistory.push({ from: currentStep.label, to: 'cancel', dt_ms: Math.round(dt) }); } catch(_){}
+              currentStep = null;
+            }
+            finalOrError = true;
+            try { ws.close(); } catch(_){ }
+            try { streamText.textContent = (streamText.textContent||'') + ' [cancelled]'; } catch(_){}
+            // Send cancellation summary request
+            var promptMsgs = [];
+            try { promptMsgs = (window.__cedar_last_prompts||{})[String(threadId||'')] || []; } catch(_){}
+            var body = { project_id: PROJECT_ID, branch_id: BRANCH_ID, thread_id: threadId||null, timings: stepsHistory, prompt_messages: promptMsgs, reason: 'user_clicked_cancel' };
+            var resp = await fetch('/api/chat/cancel_summary', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+            var data = null; try { data = await resp.json(); } catch(_) { data = null; }
+            if (data && data.ok && data.text) {
+              try {
+                var wrapC = document.createElement('div'); wrapC.className = 'msg assistant';
+                var metaC = document.createElement('div'); metaC.className = 'meta small'; metaC.innerHTML = "<span class='pill'>assistant</span> <span class='title' style='font-weight:600'>Cancelled</span>";
+                var bubC = document.createElement('div'); bubC.className = 'bubble assistant';
+                var contC = document.createElement('div'); contC.className = 'content'; contC.style.whiteSpace = 'pre-wrap'; contC.textContent = 'final ' + String(data.text||'');
+                bubC.appendChild(contC); wrapC.appendChild(metaC); wrapC.appendChild(bubC);
+                if (msgs) msgs.appendChild(wrapC);
+              } catch(_){}
+            }
+          } catch(_){}
+        });
+        stream.appendChild(cancelBtn);
       } catch(_){ }
       if (msgs) msgs.appendChild(stream);
       stepAdvance('assistant:processing', stream);
@@ -2489,8 +2538,9 @@ SELECT * FROM demo LIMIT 10;""")
       var ws = new WebSocket(wsScheme + '://' + location.host + '/ws/chat/' + PROJECT_ID);
 
       // Client-side watchdog to ensure the user always sees progress or a timeout
-      var timeoutMs = 90000; // 90s default; mirrors server CEDARPY_CHAT_TIMEOUT_SECONDS
+      var timeoutMs = __WS_TIMEOUT_MS__; // mirrors server CEDARPY_CHAT_TIMEOUT_SECONDS
       var finalOrError = false;
+      var timedOut = false;
       var timeoutId = null;
       function clearSpinner(){ try { if (spin && spin.parentNode) spin.remove(); } catch(_){} }
       function refreshTimeout(){
@@ -2500,6 +2550,7 @@ SELECT * FROM demo LIMIT 10;""")
             try { streamText.textContent = '[timeout] Took too long. Please try again.'; } catch(_){ }
             clearSpinner();
             stepAdvance('timeout', stream);
+            finalOrError = true; timedOut = true;
             try { ws.close(); } catch(_){ }
           }
         }, timeoutMs);
@@ -2749,7 +2800,7 @@ SELECT * FROM demo LIMIT 10;""")
         }
       };
       ws.onerror = function(){ try { streamText.textContent = (streamText.textContent||'') + ' [ws-error]'; } catch(_){} };
-      ws.onclose = function(){ try { if (currentStep && currentStep.node) { annotateTime(currentStep.node, _now() - currentStep.t0); currentStep = null; } if (!finalOrError) { streamText.textContent = (streamText.textContent||'') + ' [closed]'; } } catch(_){} };
+      ws.onclose = function(){ try { if (currentStep && currentStep.node && !timedOut) { annotateTime(currentStep.node, _now() - currentStep.t0); currentStep = null; } if (!finalOrError && !timedOut) { streamText.textContent = (streamText.textContent||'') + ' [closed]'; } } catch(_){} };
     } catch(e) {}
   }
   document.addEventListener('DOMContentLoaded', function(){
@@ -2833,7 +2884,13 @@ SELECT * FROM demo LIMIT 10;""")
 </script>
 """
     # Replace placeholders with actual IDs; avoid Python's % formatting which conflicts with '%' in CSS
-    script_js = script_js.replace("__PID__", str(project.id)).replace("__BID__", str(current.id))
+    # Embed WS timeout budget (ms) for client watchdog
+    try:
+        _ws_timeout_s = int(os.getenv("CEDARPY_CHAT_TIMEOUT_SECONDS", "300"))
+    except Exception:
+        _ws_timeout_s = 300
+    _ws_timeout_ms = max(1000, _ws_timeout_s * 1000)
+    script_js = script_js.replace("__PID__", str(project.id)).replace("__BID__", str(current.id)).replace("__WS_TIMEOUT_MS__", str(_ws_timeout_ms))
     return f"""
       <h1>{escape(project.title)}</h1>
       <div class=\"muted small\">Project ID: {project.id}</div>
@@ -3948,6 +4005,88 @@ def api_client_log(entry: ClientLogEntry, request: Request):
     except Exception:
         pass
     return {"ok": True}
+
+# Cancellation summary API
+# Submits a special prompt to produce a user-facing summary when a chat is cancelled.
+# See README: Chat cancellation and run summaries.
+@app.post("/api/chat/cancel_summary")
+def api_chat_cancel_summary(payload: Dict[str, Any] = Body(...)):
+    try:
+        project_id = int(payload.get("project_id"))
+        branch_id = int(payload.get("branch_id"))
+        thread_id = int(payload.get("thread_id"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid ids")
+
+    ensure_project_initialized(project_id)
+    SessionLocal = sessionmaker(bind=_get_project_engine(project_id), autoflush=False, autocommit=False, future=True)
+    db = SessionLocal()
+    try:
+        # Collect thread history (last 20)
+        history: List[Dict[str, Any]] = []
+        try:
+            msgs = db.query(ThreadMessage).filter(ThreadMessage.project_id==project_id, ThreadMessage.thread_id==thread_id).order_by(ThreadMessage.created_at.desc()).limit(20).all()
+            for m in reversed(msgs):
+                history.append({"role": m.role, "title": (m.display_title or None), "content": (m.content or "")[:1500]})
+        except Exception:
+            history = []
+        timings = payload.get("timings") or []
+        prompt_messages = payload.get("prompt_messages") or []
+        reason = str(payload.get("reason") or "user_clicked_cancel")
+
+        # Build a concise summary via LLM (fallback to deterministic text if key missing)
+        client, model = _llm_client_config()
+        summary_text = None
+        if client:
+            try:
+                sys_prompt = (
+                    "You are Cedar's cancellation assistant. Write a concise user-facing summary (4-8 short bullet lines) of what the run did and didn't do, "
+                    "why it stopped (user cancel), and suggested next steps. Avoid secrets; include key tool steps if available."
+                )
+                import json as _json
+                messages = [
+                    {"role": "system", "content": sys_prompt},
+                    {"role": "user", "content": "Reason:"},
+                    {"role": "user", "content": reason},
+                    {"role": "user", "content": "Timings (ms):"},
+                    {"role": "user", "content": _json.dumps(timings, ensure_ascii=False)},
+                    {"role": "user", "content": "Thread history (recent):"},
+                    {"role": "user", "content": _json.dumps(history, ensure_ascii=False)},
+                    {"role": "user", "content": "Prepared prompt messages (if any):"},
+                    {"role": "user", "content": _json.dumps(prompt_messages, ensure_ascii=False)},
+                    {"role": "user", "content": "Output STRICT plain text, each bullet starting with •"},
+                ]
+                resp = client.chat.completions.create(model=(os.getenv("CEDARPY_SUMMARY_MODEL", "gpt-5-mini")), messages=messages)
+                summary_text = (resp.choices[0].message.content or "").strip()
+            except Exception as e:
+                try:
+                    print(f"[cancel-summary-error] {type(e).__name__}: {e}")
+                except Exception:
+                    pass
+        if not summary_text:
+            # Deterministic fallback (no network)
+            try:
+                bullets = [
+                    "• Run cancelled by user.",
+                    "• Partial steps may have executed before cancel.",
+                    "• See Changelog for recorded steps and timings.",
+                    "• Re-run to continue or refine your question.",
+                ]
+                summary_text = "\n".join(bullets)
+            except Exception:
+                summary_text = "Run cancelled by user."
+
+        # Persist assistant message and changelog
+        tm = ThreadMessage(project_id=project_id, branch_id=branch_id, thread_id=thread_id, role="assistant", display_title="Cancelled", content=summary_text)
+        db.add(tm); db.commit()
+        try:
+            record_changelog(db, project_id, branch_id, "chat.cancel", {"reason": reason, "timings": timings, "prompt_messages": prompt_messages}, {"text": summary_text})
+        except Exception:
+            pass
+        return {"ok": True, "text": summary_text}
+    finally:
+        try: db.close()
+        except Exception: pass
 
 # -------------------- Merge to Main (SQLite-first implementation) --------------------
 
@@ -6042,7 +6181,10 @@ Plan/step schema (STRICT JSON):
 When executing steps, respond with exactly ONE function call per turn (e.g., 'code', 'db', 'download', etc.), including an 'args' object that is fully specified.
 For 'code', include: language, packages (list), and source. For 'db', include: sql.
 Use the provided Resources (files, databases), History (recent thread), Notes, and Changelog to craft accurate steps.
-Keep total turns <= 3 and ALWAYS end with a single {"function":"final"} call containing args.text (user-visible answer) and args.title (3-6 words).
+Keep total turns <= 3 and ALWAYS end with a single {"function":"final"} call containing:
+- args.text: user-visible answer
+- args.title: 3-6 words
+- args.run_summary: 3-6 bullet lines that summarize everything done in this run (tools executed, files created, DB tables/rows affected, notable outputs/errors).
         """
 
         examples_json = {
@@ -6104,7 +6246,7 @@ Keep total turns <= 3 and ALWAYS end with a single {"function":"final"} call con
             "notes": {"function": "notes", "args": {"themes": [{"name": "Risks", "notes": ["…"]}]}, "output_to_user": "Saved notes", "changelog_summary": "notes saved"},
             "compose": {"function": "compose", "args": {"sections": [{"title": "Intro", "text": "…"}]}, "output_to_user": "Drafted section(s)", "changelog_summary": "compose partial"},
             "question": {"function": "question", "args": {"text": "Which domain do you care about?"}, "output_to_user": "Need clarification", "changelog_summary": "asked user"},
-            "final": {"function": "final", "args": {"text": "2+2=4", "title": "Simple Arithmetic"}, "output_to_user": "2+2=4", "changelog_summary": "finalized answer"}
+            "final": {"function": "final", "args": {"text": "2+2=4", "title": "Simple Arithmetic", "run_summary": ["Trivial query detected; skipped planning.", "No tools executed.", "No files created; no DB changes."]}, "output_to_user": "2+2=4", "changelog_summary": "finalized answer"}
         }
 
         # Allow replay mode: if the payload provides a full messages array, use it instead of building
@@ -6400,9 +6542,9 @@ Keep total turns <= 3 and ALWAYS end with a single {"function":"final"} call con
     # Overall budget: ensure we eventually time out and inform the client
     import time as _time
     try:
-        timeout_s = int(os.getenv("CEDARPY_CHAT_TIMEOUT_SECONDS", "90"))
+        timeout_s = int(os.getenv("CEDARPY_CHAT_TIMEOUT_SECONDS", "300"))
     except Exception:
-        timeout_s = 90
+        timeout_s = 300
     # Cap LLM turns to reduce latency flaps; configurable for complex sessions
     try:
         max_turns = int(os.getenv("CEDARPY_MAX_TURNS", "3"))
@@ -6425,10 +6567,11 @@ Keep total turns <= 3 and ALWAYS end with a single {"function":"final"} call con
                         pass
                     # Provide a final assistant-style message so UI/test can click the Assistant bubble even on timeout
                     try:
-                        final_text_local = "timeout (LLM exceeded 90s). Please retry."
+                        elapsed = _time.time() - t0
+                        final_text_local = f"[timeout] Took too long. Exceeded {timeout_s}s budget; elapsed {elapsed:.1f}s. Please try again."
                         # Set variables used later to emit a 'final' bubble
                         final_text = final_text_local
-                        final_call_obj = {"function": "final", "args": {"text": final_text_local, "title": "Assistant"}}
+                        final_call_obj = {"function": "final", "args": {"text": final_text_local, "title": "Assistant", "run_summary": [f"Exceeded {timeout_s}s budget", f"Elapsed {elapsed:.1f}s", "Stopped orchestration."]}}
                     except Exception:
                         pass
                     timed_out = True
@@ -6509,6 +6652,11 @@ Keep total turns <= 3 and ALWAYS end with a single {"function":"final"} call con
                     try:
                         dbp.add(ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="assistant", display_title="Plan", content=json.dumps(call, ensure_ascii=False), payload_json=call))
                         dbp.commit()
+                        # Write changelog entry for the prepared plan
+                        try:
+                            record_changelog(dbp, project_id, branch.id, "chat.plan", {"call": call}, {"plan": call, "run_summary": call.get("changelog_summary")})
+                        except Exception:
+                            pass
                     except Exception:
                         try: dbp.rollback()
                         except Exception: pass
@@ -6565,6 +6713,11 @@ Keep total turns <= 3 and ALWAYS end with a single {"function":"final"} call con
                 payload = {"function": name, "args": args, "result": result}
                 dbt.add(ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="assistant", display_title=f"Tool: {name}", content=json.dumps(payload, ensure_ascii=False), payload_json=payload))
                 dbt.commit()
+                # Write per-tool changelog entry
+                try:
+                    record_changelog(dbt, project_id, branch.id, f"chat.{name}", {"function": name, "args": args}, {"result": result, "run_summary": (call_obj or {}).get("changelog_summary")})
+                except Exception:
+                    pass
             except Exception:
                 try: dbt.rollback()
                 except Exception: pass
@@ -6637,6 +6790,17 @@ Keep total turns <= 3 and ALWAYS end with a single {"function":"final"} call con
         elif question_text:
             dbf.add(ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="assistant", content=question_text, display_title="Question"))
         dbf.commit()
+        # Changelog for final or question (only for final)
+        try:
+            if final_text:
+                run_summary = None
+                try:
+                    run_summary = ((final_call_obj or {}).get("args") or {}).get("run_summary")
+                except Exception:
+                    run_summary = None
+                record_changelog(dbf, project_id, branch.id, "chat.final", {"final_call": final_call_obj}, {"text": final_text, "run_summary": run_summary})
+        except Exception:
+            pass
     except Exception:
         try: dbf.rollback()
         except Exception: pass
