@@ -81,10 +81,10 @@ def test_chat_processing_ack_and_final(page: Page, path: str):
         # 1) Visible processing acknowledgment appears quickly (allow Unicode … or ASCII ...)
         expect(page.locator("#msgs")).to_contain_text(re.compile(r"Processing(\u2026|\.\.\.)"), timeout=5000)
 
-        # 2) Server-side stages should show (submitted/planning/finalizing/persisted) or explicit timeout.
+        # 2) Server-side stages should show (submitted/planning/finalizing) or explicit timeout.
         # Allow generous time for LLM and align with server timeout (90s)
         page.wait_for_function(
-            "() => { const el = document.querySelector('#msgs'); if (!el) return false; const t = el.innerText || ''; return t.includes('finalizing') || t.includes('persisted') || t.includes('timeout'); }",
+            "() => { const el = document.querySelector('#msgs'); if (!el) return false; const t = el.innerText || ''; return t.includes('finalizing') || t.includes('timeout'); }",
             timeout=95000,
         )
 
@@ -94,6 +94,10 @@ def test_chat_processing_ack_and_final(page: Page, path: str):
             "() => { const el = document.querySelector('#msgs'); if (!el) return false; const t = el.innerText || ''; return !(/Processing(\\u2026|\\.\\.\\.)/.test(t)); }",
             timeout=95000,
         )
+
+        # 4) Assistant prompt bubble exists and is clickable to reveal the full JSON prompt
+        page.locator("#msgs .msg.assistant .meta .title", has_text="Assistant").first.click()
+        expect(page.locator("#msgs pre").first).to_contain_text('"role"', timeout=5000)
 
     finally:
         _stop_server(server, thread)
