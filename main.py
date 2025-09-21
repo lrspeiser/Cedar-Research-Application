@@ -2292,7 +2292,6 @@ SELECT * FROM demo LIMIT 10;""")
         <textarea id='chatInput' name='content' rows='3' placeholder='Ask a question about this file/context...' style='width:100%; font-family: ui-monospace, Menlo, monospace;'></textarea>
         <div style='height:6px'></div>
         <button type='submit'>Submit</button>
-        <span class='small muted'>LLM API key required; see README for setup.</span>
       </form>
     """
     # Client-side WebSocket streaming script (word-by-word). Falls back to simulated by-word if server returns full text.
@@ -2601,7 +2600,11 @@ SELECT * FROM demo LIMIT 10;""")
                   var last = (window.__cedar_last_prompts||{})[String(threadId||'')];
                   if (last && last.length) { fallbackMsgs = last; }
                 } catch(_){ }
-                if (!fallbackMsgs) { fallbackMsgs = [{ role: 'system', content: 'Prompt unavailable (synthesized)' }]; }
+                if (!fallbackMsgs) {
+                  var reason = 'No LLM prompt available';
+                  try { if (m && m.json && m.json.meta && m.json.meta.fastpath) { reason = 'No LLM prompt: fast-path (' + String(m.json.meta.fastpath) + ')'; } } catch(_){ }
+                  fallbackMsgs = [{ role: 'system', content: reason }];
+                }
                 try { preP2.textContent = JSON.stringify(fallbackMsgs, null, 2); } catch(_){ preP2.textContent = String(fallbackMsgs); }
                 var barP2 = document.createElement('div'); barP2.className='small'; barP2.style.margin='6px 0 8px 0';
                 var copyBtnP2 = document.createElement('button'); copyBtnP2.textContent='Copy JSON'; copyBtnP2.className='secondary';
@@ -2789,7 +2792,7 @@ SELECT * FROM demo LIMIT 10;""")
             <form method="post" action="/project/{project.id}/files/upload?branch_id={current.id}" enctype="multipart/form-data" data-testid="upload-form">
               <input type="file" name="file" required data-testid="upload-input" />
               <div style="height:6px"></div>
-              <div class="small muted">LLM classification runs automatically on upload. See README for API key setup.</div>
+              
               <div style="height:6px"></div>
               <button type="submit" data-testid="upload-submit">Upload</button>
             </form>
@@ -6244,9 +6247,9 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
         except Exception:
             final_text = fast_result
         try:
-            final_call_obj = {"function": "final", "args": {"text": final_text, "title": "Simple Arithmetic"}}
+            final_call_obj = {"function": "final", "args": {"text": final_text, "title": "Simple Arithmetic"}, "meta": {"fastpath": "math"}}
         except Exception:
-            final_call_obj = {"function": "final", "args": {"text": final_text}}
+            final_call_obj = {"function": "final", "args": {"text": final_text}, "meta": {"fastpath": "math"}}
 
     try:
         while (fast_result is None) and (not final_text) and (not question_text) and (loop_count < max_turns):
