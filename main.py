@@ -2393,7 +2393,10 @@ SELECT * FROM demo LIMIT 10;""")
             try { preP.textContent = JSON.stringify(m.messages || [], null, 2); } catch(_){ preP.textContent = String(m.messages || ''); }
             detailsP.appendChild(preP);
             wrapP.appendChild(metaP); wrapP.appendChild(bubP); wrapP.appendChild(detailsP);
-        if (m.type === 'action') {
+            if (msgs) msgs.appendChild(wrapP);
+            stepAdvance('assistant:prompt', wrapP);
+          } catch(_) { }
+        } else if (m.type === 'action') {
           try {
             var fn = String(m.function||'').trim();
             var text = String(m.text||'');
@@ -2409,9 +2412,6 @@ SELECT * FROM demo LIMIT 10;""")
             try { pre.textContent = JSON.stringify(m.call || {}, null, 2); } catch(_){ pre.textContent = String(m.call || {}); }
             details.appendChild(pre);
             wrap.appendChild(meta); wrap.appendChild(bub); wrap.appendChild(details);
-            if (msgs) msgs.appendChild(wrap);
-            stepAdvance('system:'+fn, wrap);
-          } catch(_){ }
             if (msgs) msgs.appendChild(wrap);
             stepAdvance('system:'+fn, wrap);
           } catch(_){ }
