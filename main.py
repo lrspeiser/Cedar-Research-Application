@@ -2810,6 +2810,36 @@ SELECT * FROM demo LIMIT 10;""")
             wrap.appendChild(meta); wrap.appendChild(bub); wrap.appendChild(details);
             if (msgs) msgs.appendChild(wrap);
             stepAdvance('system:'+fn, wrap);
+
+            // If this is a plan function, also update the right-side Plan panel live
+            if (fn === 'plan') {
+              try {
+                var pane = document.getElementById('right-plan');
+                if (pane) {
+                  var call = m.call || {};
+                  var steps = Array.isArray(call.steps) ? call.steps : [];
+                  var rows = steps.map(function(st){
+                    try {
+                      var f = String((st && st.function) || '');
+                      var ti = String((st && st.title) || '');
+                      var stStatus = String((st && st.status) || 'in queue');
+                      return "<tr><td class='small'>"+f+"</td><td>"+ti+"</td><td class='small muted'>"+stStatus+"</td></tr>";
+                    } catch(_){ return ""; }
+                  }).join('');
+                  if (!rows) rows = "<tr><td colspan='3' class='muted small'>(no steps)</td></tr>";
+                  var html = "<div class='card' style='padding:12px'>"+
+                             "<h3 style='margin-bottom:6px'>Plan</h3>"+
+                             "<table class='table'><thead><tr><th>Func</th><th>Title</th><th>Status</th></tr></thead><tbody>"+rows+"</tbody></table>"+
+                             "</div>";
+                  pane.innerHTML = html;
+                  // Ensure the Plan tab is visible
+                  try {
+                    var tab = document.querySelector(".tabs[data-pane='right'] .tab[data-target='right-plan']");
+                    if (tab) { tab.click(); }
+                  } catch(_){}
+                }
+              } catch(_){}
+            }
           } catch(_){ }
         } else if (m.type === 'token' && m.word) {
           if (lastW !== m.word) {
@@ -6392,7 +6422,7 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
         sys_prompt = """
 You are an orchestrator that ALWAYS uses the LLM on each user prompt.
 
-Decision on first turn: If the query is trivially answerable (e.g., simple arithmetic), respond with a single {"function":"final"} call. Otherwise, your FIRST response MUST be a {"function":"plan"} object laying out the steps.
+Decision on first turn: If the query is trivially answerable (e.g., simple arithmetic), respond with a single {"function":"final"} call. Otherwise, your FIRST response MUST be a {"function":"plan"} object laying out the steps. Do NOT narrate that you will plan; RETURN the plan object itself.
 
 Plan/step schema (STRICT JSON):
 - function: 'plan' | 'web' | 'download' | 'extract' | 'image' | 'db' | 'code' | 'notes' | 'compose' | 'question' | 'final'
@@ -6401,7 +6431,7 @@ Plan/step schema (STRICT JSON):
 - goal_outcome: what success looks like for this task
 - status: one of 'in queue' | 'currently running' | 'done' | 'failed'
 - state: one of 'new plan' | 'diff change'
-- steps (for function=='plan'): array of step objects, each with the SAME fields above plus an 'args' object appropriate for that step's function.
+- steps (for function=='plan'): array of step objects, each with the SAME fields above plus an 'args' object appropriate for that step's function. The array MUST be non-empty.
 - output_to_user: short text shown to the user summarizing what will happen
 - changelog_summary: one-line summary for the changelog
 
@@ -6784,9 +6814,10 @@ Keep total turns <= 3 and ALWAYS end with a single {"function":"final"} call con
     fast_model = os.getenv("CEDARPY_FAST_MODEL", "gpt-5-mini")
     # Default: use fast model for all WS turns unless explicitly disabled
     try:
-        use_fast_all = str(os.getenv("CEDARPY_WS_USE_FAST", "1")).strip().lower() not in {"", "0", "false", "no", "off"}
+        # Default OFF: only the first user-submitted turn uses the fast model; subsequent turns use the main model
+        use_fast_all = str(os.getenv("CEDARPY_WS_USE_FAST", "0")).strip().lower() not in {"", "0", "false", "no", "off"}
     except Exception:
-        use_fast_all = True
+        use_fast_all = False
 
     try:
         while (not final_text) and (not question_text) and (loop_count < max_turns):
@@ -6887,6 +6918,16 @@ Keep total turns <= 3 and ALWAYS end with a single {"function":"final"} call con
                     continue
                 if name == 'plan':
                     _send_info('plan')
+                    # Enforce a non-empty steps array; if missing, immediately ask again for a proper plan
+                    try:
+                        steps = call.get('steps') if isinstance(call, dict) else None
+                    except Exception:
+                        steps = None
+                    if not steps or not isinstance(steps, list) or len(steps) == 0:
+                        messages.append({"role": "user", "content": "Your plan MUST include a non-empty steps array. Respond NOW with exactly one JSON object: {\"function\":\"plan\", ... , \"steps\":[...]} and NO commentary."})
+                        # Do not emit an action bubble or persist yet; request a corrected plan in the next turn
+                        name = None; args = {}; call_obj = {}
+                        continue
                     # Persist plan
                     dbp = SessionLocal()
                     try:
@@ -6913,8 +6954,7 @@ Keep total turns <= 3 and ALWAYS end with a single {"function":"final"} call con
                         }))
                     except Exception:
                         pass
-                    # Ask to proceed with the first step
-                    messages.append({"role": "user", "content": "Proceed with the first step now. Respond with ONE function call in strict JSON only."})
+                    # Do NOT auto-proceed; allow main model to execute steps on the next turn
                     break  # finish handling this turn; go evaluate name/args
             if name in ('final', 'question'):
                 if name == 'final':
