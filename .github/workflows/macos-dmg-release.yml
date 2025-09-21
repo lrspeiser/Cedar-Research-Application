@@ -39,7 +39,7 @@ jobs:
           name: CedarPy.dmg
           path: packaging/dist-qt/CedarPy-qt.dmg
 
-release:
+  release:
     needs: build
     runs-on: macos-latest
     permissions:
@@ -50,9 +50,10 @@ release:
         with:
           name: CedarPy.dmg
           path: dist
-      - name: Release
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: dist/CedarPy-qt.dmg
+          overwrite: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
