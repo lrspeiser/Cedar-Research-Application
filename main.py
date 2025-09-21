@@ -6205,8 +6205,7 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
                     # Provide a final assistant-style message so UI/test can click the Assistant bubble even on timeout
                     try:
                         final_text_local = "timeout (LLM exceeded 90s). Please retry."
-                        # Set globals used later to emit a 'final' bubble
-                        nonlocal final_text, final_call_obj
+                        # Set variables used later to emit a 'final' bubble
                         final_text = final_text_local
                         final_call_obj = {"function": "final", "args": {"text": final_text_local, "title": "Assistant"}}
                     except Exception:
