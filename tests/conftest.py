@@ -1,4 +1,18 @@
 import os
+import pytest
+
+autouse = True
+
+@pytest.fixture(autouse=True)
+def _isolate_db(monkeypatch, tmp_path):
+    data_dir = tmp_path / "CedarPyData"
+    dbfile = data_dir / "cedarpy-registry.db"
+    os.makedirs(data_dir, exist_ok=True)
+    monkeypatch.setenv("CEDARPY_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("CEDARPY_DATABASE_URL", f"sqlite:///{dbfile}")
+    yield
+
+import os
 from pathlib import Path
 
 # Load OpenAI API key from .env for the test session without printing any secrets.

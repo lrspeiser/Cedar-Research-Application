@@ -5,6 +5,7 @@ import re
 import tempfile
 import importlib
 import pytest
+import uuid
 
 from starlette.testclient import TestClient
 from urllib.parse import urlparse, parse_qs
@@ -29,7 +30,9 @@ def _reload_app_with_temp_env_llm():
     return main, tmp
 
 
-def _create_project(client: TestClient, title: str = "LLM Demo"):
+def _create_project(client: TestClient, title: str | None = None):
+    if not title:
+        title = f"LLM Demo {uuid.uuid4().hex[:6]}"
     r = client.post("/projects/create", data={"title": title})
     assert r.status_code in (200, 303)
     home = client.get("/")

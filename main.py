@@ -4839,16 +4839,55 @@ def merge_project_view(project_id: int, db: Session = Depends(get_project_db)):
     return layout(f"Merge • {project.title}", body, header_label=project.title, header_link=f"/project/{project.id}?branch_id={main_b.id}", nav_query=f"project_id={project.id}&branch_id={main_b.id}")
 
 
+def get_or_create_project_registry(db: Session, title: str) -> Project:
+    """Idempotent create by title.
+    - SQLite: use INSERT .. ON CONFLICT DO NOTHING, then SELECT
+    - Fallback: SELECT first, else create
+    """
+    t = (title or "").strip()
+    if not t:
+        raise ValueError("empty title")
+    # Try SQLite upsert
+    try:
+        if _dialect(registry_engine) == "sqlite":
+            try:
+                from sqlalchemy.dialects.sqlite import insert as sqlite_insert  # type: ignore
+            except Exception:
+                sqlite_insert = None  # type: ignore
+            if sqlite_insert is not None:
+                stmt = sqlite_insert(Project).values(title=t)
+                stmt = stmt.on_conflict_do_nothing(index_elements=[Project.title])
+                db.execute(stmt)
+                db.commit()
+                existing = db.query(Project).filter(Project.title == t).first()
+                if existing:
+                    return existing
+    except Exception:
+        pass
+    # Generic fallback (race-safe enough for CI; on conflict we query after rollback)
+    existing = db.query(Project).filter(Project.title == t).first()
+    if existing:
+        return existing
+    p = Project(title=t)
+    db.add(p)
+    try:
+        db.commit(); db.refresh(p)
+        return p
+    except Exception:
+        db.rollback()
+        existing = db.query(Project).filter(Project.title == t).first()
+        if existing:
+            return existing
+        raise
+
+
 @app.post("/projects/create")
 def create_project(title: str = Form(...), db: Session = Depends(get_registry_db)):
     title = title.strip()
     if not title:
         return RedirectResponse("/", status_code=303)
-    # create project in registry
-    p = Project(title=title)
-    db.add(p)
-    db.commit()
-    db.refresh(p)
+    # create or get existing project in registry
+    p = get_or_create_project_registry(db, title)
     add_version(db, "project", p.id, {"title": p.title})
 
     # Initialize per-project DB schema and seed project + Main branch
