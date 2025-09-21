@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="100.315" timestamp="2025-09-19T20:35:46.498919+00:00" hostname="runnervmf4ws1"><testcase classname="tests.test_playwright_chat_ack" name="test_chat_processing_ack_and_final[chromium-/]" time="98.930"><failure message="assert 0 &gt;= 1&#10; +  where 0 = count()&#10; +    where count = &lt;Locator frame=&lt;Frame name= url='http://127.0.0.1:35961/project/1?branch_id=1'&gt; selector='#msgs &gt;&gt; internal:text=&quot;4&quot;i'&gt;.count&#10; +      where &lt;Locator frame=&lt;Frame name= url='http://127.0.0.1:35961/project/1?branch_id=1'&gt; selector='#msgs &gt;&gt; internal:text=&quot;4&quot;i'&gt; = get_by_text('4')&#10; +        where get_by_text = &lt;Locator frame=&lt;Frame name= url='http://127.0.0.1:35961/project/1?branch_id=1'&gt; selector='#msgs'&gt;.get_by_text&#10; +          where &lt;Locator frame=&lt;Frame name= url='http://127.0.0.1:35961/project/1?branch_id=1'&gt; selector='#msgs'&gt; = locator('#msgs')&#10; +            where locator = &lt;Page url='http://127.0.0.1:35961/project/1?branch_id=1'&gt;.locator">page = &lt;Page url='http://127.0.0.1:35961/project/1?branch_id=1'&gt;, path = '/'
+
+    @pytest.mark.parametrize("path", ["/"])
+    def test_chat_processing_ack_and_final(page: Page, path: str):
+        port = _find_free_port()
+        server, thread = _start_server(port)
+        try:
+            base = f"http://127.0.0.1:{port}"
+            page.goto(base + path)
+            # Create project
+            unique_title = f"Chat ACK {int(time.time()*1000000)}"
+            page.fill("input[name=title]", unique_title)
+            page.locator("form[action='/projects/create'] button[type=submit]").click()
+            page.wait_for_url("**/project/*")
+    
+            # Submit a simple chat message
+            page.fill("#chatInput", "what is 2+2")
+            page.locator("#chatForm button[type=submit]").click()
+    
+            # 1) Visible processing acknowledgment appears quickly
+            expect(page.locator("#msgs").get_by_text("Processing…")).to_be_visible(timeout=3000)
+    
+            # 2) Server-side stages should show (submitted/planning/finalizing/persisted) or explicit timeout.
+            # Allow generous time for LLM and align with server timeout (90s)
+            page.wait_for_function(
+                "() =&gt; { const el = document.querySelector('#msgs'); if (!el) return false; const t = el.innerText || ''; return t.includes('finalizing') || t.includes('persisted') || t.includes('timeout'); }",
+                timeout=95000,
+            )
+    
+            # 3) The processing text is eventually replaced (no longer present)
+            # It may be replaced by the final text or a timeout message
+            page.wait_for_function(
+                "() =&gt; { const el = document.querySelector('#msgs'); if (!el) return false; return !el.innerText.includes('Processing…'); }",
+                timeout=95000,
+            )
+    
+            # 4) Optionally, when LLM keys are provided, the final bubble should include "4" for this trivial query
+            if os.getenv("OPENAI_API_KEY") or os.getenv("CEDARPY_OPENAI_API_KEY"):
+                # Look for assistant bubble content containing "4"
+                # Be lenient: any visible '4' within the msgs area after completion
+&gt;               assert page.locator("#msgs").get_by_text("4").count() &gt;= 1
+E               assert 0 &gt;= 1
+E                +  where 0 = count()
+E                +    where count = &lt;Locator frame=&lt;Frame name= url='http://127.0.0.1:35961/project/1?branch_id=1'&gt; selector='#msgs &gt;&gt; internal:text="4"i'&gt;.count
+E                +      where &lt;Locator frame=&lt;Frame name= url='http://127.0.0.1:35961/project/1?branch_id=1'&gt; selector='#msgs &gt;&gt; internal:text="4"i'&gt; = get_by_text('4')
+E                +        where get_by_text = &lt;Locator frame=&lt;Frame name= url='http://127.0.0.1:35961/project/1?branch_id=1'&gt; selector='#msgs'&gt;.get_by_text
+E                +          where &lt;Locator frame=&lt;Frame name= url='http://127.0.0.1:35961/project/1?branch_id=1'&gt; selector='#msgs'&gt; = locator('#msgs')
+E                +            where locator = &lt;Page url='http://127.0.0.1:35961/project/1?branch_id=1'&gt;.locator
+
+tests/test_playwright_chat_ack.py:101: AssertionError</failure></testcase></testsuite></testsuites>

@@ -1,0 +1,151 @@
+
+---------------------------- live log sessionstart -----------------------------
+INFO     httpx:_client.py:1025 HTTP Request: GET https://api.openai.com/v1/models/gpt-5 "HTTP/1.1 200 OK"
+============================= test session starts ==============================
+platform linux -- Python 3.11.13, pytest-8.4.2, pluggy-1.6.0 -- /opt/hostedtoolcache/Python/3.11.13/x64/bin/python
+cachedir: .pytest_cache
+rootdir: /home/runner/work/cedarpy/cedarpy
+configfile: pyproject.toml
+plugins: playwright-0.7.1, base-url-2.1.0, anyio-4.10.0, cov-7.0.0
+collecting ... collected 2 items
+
+tests/test_ws_chat_orchestrator.py::test_ws_chat_plan_execute_debug_prompt_and_final 
+-------------------------------- live log call ---------------------------------
+INFO     httpx:_client.py:1025 HTTP Request: GET https://api.openai.com/v1/models/gpt-5 "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST http://testserver/projects/create "HTTP/1.1 303 See Other"
+INFO     httpx:_client.py:1025 HTTP Request: GET http://testserver/project/1?branch_id=1 "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: GET http://testserver/ "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+FAILED                                                                   [ 50%]
+
+=================================== FAILURES ===================================
+_______________ test_ws_chat_plan_execute_debug_prompt_and_final _______________
+
+    @pytest.mark.timeout(60)
+    @pytest.mark.e2e
+    def test_ws_chat_plan_execute_debug_prompt_and_final():
+        # Require a real OpenAI API key; treat absence as a hard failure per policy
+        api_key = os.getenv("OPENAI_API_KEY") or os.getenv("CEDARPY_OPENAI_API_KEY")
+        assert api_key and api_key.strip(), "Missing OPENAI_API_KEY; CI must provide real credentials"
+    
+        main, tmp = _reload_app_with_env()
+        try:
+            with TestClient(main.app) as client:
+                # Create project
+                title = f"WS Chat Orchestrator {int(time.time())}"
+                r = client.post("/projects/create", data={"title": title})
+                assert r.status_code in (200, 303)
+                # Resolve project id via home page
+                home = client.get("/").text
+                import re as _re
+                m = _re.search(r"/project/(\d+)", home)
+                assert m, "project id not found"
+                pid = int(m.group(1))
+    
+                # WebSocket chat
+                with client.websocket_connect(f"/ws/chat/{pid}") as ws:
+                    ws.send_text(json.dumps({
+                        "action": "chat",
+                        "content": "what is 2+2",
+                        "branch_id": 1,
+                        "thread_id": None,
+                        "debug": True,
+                    }))
+                    got_debug = False
+                    got_submitted = False
+                    got_action = False
+                    got_final = False
+                    for _ in range(200):
+                        msg = ws.receive_text()
+                        data = json.loads(msg)
+                        t = data.get("type")
+                        if t == "debug":
+                            # Full prompt messages must be present and include our system prompt
+                            prompt = data.get("prompt")
+                            assert isinstance(prompt, list) and len(prompt) >= 3
+                            assert any(isinstance(m, dict) and m.get("role") == "system" for m in prompt)
+                            got_debug = True
+                        elif t == "info" and data.get("stage") == "submitted":
+                            got_submitted = True
+                        elif t == "action":
+                            # Could be plan/final; presence is enough to prove orchestrator loop
+                            got_action = True
+                        elif t == "final":
+                            got_final = True
+                            break
+                        elif t == "error":
+                            pytest.fail(f"backend error: {data.get('error')}")
+>                   assert got_debug and got_submitted and got_action and got_final
+E                   assert (True and True and False)
+
+tests/test_ws_chat_orchestrator.py:89: AssertionError
+----------------------------- Captured stdout call -----------------------------
+[cedarpy] Created and mounted /uploads-legacy at /tmp/cedarpy_ws_chat_fj9h0vx2/user_uploads
+[cedarpy] Mounted /uploads-legacy from /tmp/cedarpy_ws_chat_fj9h0vx2/user_uploads
+[llm-ready] model=gpt-5 key=ok
+[startup] LLM ready (model=gpt-5)
+[ws-chat] accepted project_id=1
+[ws-chat] submitted
+[ws-chat] debug-sent
+[ws-chat] planning-sent
+[ws-chat] llm-call
+[ws-chat] llm-call
+[ws-chat] llm-call
+[ws-chat] llm-call
+[ws-chat] llm-call
+[ws-chat] llm-call
+[ws-chat] llm-call
+[ws-chat] llm-call
+------------------------------ Captured log call -------------------------------
+INFO     httpx:_client.py:1025 HTTP Request: GET https://api.openai.com/v1/models/gpt-5 "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST http://testserver/projects/create "HTTP/1.1 303 See Other"
+INFO     httpx:_client.py:1025 HTTP Request: GET http://testserver/project/1?branch_id=1 "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: GET http://testserver/ "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+=============================== warnings summary ===============================
+tests/test_ws_chat_orchestrator.py::test_ws_chat_plan_execute_debug_prompt_and_final
+tests/test_ws_chat_orchestrator.py::test_ws_chat_plan_execute_debug_prompt_and_final
+  /home/runner/work/cedarpy/cedarpy/main.py:1198: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+tests/test_ws_chat_orchestrator.py::test_ws_chat_plan_execute_debug_prompt_and_final
+tests/test_ws_chat_orchestrator.py::test_ws_chat_plan_execute_debug_prompt_and_final
+  /opt/hostedtoolcache/Python/3.11.13/x64/lib/python3.11/site-packages/fastapi/applications.py:4495: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+--- generated xml file: /home/runner/work/cedarpy/cedarpy/reports/junit.xml ----
+============================= slowest 25 durations =============================
+68.14s call     tests/test_ws_chat_orchestrator.py::test_ws_chat_plan_execute_debug_prompt_and_final
+0.00s setup    tests/test_ws_chat_orchestrator.py::test_ws_chat_plan_execute_debug_prompt_and_final
+0.00s teardown tests/test_ws_chat_orchestrator.py::test_ws_chat_plan_execute_debug_prompt_and_final
+=========================== short test summary info ============================
+FAILED tests/test_ws_chat_orchestrator.py::test_ws_chat_plan_execute_debug_prompt_and_final - assert (True and True and False)
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+=================== 1 failed, 4 warnings in 68.33s (0:01:08) ===================

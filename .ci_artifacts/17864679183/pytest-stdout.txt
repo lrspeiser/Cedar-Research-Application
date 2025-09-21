@@ -1,0 +1,163 @@
+============================= test session starts ==============================
+platform linux -- Python 3.11.13, pytest-8.4.2, pluggy-1.6.0 -- /opt/hostedtoolcache/Python/3.11.13/x64/bin/python
+cachedir: .pytest_cache
+rootdir: /home/runner/work/cedarpy/cedarpy
+configfile: pyproject.toml
+plugins: playwright-0.7.1, base-url-2.1.0, anyio-4.10.0, cov-7.0.0
+collecting ... collected 15 items
+
+tests/test_doctor_mode.py::test_doctor_mode_runs PASSED                  [  6%]
+tests/test_embedded_qt_ui.py::test_embedded_qt_upload_flow SKIPPED       [ 13%]
+tests/test_file_llm.py::test_upload_emits_processing_and_updates_metadata_json PASSED [ 20%]
+tests/test_file_llm.py::test_upload_sets_ai_fields_via_llm PASSED        [ 26%]
+tests/test_file_llm.py::test_thread_chat_llm_generates_assistant_message PASSED [ 33%]
+tests/test_html_rendering.py::test_projects_list_html_formats_datetime PASSED [ 40%]
+tests/test_playwright_merge.py::test_merge_dashboard_shows_unique_and_merges[chromium-/] PASSED [ 46%]
+tests/test_playwright_shell.py::test_shell_ui_open_world[chromium-/shell] PASSED [ 53%]
+tests/test_playwright_upload.py::test_project_upload_flow[chromium-/] PASSED [ 60%]
+tests/test_qt_stale_lock_recovery.py::test_qt_stale_lock_recovery SKIPPED [ 66%]
+tests/test_shell_grep.py::test_shell_grep_demo PASSED                    [ 73%]
+tests/test_smoke.py::test_home_ok PASSED                                 [ 80%]
+tests/test_smoke.py::test_create_and_open_project PASSED                 [ 86%]
+tests/test_websockets.py::test_ws_end_to_end_shell_and_sql_and_branches PASSED [ 93%]
+tests/test_ws_chat_orchestrator.py::test_ws_chat_plan_execute_debug_prompt_and_final FAILED [100%]
+
+=================================== FAILURES ===================================
+_______________ test_ws_chat_plan_execute_debug_prompt_and_final _______________
+
+    @pytest.mark.timeout(60)
+    @pytest.mark.e2e
+    def test_ws_chat_plan_execute_debug_prompt_and_final():
+        # Require a real OpenAI API key; treat absence as a hard failure per policy
+        api_key = os.getenv("OPENAI_API_KEY") or os.getenv("CEDARPY_OPENAI_API_KEY")
+        assert api_key and api_key.strip(), "Missing OPENAI_API_KEY; CI must provide real credentials"
+    
+        main, tmp = _reload_app_with_env()
+        try:
+            with TestClient(main.app) as client:
+                # Create project
+                title = f"WS Chat Orchestrator {int(time.time())}"
+                r = client.post("/projects/create", data={"title": title})
+                assert r.status_code in (200, 303)
+                # Resolve project id via home page
+                home = client.get("/").text
+                import re as _re
+                m = _re.search(r"/project/(\d+)", home)
+                assert m, "project id not found"
+                pid = int(m.group(1))
+    
+                # WebSocket chat
+                with client.websocket_connect(f"/ws/chat/{pid}") as ws:
+                    ws.send_text(json.dumps({
+                        "action": "chat",
+                        "content": "what is 2+2",
+                        "branch_id": 1,
+                        "thread_id": None,
+                        "debug": True,
+                    }))
+                    got_debug = False
+                    got_submitted = False
+                    got_action = False
+                    got_final = False
+                    for _ in range(200):
+>                       msg = ws.receive_text()
+                              ^^^^^^^^^^^^^^^^^
+
+tests/test_ws_chat_orchestrator.py:70: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/opt/hostedtoolcache/Python/3.11.13/x64/lib/python3.11/site-packages/starlette/testclient.py:187: in receive_text
+    self._raise_on_close(message)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <starlette.testclient.WebSocketTestSession object at 0x7ffaaf6baa10>
+message = {'code': 1000, 'reason': '', 'type': 'websocket.close'}
+
+    def _raise_on_close(self, message: Message) -> None:
+        if message["type"] == "websocket.close":
+>           raise WebSocketDisconnect(code=message.get("code", 1000), reason=message.get("reason", ""))
+E           starlette.websockets.WebSocketDisconnect
+
+/opt/hostedtoolcache/Python/3.11.13/x64/lib/python3.11/site-packages/starlette/testclient.py:150: WebSocketDisconnect
+----------------------------- Captured stdout call -----------------------------
+[cedarpy] Created and mounted /uploads-legacy at /tmp/cedarpy_ws_chat_dlw6mg5h/user_uploads
+[llm-ready] model=gpt-5 key=ok
+[startup] LLM ready (model=gpt-5)
+[ws-chat] accepted project_id=1
+[ws-chat] submitted
+=============================== warnings summary ===============================
+main.py:1198: 1 warning
+tests/test_file_llm.py: 3 warnings
+tests/test_playwright_merge.py: 1 warning
+tests/test_playwright_shell.py: 1 warning
+tests/test_playwright_upload.py: 1 warning
+tests/test_shell_grep.py: 1 warning
+tests/test_websockets.py: 1 warning
+tests/test_ws_chat_orchestrator.py: 1 warning
+  /home/runner/work/cedarpy/cedarpy/main.py:1198: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+../../../../../opt/hostedtoolcache/Python/3.11.13/x64/lib/python3.11/site-packages/fastapi/applications.py:4495: 1 warning
+tests/test_file_llm.py: 3 warnings
+tests/test_playwright_merge.py: 1 warning
+tests/test_playwright_shell.py: 1 warning
+tests/test_playwright_upload.py: 1 warning
+tests/test_shell_grep.py: 1 warning
+tests/test_websockets.py: 1 warning
+tests/test_ws_chat_orchestrator.py: 1 warning
+  /opt/hostedtoolcache/Python/3.11.13/x64/lib/python3.11/site-packages/fastapi/applications.py:4495: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)
+
+tests/test_doctor_mode.py::test_doctor_mode_runs
+  /opt/hostedtoolcache/Python/3.11.13/x64/lib/python3.11/site-packages/websockets/legacy/__init__.py:6: DeprecationWarning: websockets.legacy is deprecated; see https://websockets.readthedocs.io/en/stable/howto/upgrade.html for upgrade instructions
+    warnings.warn(  # deprecated in 14.0 - 2024-11-09
+
+tests/test_doctor_mode.py::test_doctor_mode_runs
+  /opt/hostedtoolcache/Python/3.11.13/x64/lib/python3.11/site-packages/uvicorn/protocols/websockets/websockets_impl.py:17: DeprecationWarning: websockets.server.WebSocketServerProtocol is deprecated
+    from websockets.server import WebSocketServerProtocol
+
+tests/test_playwright_shell.py::test_shell_ui_open_world[chromium-/shell]
+  /opt/hostedtoolcache/Python/3.11.13/x64/lib/python3.11/site-packages/websockets/legacy/server.py:1178: DeprecationWarning: remove second argument of ws_handler
+    warnings.warn("remove second argument of ws_handler", DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+--- generated xml file: /home/runner/work/cedarpy/cedarpy/reports/junit.xml ----
+============================= slowest 25 durations =============================
+172.55s call     tests/test_file_llm.py::test_upload_sets_ai_fields_via_llm
+94.89s call     tests/test_ws_chat_orchestrator.py::test_ws_chat_plan_execute_debug_prompt_and_final
+22.29s call     tests/test_file_llm.py::test_upload_emits_processing_and_updates_metadata_json
+20.81s call     tests/test_file_llm.py::test_thread_chat_llm_generates_assistant_message
+20.04s call     tests/test_doctor_mode.py::test_doctor_mode_runs
+17.91s call     tests/test_playwright_merge.py::test_merge_dashboard_shows_unique_and_merges[chromium-/]
+16.80s call     tests/test_playwright_upload.py::test_project_upload_flow[chromium-/]
+2.06s setup    tests/test_playwright_merge.py::test_merge_dashboard_shows_unique_and_merges[chromium-/]
+0.92s call     tests/test_playwright_shell.py::test_shell_ui_open_world[chromium-/shell]
+0.80s call     tests/test_websockets.py::test_ws_end_to_end_shell_and_sql_and_branches
+0.61s call     tests/test_shell_grep.py::test_shell_grep_demo
+0.09s call     tests/test_smoke.py::test_create_and_open_project
+0.04s teardown tests/test_ws_chat_orchestrator.py::test_ws_chat_plan_execute_debug_prompt_and_final
+0.03s call     tests/test_smoke.py::test_home_ok
+0.03s setup    tests/test_playwright_shell.py::test_shell_ui_open_world[chromium-/shell]
+0.03s setup    tests/test_playwright_upload.py::test_project_upload_flow[chromium-/]
+0.01s teardown tests/test_playwright_merge.py::test_merge_dashboard_shows_unique_and_merges[chromium-/]
+0.01s teardown tests/test_playwright_upload.py::test_project_upload_flow[chromium-/]
+0.01s teardown tests/test_playwright_shell.py::test_shell_ui_open_world[chromium-/shell]
+0.00s setup    tests/test_doctor_mode.py::test_doctor_mode_runs
+0.00s call     tests/test_html_rendering.py::test_projects_list_html_formats_datetime
+0.00s setup    tests/test_smoke.py::test_home_ok
+0.00s setup    tests/test_ws_chat_orchestrator.py::test_ws_chat_plan_execute_debug_prompt_and_final
+0.00s setup    tests/test_file_llm.py::test_upload_emits_processing_and_updates_metadata_json
+0.00s setup    tests/test_file_llm.py::test_upload_sets_ai_fields_via_llm
+=========================== short test summary info ============================
+FAILED tests/test_ws_chat_orchestrator.py::test_ws_chat_plan_execute_debug_prompt_and_final - starlette.websockets.WebSocketDisconnect
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+======= 1 failed, 12 passed, 2 skipped, 23 warnings in 372.92s (0:06:12) =======

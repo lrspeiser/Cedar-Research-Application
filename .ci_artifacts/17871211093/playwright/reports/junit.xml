@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="2" time="135.741" timestamp="2025-09-19T22:33:16.953774+00:00" hostname="runnervmf4ws1"><testcase classname="tests.test_playwright_chat_ack" name="test_chat_processing_ack_and_final[chromium-/]" time="98.028" /><testcase classname="tests.test_playwright_merge" name="test_merge_dashboard_shows_unique_and_merges[chromium-/]" time="36.041"><failure message="playwright._impl._errors.TimeoutError: Timeout 30000ms exceeded.&#10;=========================== logs ===========================&#10;waiting for navigation to &quot;**/project/*?**msg=File+uploaded**&quot; until 'domcontentloaded'&#10;============================================================">page = &lt;Page url='http://127.0.0.1:43363/project/2?branch_id=2'&gt;, path = '/'
+
+    @pytest.mark.parametrize("path", ["/"])
+    def test_merge_dashboard_shows_unique_and_merges(page: Page, path: str):
+        port = _find_free_port()
+        server, thread = _start_server(port)
+        try:
+            base = f"http://127.0.0.1:{port}"
+            page.goto(base + path)
+            # Create project
+            unique_title = f"Merge Demo {int(time.time()*1000000)}"
+            page.fill("input[name=title]", unique_title)
+            page.locator("form[action='/projects/create'] button[type=submit]").click()
+            page.wait_for_url("**/project/*")
+            # Create a new branch via the inline form toggle (+ pill)
+            page.locator("a.pill[title='New branch']").click()
+            page.fill("#branchCreateForm input[name=name]", "feature-x")
+            page.locator("#branchCreateForm button[type=submit]").click()
+            page.wait_for_url("**/project/*?branch_id=*")
+            # Upload a file on the branch to create changelog unique entries
+            upload_input = page.get_by_test_id("upload-input")
+            tmp_path = Path.cwd() / ".pw_tmp_merge.txt"
+            tmp_path.write_text("hello,merge-branch\n", encoding="utf-8")
+            upload_input.set_input_files(str(tmp_path))
+            page.get_by_test_id("upload-submit").click(no_wait_after=True)
+&gt;           page.wait_for_url("**/project/*?**msg=File+uploaded**", wait_until="domcontentloaded")
+
+tests/test_playwright_merge.py:83: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/opt/hostedtoolcache/Python/3.11.13/x64/lib/python3.11/site-packages/playwright/sync_api/_generated.py:9162: in wait_for_url
+    self._sync(
+/opt/hostedtoolcache/Python/3.11.13/x64/lib/python3.11/site-packages/playwright/_impl/_page.py:584: in wait_for_url
+    return await self._main_frame.wait_for_url(**locals_to_params(locals()))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/hostedtoolcache/Python/3.11.13/x64/lib/python3.11/site-packages/playwright/_impl/_frame.py:263: in wait_for_url
+    async with self.expect_navigation(
+/opt/hostedtoolcache/Python/3.11.13/x64/lib/python3.11/site-packages/playwright/_impl/_event_context_manager.py:33: in __aexit__
+    await self._future
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+    async def continuation() -&gt; Optional[Response]:
+&gt;       event = await waiter.result()
+                ^^^^^^^^^^^^^^^^^^^^^
+E       playwright._impl._errors.TimeoutError: Timeout 30000ms exceeded.
+E       =========================== logs ===========================
+E       waiting for navigation to "**/project/*?**msg=File+uploaded**" until 'domcontentloaded'
+E       ============================================================
+
+/opt/hostedtoolcache/Python/3.11.13/x64/lib/python3.11/site-packages/playwright/_impl/_frame.py:239: TimeoutError</failure></testcase></testsuite></testsuites>

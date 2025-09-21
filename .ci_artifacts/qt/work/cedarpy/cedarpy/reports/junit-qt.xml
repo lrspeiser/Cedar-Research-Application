@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="33.688" timestamp="2025-09-20T06:57:46.714907+00:00" hostname="sat12-bq155-81258aef-a173-4e3b-a9d9-ba431c311180-A232A2C2E5D9.local"><testcase classname="tests.test_embedded_qt_ui" name="test_embedded_qt_upload_flow" time="32.845"><failure message="AssertionError: Harness did not complete upload flow. Last home HTML length=6565, Last project HTML length=25777">tmp_path = PosixPath('/private/var/folders/q0/wmf37v850txck86cpnvwm_zw0000gn/T/pytest-of-runner/pytest-0/test_embedded_qt_upload_flow0')
+
+    @pytest.mark.e2e
+    @pytest.mark.timeout(120)
+    # Run on macOS runners (embedded Qt available). Skip on non-macOS.
+    @pytest.mark.skipif(sys.platform != "darwin", reason="Embedded Qt UI test runs on macOS only")
+    def test_embedded_qt_upload_flow(tmp_path: Path):
+        # Launch the embedded Chromium (QtWebEngine) app and connect via CDP
+        app_port = _free_port()
+        devtools_port = _free_port()
+    
+        env = os.environ.copy()
+        env.setdefault("CEDARPY_HOST", "127.0.0.1")
+        env["CEDARPY_PORT"] = str(app_port)
+        env["CEDARPY_OPEN_BROWSER"] = "0"
+        env["CEDARPY_QT_DEVTOOLS_PORT"] = str(devtools_port)
+        # Honor an existing CEDARPY_QT_HEADLESS to allow headful runs when requested
+        env["CEDARPY_QT_HEADLESS"] = os.getenv("CEDARPY_QT_HEADLESS", "1")
+        env["CEDARPY_ALLOW_MULTI"] = "1"   # disable single-instance lock for tests
+        env["CEDARPY_QT_HARNESS"] = "1"    # enable in-process UI harness
+    
+        # Prepare a temp file and pass it to the harness so chooseFiles() returns it
+        tmp_file = tmp_path / ".qt_embedded_upload.txt"
+        tmp_file.write_text("hello from embedded qt\n", encoding="utf-8")
+        env["CEDARPY_QT_TEST_FILE"] = str(tmp_file)
+    
+        # Start the Qt shell (embedded Chromium)
+        proc = subprocess.Popen(
+            ["python", "cedarqt.py"],
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+    
+        try:
+            # Wait for server to be ready
+            base = f"http://127.0.0.1:{app_port}"
+            deadline = time.time() + 30
+            server_ready = False
+            while time.time() &lt; deadline:
+                try:
+                    r = httpx.get(base + "/", timeout=1.0)
+                    if r.status_code &lt; 500:
+                        server_ready = True
+                        break
+                except Exception:
+                    time.sleep(0.2)
+            assert server_ready, "Embedded server did not start"
+    
+            # Poll the UI via HTTP to ensure upload finished (URL will include msg=File+uploaded and page will list file)
+            deadline2 = time.time() + 30
+            uploaded = False
+            last_html = None
+            while time.time() &lt; deadline2:
+                try:
+                    # Find the newest project via home page
+                    home = httpx.get(base + "/", timeout=2.0).text
+                    import re
+                    # Regex fix: raw string must use a single backslash for \d
+                    m = re.search(r"/project/(\d+)", home)
+                    if m:
+                        proj_url = f"/project/{m.group(1)}?branch_id=1"
+                        page_html = httpx.get(base + proj_url, timeout=2.0).text
+                        last_html = page_html
+                        if "msg=File+uploaded" in page_html or tmp_file.name in page_html:
+                            uploaded = True
+                            break
+                except Exception:
+                    pass
+                time.sleep(0.5)
+            if not uploaded:
+&gt;               raise AssertionError(
+                    "Harness did not complete upload flow. "
+                    f"Last home HTML length={len(home) if 'home' in locals() else 'n/a'}, "
+                    f"Last project HTML length={len(last_html) if last_html else 'n/a'}"
+                )
+E               AssertionError: Harness did not complete upload flow. Last home HTML length=6565, Last project HTML length=25777
+
+tests/test_embedded_qt_ui.py:92: AssertionError</failure></testcase></testsuite></testsuites>

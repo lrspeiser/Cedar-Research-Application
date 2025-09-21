@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="2" tests="15" time="374.320" timestamp="2025-09-19T16:59:16.145840+00:00" hostname="runnervmf4ws1"><testcase classname="tests.test_doctor_mode" name="test_doctor_mode_runs" time="20.045" /><testcase classname="tests.test_embedded_qt_ui" name="test_embedded_qt_upload_flow" time="0.000"><skipped type="pytest.skip" message="Enable after CI installs Qt runtime">/home/runner/work/cedarpy/cedarpy/tests/test_embedded_qt_ui.py:21: Enable after CI installs Qt runtime</skipped></testcase><testcase classname="tests.test_file_llm" name="test_upload_emits_processing_and_updates_metadata_json" time="22.295" /><testcase classname="tests.test_file_llm" name="test_upload_sets_ai_fields_via_llm" time="172.552" /><testcase classname="tests.test_file_llm" name="test_thread_chat_llm_generates_assistant_message" time="20.809" /><testcase classname="tests.test_html_rendering" name="test_projects_list_html_formats_datetime" time="0.001" /><testcase classname="tests.test_playwright_merge" name="test_merge_dashboard_shows_unique_and_merges[chromium-/]" time="19.979" /><testcase classname="tests.test_playwright_shell" name="test_shell_ui_open_world[chromium-/shell]" time="0.959" /><testcase classname="tests.test_playwright_upload" name="test_project_upload_flow[chromium-/]" time="16.844" /><testcase classname="tests.test_qt_stale_lock_recovery" name="test_qt_stale_lock_recovery" time="0.000"><skipped type="pytest.skip" message="Skip stale lock test on CI without Qt runtime">/home/runner/work/cedarpy/cedarpy/tests/test_qt_stale_lock_recovery.py:11: Skip stale lock test on CI without Qt runtime</skipped></testcase><testcase classname="tests.test_shell_grep" name="test_shell_grep_demo" time="0.615" /><testcase classname="tests.test_smoke" name="test_home_ok" time="0.034" /><testcase classname="tests.test_smoke" name="test_create_and_open_project" time="0.090" /><testcase classname="tests.test_websockets" name="test_ws_end_to_end_shell_and_sql_and_branches" time="0.801" /><testcase classname="tests.test_ws_chat_orchestrator" name="test_ws_chat_plan_execute_debug_prompt_and_final" time="94.926"><failure message="starlette.websockets.WebSocketDisconnect">@pytest.mark.timeout(60)
+    @pytest.mark.e2e
+    def test_ws_chat_plan_execute_debug_prompt_and_final():
+        # Require a real OpenAI API key; treat absence as a hard failure per policy
+        api_key = os.getenv("OPENAI_API_KEY") or os.getenv("CEDARPY_OPENAI_API_KEY")
+        assert api_key and api_key.strip(), "Missing OPENAI_API_KEY; CI must provide real credentials"
+    
+        main, tmp = _reload_app_with_env()
+        try:
+            with TestClient(main.app) as client:
+                # Create project
+                title = f"WS Chat Orchestrator {int(time.time())}"
+                r = client.post("/projects/create", data={"title": title})
+                assert r.status_code in (200, 303)
+                # Resolve project id via home page
+                home = client.get("/").text
+                import re as _re
+                m = _re.search(r"/project/(\d+)", home)
+                assert m, "project id not found"
+                pid = int(m.group(1))
+    
+                # WebSocket chat
+                with client.websocket_connect(f"/ws/chat/{pid}") as ws:
+                    ws.send_text(json.dumps({
+                        "action": "chat",
+                        "content": "what is 2+2",
+                        "branch_id": 1,
+                        "thread_id": None,
+                        "debug": True,
+                    }))
+                    got_debug = False
+                    got_submitted = False
+                    got_action = False
+                    got_final = False
+                    for _ in range(200):
+&gt;                       msg = ws.receive_text()
+                              ^^^^^^^^^^^^^^^^^
+
+tests/test_ws_chat_orchestrator.py:70: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/opt/hostedtoolcache/Python/3.11.13/x64/lib/python3.11/site-packages/starlette/testclient.py:187: in receive_text
+    self._raise_on_close(message)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = &lt;starlette.testclient.WebSocketTestSession object at 0x7ffaaf6baa10&gt;
+message = {'code': 1000, 'reason': '', 'type': 'websocket.close'}
+
+    def _raise_on_close(self, message: Message) -&gt; None:
+        if message["type"] == "websocket.close":
+&gt;           raise WebSocketDisconnect(code=message.get("code", 1000), reason=message.get("reason", ""))
+E           starlette.websockets.WebSocketDisconnect
+
+/opt/hostedtoolcache/Python/3.11.13/x64/lib/python3.11/site-packages/starlette/testclient.py:150: WebSocketDisconnect</failure></testcase></testsuite></testsuites>

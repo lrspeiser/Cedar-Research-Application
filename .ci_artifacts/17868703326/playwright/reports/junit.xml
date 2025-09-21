@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="69.432" timestamp="2025-09-19T20:12:38.078042+00:00" hostname="runnervmf4ws1"><testcase classname="tests.test_playwright_chat_ack" name="test_chat_processing_ack_and_final[chromium-/]" time="68.000"><failure message="AssertionError: Locator expected to be visible&#10;Actual value: &lt;element(s) not found&gt; &#10;Call log:&#10;  - Expect &quot;to_be_visible&quot; with timeout 60000ms&#10;  - waiting for locator(&quot;#msgs&quot;).get_by_text(&quot;finalizing&quot;)">page = &lt;Page url='http://127.0.0.1:46047/project/1?branch_id=1'&gt;, path = '/'
+
+    @pytest.mark.parametrize("path", ["/"])
+    def test_chat_processing_ack_and_final(page: Page, path: str):
+        port = _find_free_port()
+        server, thread = _start_server(port)
+        try:
+            base = f"http://127.0.0.1:{port}"
+            page.goto(base + path)
+            # Create project
+            unique_title = f"Chat ACK {int(time.time()*1000000)}"
+            page.fill("input[name=title]", unique_title)
+            page.locator("form[action='/projects/create'] button[type=submit]").click()
+            page.wait_for_url("**/project/*")
+    
+            # Submit a simple chat message
+            page.fill("#chatInput", "what is 2+2")
+            page.locator("#chatForm button[type=submit]").click()
+    
+            # 1) Visible processing acknowledgment appears quickly
+            expect(page.locator("#msgs").get_by_text("Processing…")).to_be_visible(timeout=3000)
+    
+            # 2) Server-side stages should show (submitted/planning/finalizing/persisted). We check finalizing and persisted.
+            # Allow generous time for LLM
+&gt;           expect(page.locator("#msgs").get_by_text("finalizing")).to_be_visible(timeout=60000)
+E           AssertionError: Locator expected to be visible
+E           Actual value: &lt;element(s) not found&gt; 
+E           Call log:
+E             - Expect "to_be_visible" with timeout 60000ms
+E             - waiting for locator("#msgs").get_by_text("finalizing")
+
+tests/test_playwright_chat_ack.py:85: AssertionError</failure></testcase></testsuite></testsuites>

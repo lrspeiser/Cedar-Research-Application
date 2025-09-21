@@ -1,0 +1,334 @@
+============================= test session starts ==============================
+platform linux -- Python 3.11.13, pytest-8.4.2, pluggy-1.6.0 -- /opt/hostedtoolcache/Python/3.11.13/x64/bin/python
+cachedir: .pytest_cache
+rootdir: /home/runner/work/cedarpy/cedarpy
+configfile: pyproject.toml
+plugins: playwright-0.7.1, base-url-2.1.0, anyio-4.10.0, cov-7.0.0
+collecting ... collected 15 items
+
+tests/test_doctor_mode.py::test_doctor_mode_runs PASSED                  [  6%]
+tests/test_embedded_qt_ui.py::test_embedded_qt_upload_flow SKIPPED       [ 13%]
+tests/test_file_llm.py::test_upload_emits_processing_and_updates_metadata_json PASSED [ 20%]
+tests/test_file_llm.py::test_upload_sets_ai_fields_via_llm PASSED        [ 26%]
+tests/test_file_llm.py::test_thread_chat_llm_generates_assistant_message PASSED [ 33%]
+tests/test_html_rendering.py::test_projects_list_html_formats_datetime PASSED [ 40%]
+tests/test_playwright_merge.py::test_merge_dashboard_shows_unique_and_merges[chromium-/] PASSED [ 46%]
+tests/test_playwright_shell.py::test_shell_ui_open_world[chromium-/shell] PASSED [ 53%]
+tests/test_playwright_upload.py::test_project_upload_flow[chromium-/] FAILED [ 60%]
+
+=================================== FAILURES ===================================
+_____________________ test_project_upload_flow[chromium-/] _____________________
+
+page = <Page url='http://127.0.0.1:58549/project/2?branch_id=1'>, path = '/'
+
+    @pytest.mark.parametrize("path", ["/"])
+    def test_project_upload_flow(page: Page, path: str):
+        port = _find_free_port()
+        server, thread = _start_server(port)
+        try:
+            url = f"http://127.0.0.1:{port}{path}"
+            page.goto(url)
+            # Create a project: fill title and click the submit button (label may be "Create" or "Create Project")
+            # Use a unique project title to avoid UNIQUE constraint failures across runs
+            unique_title = f"UI Upload Test {int(time.time()*1000000)}"
+            page.fill("input[name=title]", unique_title)
+            if page.get_by_text("Create Project").count() > 0:
+                page.get_by_text("Create Project").click()
+            else:
+                page.locator("form[action='/projects/create'] button[type=submit]").click()
+            # Wait for project page
+            page.wait_for_url(f"**/project/*")
+            # Upload a file via the form hooks
+            upload_input = page.get_by_test_id("upload-input")
+            # Create a temporary file
+            tmp_path = Path.cwd() / ".pw_tmp_upload.txt"
+            tmp_path.write_text("hello,playwright\n", encoding="utf-8")
+            upload_input.set_input_files(str(tmp_path))
+            # Verify the submit button is visible and enabled before clicking
+            submit_btn = page.get_by_test_id("upload-submit")
+            try:
+                from playwright.sync_api import expect
+                expect(submit_btn).to_be_visible()
+                expect(submit_btn).to_be_enabled()
+            except Exception:
+                # Fallback: attribute check if expect is unavailable
+                assert submit_btn.is_visible(), "Upload submit not visible"
+                assert submit_btn.is_enabled(), "Upload submit not enabled"
+>           submit_btn.click()
+
+tests/test_playwright_upload.py:95: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/opt/hostedtoolcache/Python/3.11.13/x64/lib/python3.11/site-packages/playwright/sync_api/_generated.py:15543: in click
+    self._sync(
+/opt/hostedtoolcache/Python/3.11.13/x64/lib/python3.11/site-packages/playwright/_impl/_locator.py:160: in click
+    return await self._frame.click(self._selector, strict=True, **params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/hostedtoolcache/Python/3.11.13/x64/lib/python3.11/site-packages/playwright/_impl/_frame.py:549: in click
+    await self._channel.send("click", self._timeout, locals_to_params(locals()))
+/opt/hostedtoolcache/Python/3.11.13/x64/lib/python3.11/site-packages/playwright/_impl/_connection.py:69: in send
+    return await self._connection.wrap_api_call(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <playwright._impl._connection.Connection object at 0x7fcf99d9e8d0>
+cb = <function Channel.send.<locals>.<lambda> at 0x7fcf9957f100>
+is_internal = False, title = None
+
+    async def wrap_api_call(
+        self, cb: Callable[[], Any], is_internal: bool = False, title: str = None
+    ) -> Any:
+        if self._api_zone.get():
+            return await cb()
+        task = asyncio.current_task(self._loop)
+        st: List[inspect.FrameInfo] = getattr(
+            task, "__pw_stack__", None
+        ) or inspect.stack(0)
+    
+        parsed_st = _extract_stack_trace_information_from_stack(st, is_internal, title)
+        self._api_zone.set(parsed_st)
+        try:
+            return await cb()
+        except Exception as error:
+>           raise rewrite_error(error, f"{parsed_st['apiName']}: {error}") from None
+E           playwright._impl._errors.TimeoutError: Locator.click: Timeout 30000ms exceeded.
+E           Call log:
+E             - waiting for get_by_test_id("upload-submit")
+E               - locator resolved to <button type="submit" data-testid="upload-submit">Upload</button>
+E             - attempting click action
+E               - waiting for element to be visible, enabled and stable
+E               - element is visible, enabled and stable
+E               - scrolling into view if needed
+E               - done scrolling
+E               - performing click action
+E               - click action done
+E               - waiting for scheduled navigations to finish
+
+/opt/hostedtoolcache/Python/3.11.13/x64/lib/python3.11/site-packages/playwright/_impl/_connection.py:558: TimeoutError
+
+The above exception was the direct cause of the following exception:
+
+page = <Page url='http://127.0.0.1:58549/project/2?branch_id=1'>, path = '/'
+
+    @pytest.mark.parametrize("path", ["/"])
+    def test_project_upload_flow(page: Page, path: str):
+        port = _find_free_port()
+        server, thread = _start_server(port)
+        try:
+            url = f"http://127.0.0.1:{port}{path}"
+            page.goto(url)
+            # Create a project: fill title and click the submit button (label may be "Create" or "Create Project")
+            # Use a unique project title to avoid UNIQUE constraint failures across runs
+            unique_title = f"UI Upload Test {int(time.time()*1000000)}"
+            page.fill("input[name=title]", unique_title)
+            if page.get_by_text("Create Project").count() > 0:
+                page.get_by_text("Create Project").click()
+            else:
+                page.locator("form[action='/projects/create'] button[type=submit]").click()
+            # Wait for project page
+            page.wait_for_url(f"**/project/*")
+            # Upload a file via the form hooks
+            upload_input = page.get_by_test_id("upload-input")
+            # Create a temporary file
+            tmp_path = Path.cwd() / ".pw_tmp_upload.txt"
+            tmp_path.write_text("hello,playwright\n", encoding="utf-8")
+            upload_input.set_input_files(str(tmp_path))
+            # Verify the submit button is visible and enabled before clicking
+            submit_btn = page.get_by_test_id("upload-submit")
+            try:
+                from playwright.sync_api import expect
+                expect(submit_btn).to_be_visible()
+                expect(submit_btn).to_be_enabled()
+            except Exception:
+                # Fallback: attribute check if expect is unavailable
+                assert submit_btn.is_visible(), "Upload submit not visible"
+                assert submit_btn.is_enabled(), "Upload submit not enabled"
+            submit_btn.click()
+            # Should navigate back to project with msg=File+uploaded
+            page.wait_for_url("**/project/*?**msg=File+uploaded**")
+            # Verify file appears in Files list
+            # The Files card heading should be present (avoid strict mode violation)
+            assert page.get_by_role("heading", name="Files").is_visible()
+            assert page.get_by_text(".pw_tmp_upload.txt").first.is_visible()
+            # If LLM is configured and reachable, verify that AI fields are populated
+            if os.environ.get("CEDARPY_TEST_LLM_READY") == "1":
+                try:
+                    html = page.content()
+                    assert "AI Title:" in html, "AI Title label missing in UI"
+                    assert "AI Title:</strong> (none)" not in html, "LLM did not populate AI Title"
+                    # Optionally ensure the processing thread shows a success entry
+                    # (display_title is "File analyzed" when classification succeeds)
+                    if page.get_by_text("File analyzed").count() == 0:
+                        assert "File analyzed" in html, "Missing 'File analyzed' thread entry"
+                except Exception:
+                    # Fall back to a visible check for the label in case content() changes
+                    assert page.get_by_text("AI Title:").first.is_visible(), "AI Title label not visible"
+        except Exception as ui_err:
+            # Backend fallback: run the same flow via HTTP to distinguish FE vs BE failure
+            backend_ok = False
+            backend_err = None
+            try:
+                base = f"http://127.0.0.1:{port}"
+                with httpx.Client(base_url=base, follow_redirects=False, timeout=10) as hc:
+                    # Create a unique project via backend
+                    b_title = f"UI Upload Test (backend) {int(time.time()*1000000)}"
+                    r = hc.post("/projects/create", data={"title": b_title})
+                    assert r.status_code in (200, 303)
+                    # Resolve project page
+                    loc = r.headers.get("location")
+                    if not loc:
+                        # Fallback: fetch home and find a project link
+                        home = hc.get("/").text
+                        import re as _re
+                        m = _re.search(r"/project/(\\d+)", home)
+                        assert m, "backend: could not find project link"
+                        pid = int(m.group(1))
+                        proj_url = f"/project/{pid}?branch_id=1"
+                    else:
+                        proj_url = loc
+                    # Extract branch_id for upload
+                    q = parse_qs(urlparse(proj_url).query)
+                    branch_id = int((q.get("branch_id") or ["1"])[0])
+                    # Upload a file
+                    with (Path.cwd() / ".pw_tmp_upload_backend.txt").open("wb") as f:
+                        f.write(b"hello,backend\n")
+                    with (Path.cwd() / ".pw_tmp_upload_backend.txt").open("rb") as f:
+                        files = {"file": (".pw_tmp_upload_backend.txt", f, "text/plain")}
+                        ur = hc.post(f"/project/{int(urlparse(proj_url).path.split('/')[-1])}/files/upload?branch_id={branch_id}", files=files)
+                        assert ur.status_code in (200, 303)
+                    backend_ok = True
+            except Exception as be:
+                backend_err = be
+            # Fail the test but annotate whether backend succeeded
+            if backend_ok:
+                raise AssertionError(f"Playwright UI failed, but backend succeeded. UI error: {ui_err}") from ui_err
+>           raise AssertionError(f"Both UI and backend failed. UI error: {ui_err}; Backend error: {backend_err}") from ui_err
+E           AssertionError: Both UI and backend failed. UI error: Locator.click: Timeout 30000ms exceeded.
+E           Call log:
+E             - waiting for get_by_test_id("upload-submit")
+E               - locator resolved to <button type="submit" data-testid="upload-submit">Upload</button>
+E             - attempting click action
+E               - waiting for element to be visible, enabled and stable
+E               - element is visible, enabled and stable
+E               - scrolling into view if needed
+E               - done scrolling
+E               - performing click action
+E               - click action done
+E               - waiting for scheduled navigations to finish
+E           ; Backend error: timed out
+
+tests/test_playwright_upload.py:154: AssertionError
+----------------------------- Captured stdout call -----------------------------
+[cedarpy] Mounted /uploads-legacy from /tmp/cedarpy_test_llm_ev51uf1o/user_uploads
+[llm-ready] model=gpt-5 key=ok
+[startup] LLM ready (model=gpt-5)
+INFO:     127.0.0.1:32994 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:32998 - "GET / HTTP/1.1" 200 OK
+[client-log] ts=2025-09-19T17:15:47.163Z level=INFO host=127.0.0.1 origin=console.log url=http://127.0.0.1:58549/ loc= ua=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/140.0.7339.16 Safari/537.36 msg=[ui] page ready
+INFO:     127.0.0.1:32998 - "POST /api/client-log HTTP/1.1" 200 OK
+INFO:     127.0.0.1:32998 - "POST /projects/create HTTP/1.1" 303 See Other
+INFO:     127.0.0.1:32998 - "GET /project/2?branch_id=1 HTTP/1.1" 200 OK
+[client-log] ts=2025-09-19T17:15:47.367Z level=INFO host=127.0.0.1 origin=console.log url=http://127.0.0.1:58549/project/2?branch_id=1 loc= ua=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/140.0.7339.16 Safari/537.36 msg=[ui] page ready
+INFO:     127.0.0.1:32998 - "POST /api/client-log HTTP/1.1" 200 OK
+[upload-api] from=127.0.0.1 project_id=2 branch=Main filename=.pw_tmp_upload.txt ctype=text/plain
+[upload-api] saved project_id=2 branch=Main path=/tmp/cedarpy_test_llm_ev51uf1o/projects/2/files/branch_Main/20250919T171547Z__.pw_tmp_upload.txt size=17 mime=text/plain ftype=txt
+[llm] model=gpt-5 structure=tabular title=38 chars cat=Test data / CSV snippet
+[upload-api] classified structure=tabular ai_title=Tiny CSV-style text (hello,playwright)
+[tabular] codegen model=gpt-5 file=.pw_tmp_upload.txt table_suggest=pw_tmp_upload
+INFO:     127.0.0.1:38728 - "POST /projects/create HTTP/1.1" 303 See Other
+[upload-api] from=127.0.0.1 project_id=3 branch=Main filename=.pw_tmp_upload_backend.txt ctype=text/plain
+[upload-api] saved project_id=3 branch=Main path=/tmp/cedarpy_test_llm_ev51uf1o/projects/3/files/branch_Main/20250919T171617Z__.pw_tmp_upload_backend.txt size=14 mime=text/plain ftype=txt
+[llm] model=gpt-5 structure=sources title=31 chars cat=System/Temporary Files
+[upload-api] classified structure=sources ai_title=Temporary upload backend marker
+----------------------------- Captured stderr call -----------------------------
+INFO:     Started server process [3652]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:58549 (Press CTRL+C to quit)
+INFO:     Shutting down
+INFO:     Waiting for connections to close. (CTRL+C to force quit)
+=============================== warnings summary ===============================
+main.py:1198
+tests/test_file_llm.py::test_upload_emits_processing_and_updates_metadata_json
+tests/test_file_llm.py::test_upload_sets_ai_fields_via_llm
+tests/test_file_llm.py::test_thread_chat_llm_generates_assistant_message
+tests/test_playwright_merge.py::test_merge_dashboard_shows_unique_and_merges[chromium-/]
+tests/test_playwright_shell.py::test_shell_ui_open_world[chromium-/shell]
+tests/test_playwright_upload.py::test_project_upload_flow[chromium-/]
+  /home/runner/work/cedarpy/cedarpy/main.py:1198: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+../../../../../opt/hostedtoolcache/Python/3.11.13/x64/lib/python3.11/site-packages/fastapi/applications.py:4495
+tests/test_file_llm.py::test_upload_emits_processing_and_updates_metadata_json
+tests/test_file_llm.py::test_upload_sets_ai_fields_via_llm
+tests/test_file_llm.py::test_thread_chat_llm_generates_assistant_message
+tests/test_playwright_merge.py::test_merge_dashboard_shows_unique_and_merges[chromium-/]
+tests/test_playwright_shell.py::test_shell_ui_open_world[chromium-/shell]
+tests/test_playwright_upload.py::test_project_upload_flow[chromium-/]
+  /opt/hostedtoolcache/Python/3.11.13/x64/lib/python3.11/site-packages/fastapi/applications.py:4495: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)
+
+tests/test_doctor_mode.py::test_doctor_mode_runs
+  /opt/hostedtoolcache/Python/3.11.13/x64/lib/python3.11/site-packages/websockets/legacy/__init__.py:6: DeprecationWarning: websockets.legacy is deprecated; see https://websockets.readthedocs.io/en/stable/howto/upgrade.html for upgrade instructions
+    warnings.warn(  # deprecated in 14.0 - 2024-11-09
+
+tests/test_doctor_mode.py::test_doctor_mode_runs
+  /opt/hostedtoolcache/Python/3.11.13/x64/lib/python3.11/site-packages/uvicorn/protocols/websockets/websockets_impl.py:17: DeprecationWarning: websockets.server.WebSocketServerProtocol is deprecated
+    from websockets.server import WebSocketServerProtocol
+
+tests/test_playwright_shell.py::test_shell_ui_open_world[chromium-/shell]
+  /opt/hostedtoolcache/Python/3.11.13/x64/lib/python3.11/site-packages/websockets/legacy/server.py:1178: DeprecationWarning: remove second argument of ws_handler
+    warnings.warn("remove second argument of ws_handler", DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+--- generated xml file: /home/runner/work/cedarpy/cedarpy/reports/junit.xml ----
+============================= slowest 25 durations =============================
+217.67s call     tests/test_file_llm.py::test_upload_sets_ai_fields_via_llm
+45.98s call     tests/test_playwright_upload.py::test_project_upload_flow[chromium-/]
+20.05s call     tests/test_doctor_mode.py::test_doctor_mode_runs
+15.64s call     tests/test_playwright_merge.py::test_merge_dashboard_shows_unique_and_merges[chromium-/]
+11.56s call     tests/test_file_llm.py::test_upload_emits_processing_and_updates_metadata_json
+10.95s call     tests/test_file_llm.py::test_thread_chat_llm_generates_assistant_message
+1.00s call     tests/test_playwright_shell.py::test_shell_ui_open_world[chromium-/shell]
+0.53s setup    tests/test_playwright_merge.py::test_merge_dashboard_shows_unique_and_merges[chromium-/]
+0.04s teardown tests/test_playwright_upload.py::test_project_upload_flow[chromium-/]
+0.03s setup    tests/test_playwright_shell.py::test_shell_ui_open_world[chromium-/shell]
+0.03s setup    tests/test_playwright_upload.py::test_project_upload_flow[chromium-/]
+0.01s teardown tests/test_playwright_shell.py::test_shell_ui_open_world[chromium-/shell]
+0.01s teardown tests/test_playwright_merge.py::test_merge_dashboard_shows_unique_and_merges[chromium-/]
+0.00s setup    tests/test_doctor_mode.py::test_doctor_mode_runs
+0.00s call     tests/test_html_rendering.py::test_projects_list_html_formats_datetime
+0.00s setup    tests/test_file_llm.py::test_upload_emits_processing_and_updates_metadata_json
+0.00s setup    tests/test_file_llm.py::test_thread_chat_llm_generates_assistant_message
+0.00s setup    tests/test_html_rendering.py::test_projects_list_html_formats_datetime
+0.00s setup    tests/test_embedded_qt_ui.py::test_embedded_qt_upload_flow
+0.00s setup    tests/test_file_llm.py::test_upload_sets_ai_fields_via_llm
+0.00s teardown tests/test_doctor_mode.py::test_doctor_mode_runs
+0.00s teardown tests/test_file_llm.py::test_thread_chat_llm_generates_assistant_message
+0.00s teardown tests/test_file_llm.py::test_upload_sets_ai_fields_via_llm
+0.00s teardown tests/test_file_llm.py::test_upload_emits_processing_and_updates_metadata_json
+0.00s teardown tests/test_html_rendering.py::test_projects_list_html_formats_datetime
+=========================== short test summary info ============================
+FAILED tests/test_playwright_upload.py::test_project_upload_flow[chromium-/] - AssertionError: Both UI and backend failed. UI error: Locator.click: Timeout 30000ms exceeded.
+Call log:
+  - waiting for get_by_test_id("upload-submit")
+    - locator resolved to <button type="submit" data-testid="upload-submit">Upload</button>
+  - attempting click action
+    - waiting for element to be visible, enabled and stable
+    - element is visible, enabled and stable
+    - scrolling into view if needed
+    - done scrolling
+    - performing click action
+    - click action done
+    - waiting for scheduled navigations to finish
+; Backend error: timed out
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+======= 1 failed, 7 passed, 1 skipped, 17 warnings in 326.67s (0:05:26) ========

@@ -2252,13 +2252,12 @@ SELECT * FROM demo LIMIT 10;""")
         <span class='small muted'>LLM API key required; see README for setup.</span>
       </form>
     """
-
     # Client-side WebSocket streaming script (word-by-word). Falls back to simulated by-word if server returns full text.
     script_js = """
 <script>
 (function(){
-  var PROJECT_ID = %d;
-  var BRANCH_ID = %d;
+  var PROJECT_ID = __PID__;
+  var BRANCH_ID = __BID__;
   async function ensureThreadId(tid, fid, dsid) {
     if (tid) return tid;
     try {
@@ -2319,7 +2318,7 @@ SELECT * FROM demo LIMIT 10;""")
               console.log('[perf] ' + JSON.stringify({ project: PROJECT_ID, thread: threadId||null, from: currentStep.label, to: label, dt_ms: Math.round(dt) }));
             } catch(_) {}
           }
-        } catch(_){}
+        } catch(_){ }
         currentStep = { label: String(label||''), t0: now, node: node || null };
       }
 
@@ -2631,8 +2630,9 @@ SELECT * FROM demo LIMIT 10;""")
   }, { once: true });
 })();
 </script>
-""" % (project.id, current.id)
-
+"""
+    # Replace placeholders with actual IDs; avoid Python's % formatting which conflicts with '%' in CSS
+    script_js = script_js.replace("__PID__", str(project.id)).replace("__BID__", str(current.id))
     return f"""
       <h1>{escape(project.title)}</h1>
       <div class=\"muted small\">Project ID: {project.id}</div>

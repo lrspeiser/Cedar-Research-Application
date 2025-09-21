@@ -1,0 +1,167 @@
+
+---------------------------- live log sessionstart -----------------------------
+INFO     httpx:_client.py:1025 HTTP Request: GET https://api.openai.com/v1/models/gpt-5 "HTTP/1.1 200 OK"
+============================= test session starts ==============================
+platform linux -- Python 3.11.13, pytest-8.4.2, pluggy-1.6.0 -- /opt/hostedtoolcache/Python/3.11.13/x64/bin/python
+cachedir: .pytest_cache
+rootdir: /home/runner/work/cedarpy/cedarpy
+configfile: pyproject.toml
+plugins: playwright-0.7.1, base-url-2.1.0, anyio-4.10.0, cov-7.0.0
+collecting ... collected 4 items
+
+tests/test_playwright_chat_ack.py::test_chat_processing_ack_and_final[chromium-/] 
+-------------------------------- live log call ---------------------------------
+INFO     httpx:_client.py:1025 HTTP Request: GET https://api.openai.com/v1/models/gpt-5 "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+PASSED                                                                   [ 25%]
+tests/test_playwright_merge.py::test_merge_dashboard_shows_unique_and_merges[chromium-/] 
+-------------------------------- live log call ---------------------------------
+INFO     httpx:_client.py:1025 HTTP Request: GET https://api.openai.com/v1/models/gpt-5 "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+FAILED                                                                   [ 50%]
+
+=================================== FAILURES ===================================
+___________ test_merge_dashboard_shows_unique_and_merges[chromium-/] ___________
+
+page = <Page url='http://127.0.0.1:43363/project/2?branch_id=2'>, path = '/'
+
+    @pytest.mark.parametrize("path", ["/"])
+    def test_merge_dashboard_shows_unique_and_merges(page: Page, path: str):
+        port = _find_free_port()
+        server, thread = _start_server(port)
+        try:
+            base = f"http://127.0.0.1:{port}"
+            page.goto(base + path)
+            # Create project
+            unique_title = f"Merge Demo {int(time.time()*1000000)}"
+            page.fill("input[name=title]", unique_title)
+            page.locator("form[action='/projects/create'] button[type=submit]").click()
+            page.wait_for_url("**/project/*")
+            # Create a new branch via the inline form toggle (+ pill)
+            page.locator("a.pill[title='New branch']").click()
+            page.fill("#branchCreateForm input[name=name]", "feature-x")
+            page.locator("#branchCreateForm button[type=submit]").click()
+            page.wait_for_url("**/project/*?branch_id=*")
+            # Upload a file on the branch to create changelog unique entries
+            upload_input = page.get_by_test_id("upload-input")
+            tmp_path = Path.cwd() / ".pw_tmp_merge.txt"
+            tmp_path.write_text("hello,merge-branch\n", encoding="utf-8")
+            upload_input.set_input_files(str(tmp_path))
+            page.get_by_test_id("upload-submit").click(no_wait_after=True)
+>           page.wait_for_url("**/project/*?**msg=File+uploaded**", wait_until="domcontentloaded")
+
+tests/test_playwright_merge.py:83: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/opt/hostedtoolcache/Python/3.11.13/x64/lib/python3.11/site-packages/playwright/sync_api/_generated.py:9162: in wait_for_url
+    self._sync(
+/opt/hostedtoolcache/Python/3.11.13/x64/lib/python3.11/site-packages/playwright/_impl/_page.py:584: in wait_for_url
+    return await self._main_frame.wait_for_url(**locals_to_params(locals()))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/hostedtoolcache/Python/3.11.13/x64/lib/python3.11/site-packages/playwright/_impl/_frame.py:263: in wait_for_url
+    async with self.expect_navigation(
+/opt/hostedtoolcache/Python/3.11.13/x64/lib/python3.11/site-packages/playwright/_impl/_event_context_manager.py:33: in __aexit__
+    await self._future
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+    async def continuation() -> Optional[Response]:
+>       event = await waiter.result()
+                ^^^^^^^^^^^^^^^^^^^^^
+E       playwright._impl._errors.TimeoutError: Timeout 30000ms exceeded.
+E       =========================== logs ===========================
+E       waiting for navigation to "**/project/*?**msg=File+uploaded**" until 'domcontentloaded'
+E       ============================================================
+
+/opt/hostedtoolcache/Python/3.11.13/x64/lib/python3.11/site-packages/playwright/_impl/_frame.py:239: TimeoutError
+----------------------------- Captured stdout call -----------------------------
+[cedarpy] Mounted /uploads-legacy from /home/runner/CedarPyData/user_uploads
+[llm-ready] model=gpt-5 key=ok
+[startup] LLM ready (model=gpt-5)
+INFO:     127.0.0.1:39662 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:39674 - "GET / HTTP/1.1" 200 OK
+[client-log] ts=2025-09-19T22:34:56.822Z level=INFO host=127.0.0.1 origin=console.log url=http://127.0.0.1:43363/ loc= ua=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/140.0.7339.16 Safari/537.36 msg=[ui] page ready
+INFO:     127.0.0.1:39674 - "POST /api/client-log HTTP/1.1" 200 OK
+INFO:     127.0.0.1:39674 - "POST /projects/create HTTP/1.1" 303 See Other
+INFO:     127.0.0.1:39674 - "GET /project/2?branch_id=1 HTTP/1.1" 200 OK
+[client-log] ts=2025-09-19T22:34:57.019Z level=INFO host=127.0.0.1 origin=console.log url=http://127.0.0.1:43363/project/2?branch_id=1 loc= ua=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/140.0.7339.16 Safari/537.36 msg=[ui] page ready
+INFO:     127.0.0.1:39674 - "POST /api/client-log HTTP/1.1" 200 OK
+INFO:     127.0.0.1:39674 - "POST /project/2/branches/create HTTP/1.1" 303 See Other
+INFO:     127.0.0.1:39674 - "GET /project/2?branch_id=2 HTTP/1.1" 200 OK
+[client-log] ts=2025-09-19T22:34:57.175Z level=INFO host=127.0.0.1 origin=console.log url=http://127.0.0.1:43363/project/2?branch_id=2 loc= ua=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/140.0.7339.16 Safari/537.36 msg=[ui] page ready
+INFO:     127.0.0.1:39674 - "POST /api/client-log HTTP/1.1" 200 OK
+[upload-api] from=127.0.0.1 project_id=2 branch=feature-x filename=.pw_tmp_merge.txt ctype=text/plain
+[upload-api] saved project_id=2 branch=feature-x path=/home/runner/CedarPyData/projects/2/files/branch_feature-x/20250919T223457Z__.pw_tmp_merge.txt size=19 mime=text/plain ftype=txt
+[llm] model=gpt-5 structure=sources title=40 chars cat=Version control merge artifact
+[upload-api] classified structure=sources ai_title=Temporary merge file (.pw_tmp_merge.txt)
+----------------------------- Captured stderr call -----------------------------
+INFO:     Started server process [3590]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:43363 (Press CTRL+C to quit)
+INFO:     Shutting down
+INFO:     Waiting for connections to close. (CTRL+C to force quit)
+INFO:     Shutting down
+INFO:     connection closed
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [3590]
+------------------------------ Captured log call -------------------------------
+INFO     httpx:_client.py:1025 HTTP Request: GET https://api.openai.com/v1/models/gpt-5 "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+--------------------------- Captured stderr teardown ---------------------------
+INFO:     Waiting for background tasks to complete. (CTRL+C to force quit)
+=============================== warnings summary ===============================
+tests/test_playwright_chat_ack.py::test_chat_processing_ack_and_final[chromium-/]
+tests/test_playwright_chat_ack.py::test_chat_processing_ack_and_final[chromium-/]
+tests/test_playwright_merge.py::test_merge_dashboard_shows_unique_and_merges[chromium-/]
+  /home/runner/work/cedarpy/cedarpy/main.py:1198: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+tests/test_playwright_chat_ack.py::test_chat_processing_ack_and_final[chromium-/]
+tests/test_playwright_chat_ack.py::test_chat_processing_ack_and_final[chromium-/]
+tests/test_playwright_merge.py::test_merge_dashboard_shows_unique_and_merges[chromium-/]
+  /opt/hostedtoolcache/Python/3.11.13/x64/lib/python3.11/site-packages/fastapi/applications.py:4495: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)
+
+tests/test_playwright_chat_ack.py::test_chat_processing_ack_and_final[chromium-/]
+  /opt/hostedtoolcache/Python/3.11.13/x64/lib/python3.11/site-packages/websockets/legacy/__init__.py:6: DeprecationWarning: websockets.legacy is deprecated; see https://websockets.readthedocs.io/en/stable/howto/upgrade.html for upgrade instructions
+    warnings.warn(  # deprecated in 14.0 - 2024-11-09
+
+tests/test_playwright_chat_ack.py::test_chat_processing_ack_and_final[chromium-/]
+  /opt/hostedtoolcache/Python/3.11.13/x64/lib/python3.11/site-packages/uvicorn/protocols/websockets/websockets_impl.py:17: DeprecationWarning: websockets.server.WebSocketServerProtocol is deprecated
+    from websockets.server import WebSocketServerProtocol
+
+tests/test_playwright_chat_ack.py::test_chat_processing_ack_and_final[chromium-/]
+  /opt/hostedtoolcache/Python/3.11.13/x64/lib/python3.11/site-packages/websockets/legacy/server.py:1178: DeprecationWarning: remove second argument of ws_handler
+    warnings.warn("remove second argument of ws_handler", DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+--- generated xml file: /home/runner/work/cedarpy/cedarpy/reports/junit.xml ----
+============================= slowest 25 durations =============================
+96.66s call     tests/test_playwright_chat_ack.py::test_chat_processing_ack_and_final[chromium-/]
+35.96s call     tests/test_playwright_merge.py::test_merge_dashboard_shows_unique_and_merges[chromium-/]
+1.36s setup    tests/test_playwright_chat_ack.py::test_chat_processing_ack_and_final[chromium-/]
+0.05s teardown tests/test_playwright_merge.py::test_merge_dashboard_shows_unique_and_merges[chromium-/]
+0.03s setup    tests/test_playwright_merge.py::test_merge_dashboard_shows_unique_and_merges[chromium-/]
+0.01s teardown tests/test_playwright_chat_ack.py::test_chat_processing_ack_and_final[chromium-/]
+=========================== short test summary info ============================
+FAILED tests/test_playwright_merge.py::test_merge_dashboard_shows_unique_and_merges[chromium-/] - playwright._impl._errors.TimeoutError: Timeout 30000ms exceeded.
+=========================== logs ===========================
+waiting for navigation to "**/project/*?**msg=File+uploaded**" until 'domcontentloaded'
+============================================================
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+============= 1 failed, 1 passed, 9 warnings in 134.57s (0:02:14) ==============
