@@ -1648,6 +1648,41 @@ def _llm_reach_reason() -> str:
     except Exception:
         return "unknown"
 
+# Cheap fast-path for trivial arithmetic to avoid planner latency for prompts like "what is 2+2".
+# Returns a string answer (e.g., "4") or None if not applicable.
+# See README (WS chat fast-paths) for rationale and maintenance notes.
+# This is intentionally conservative and only handles two-operand integer arithmetic.
+# If expanded, keep it deterministic and side-effect free.
+from typing import Optional as _Optional
+
+def _try_fast_math(msg: str) -> _Optional[str]:
+    try:
+        import re as _re
+        import operator as _op
+        OPS = {"+": _op.add, "-": _op.sub, "*": _op.mul, "x": _op.mul, "×": _op.mul, "/": _op.truediv}
+        s = (msg or "").strip().lower()
+        m = _re.match(r"^(what\s+is\s+)?(-?\d+)\s*([+\-*/x×])\s*(-?\d+)\s*\??$", s)
+        if not m:
+            return None
+        a = int(m.group(2)); op = m.group(3); b = int(m.group(4))
+        if op not in OPS:
+            return None
+        val = OPS[op](a, b)
+        # Normalize integer-like floats to int strings
+        try:
+            fv = float(val)
+            if fv.is_integer():
+                return str(int(fv))
+            # Limit precision for division results
+            return f"{fv:.6g}"
+        except Exception:
+            try:
+                return str(int(val))
+            except Exception:
+                return str(val)
+    except Exception:
+        return None
+
 
 
     # Inject a lightweight client logging hook so console messages and JS errors are POSTed to the server.
@@ -6189,12 +6224,32 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
         timeout_s = int(os.getenv("CEDARPY_CHAT_TIMEOUT_SECONDS", "90"))
     except Exception:
         timeout_s = 90
+    # Cap LLM turns to reduce latency flaps; configurable for complex sessions
+    try:
+        max_turns = int(os.getenv("CEDARPY_MAX_TURNS", "3"))
+    except Exception:
+        max_turns = 3
     t0 = _time.time()
     timed_out = False
 
+    # Trivial arithmetic fast-path: compute immediately if applicable
+    fast_result = None
+    try:
+        fast_result = _try_fast_math(content)
+    except Exception:
+        fast_result = None
+    if fast_result is not None:
+        try:
+            final_text = str(fast_result)
+        except Exception:
+            final_text = fast_result
+        try:
+            final_call_obj = {"function": "final", "args": {"text": final_text, "title": "Simple Arithmetic"}}
+        except Exception:
+            final_call_obj = {"function": "final", "args": {"text": final_text}}
 
     try:
-        while loop_count < 8:
+        while (fast_result is None) and (not final_text) and (not question_text) and (loop_count < max_turns):
             # Timeout guard (pre-turn)
             try:
                 if (_time.time() - t0) > timeout_s:
