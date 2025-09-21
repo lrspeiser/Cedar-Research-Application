@@ -1648,6 +1648,17 @@ def _llm_reach_reason() -> str:
     except Exception:
         return "unknown"
 
+# Helper to detect trivially simple arithmetic prompts. Used only to enforce plan-first policy.
+# We always use the LLM; this does not compute answers, only classifies trivial math.
+import re as _re_simple
+
+def _is_trivial_math(msg: str) -> bool:
+    try:
+        s = (msg or "").strip().lower()
+        return bool(_re_simple.match(r"^(what\s+is\s+)?(-?\d+)\s*([+\-*/x×])\s*(-?\d+)\s*\??$", s))
+    except Exception:
+        return False
+
 
 
 
@@ -2609,9 +2620,15 @@ SELECT * FROM demo LIMIT 10;""")
                   if (last && last.length) { fallbackMsgs = last; }
                 } catch(_){ }
                 if (!fallbackMsgs) {
-                  var reason = 'No LLM prompt available';
-                  try { if (m && m.json && m.json.meta && m.json.meta.fastpath) { reason = 'No LLM prompt: fast-path (' + String(m.json.meta.fastpath) + ')'; } } catch(_){ }
-                  fallbackMsgs = [{ role: 'system', content: reason }];
+                  var fromFinal = null;
+                  try { if (m && m.prompt) { fromFinal = m.prompt; } } catch(_){ }
+                  if (fromFinal && Array.isArray(fromFinal)) {
+                    fallbackMsgs = fromFinal;
+                  } else {
+                    var reason = 'No LLM prompt available';
+                    try { if (m && m.json && m.json.meta && m.json.meta.fastpath) { reason = 'No LLM prompt: fast-path (' + String(m.json.meta.fastpath) + ')'; } } catch(_){ }
+                    fallbackMsgs = [{ role: 'system', content: reason }];
+                  }
                 }
                 try { preP2.textContent = JSON.stringify(fallbackMsgs, null, 2); } catch(_){ preP2.textContent = String(fallbackMsgs); }
                 var barP2 = document.createElement('div'); barP2.className='small'; barP2.style.margin='6px 0 8px 0';
@@ -6384,6 +6401,15 @@ Keep total turns <= 3 and ALWAYS end with a single {"function":"final"} call con
                 name = str((call.get('function') or '')).strip().lower()
                 args = call.get('args') or {}
                 call_obj = call
+                # Enforce plan-first on first turn for non-trivial prompts
+                if (loop_count == 1) and (name == 'final') and (not _is_trivial_math(content)):
+                    try:
+                        _send_info('plan-enforce')
+                    except Exception:
+                        pass
+                    messages.append({"role": "user", "content": "FIRST TURN POLICY: Respond NOW with one JSON object only: {\"function\":\"plan\", ...}. Do NOT return final yet. Use the required schema (title, description, goal_outcome, status, state, steps[]. Each step: function, title, description, goal_outcome, status, state, args). STRICT JSON only."})
+                    name = None; args = {}; call_obj = {}
+                    continue
                 if name == 'plan':
                     _send_info('plan')
                     # Persist plan
@@ -6528,7 +6554,10 @@ Keep total turns <= 3 and ALWAYS end with a single {"function":"final"} call con
 
     if final_text:
         # Emit the final message along with the final function-call JSON for UI details
-        await _ws_send_safe(websocket, json.dumps({"type": "final", "text": final_text, "json": final_call_obj}))
+        try:
+            await _ws_send_safe(websocket, json.dumps({"type": "final", "text": final_text, "json": final_call_obj, "prompt": messages}))
+        except Exception:
+            await _ws_send_safe(websocket, json.dumps({"type": "final", "text": final_text, "json": final_call_obj}))
     elif question_text:
         # For questions, continue to use 'final' type for compatibility with existing tests/clients
         await _ws_send_safe(websocket, json.dumps({"type": "final", "text": question_text, "json": final_call_obj}))
