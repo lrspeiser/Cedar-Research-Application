@@ -2413,6 +2413,17 @@ SELECT * FROM demo LIMIT 10;""")
             detailsP.appendChild(barP);
             detailsP.appendChild(preP);
             wrapP.appendChild(metaP); wrapP.appendChild(bubP); wrapP.appendChild(detailsP);
+            // Allow clicking the title to toggle details (to satisfy tests)
+            try {
+              var titleElP = metaP.querySelector('.title');
+              if (titleElP) {
+                titleElP.setAttribute('role', 'button');
+                titleElP.setAttribute('tabindex', '0');
+                var _tglP = function(){ try { var e=document.getElementById(detIdP); if (e) { e.style.display = (e.style.display==='none'?'block':'none'); } } catch(_){} };
+                titleElP.addEventListener('click', function(ev){ try { ev.preventDefault(); } catch(_){}; _tglP(); });
+                titleElP.addEventListener('keydown', function(ev){ try { if (ev && (ev.key==='Enter' || ev.key===' ')) { ev.preventDefault(); _tglP(); } } catch(_){} });
+              }
+            } catch(_) {}
             if (msgs) msgs.appendChild(wrapP);
             stepAdvance('assistant:prompt', wrapP);
           } catch(_) { }
@@ -2563,6 +2574,17 @@ SELECT * FROM demo LIMIT 10;""")
                 detailsP2.appendChild(barP2);
                 detailsP2.appendChild(preP2);
                 wrapP2.appendChild(metaP2); wrapP2.appendChild(bubP2); wrapP2.appendChild(detailsP2);
+                // Allow clicking the title to toggle details (to satisfy tests)
+                try {
+                  var titleElP2 = metaP2.querySelector('.title');
+                  if (titleElP2) {
+                    titleElP2.setAttribute('role', 'button');
+                    titleElP2.setAttribute('tabindex', '0');
+                    var _tglP2 = function(){ try { var e=document.getElementById(detIdP2); if (e) { e.style.display = (e.style.display==='none'?'block':'none'); } } catch(_){} };
+                    titleElP2.addEventListener('click', function(ev){ try { ev.preventDefault(); } catch(_){}; _tglP2(); });
+                    titleElP2.addEventListener('keydown', function(ev){ try { if (ev && (ev.key==='Enter' || ev.key===' ')) { ev.preventDefault(); _tglP2(); } } catch(_){} });
+                  }
+                } catch(_) {}
                 if (msgs) { try { msgs.insertBefore(wrapP2, wrapF); } catch(_) { msgs.appendChild(wrapP2); } }
                 try { console.log('[ui] synthesized Assistant prompt bubble'); } catch(_){}
                 try { stepAdvance('assistant:prompt', wrapP2); } catch(_){}
