@@ -2291,7 +2291,7 @@ SELECT * FROM demo LIMIT 10;""")
     }
   }
 
-  function startWS(text, threadId, fileId, datasetId){
+      function startWS(text, threadId, fileId, datasetId, replay){
     try {
       var msgs = document.getElementById('msgs');
 
@@ -2323,7 +2323,7 @@ SELECT * FROM demo LIMIT 10;""")
         currentStep = { label: String(label||''), t0: now, node: node || null };
       }
 
-      if (msgs && text) {
+      if (msgs && !replay && text) {
         // Remove placeholder if present
         try { var first = msgs.firstElementChild; if (first && first.classList.contains('muted')) { first.remove(); } } catch(_){ }
         var u = document.createElement('div');
@@ -2372,7 +2372,11 @@ SELECT * FROM demo LIMIT 10;""")
         try {
           refreshTimeout();
           // Do not print a local 'submitted'; rely on server info events for true order
-          ws.send(JSON.stringify({action:'chat', content: text, branch_id: BRANCH_ID, thread_id: threadId||null, file_id: (fileId||null), dataset_id: (datasetId||null) }));
+          if (replay) {
+            ws.send(JSON.stringify({action:'chat', replay_messages: replay, branch_id: BRANCH_ID, thread_id: threadId||null, file_id: (fileId||null), dataset_id: (datasetId||null) }));
+          } else {
+            ws.send(JSON.stringify({action:'chat', content: text, branch_id: BRANCH_ID, thread_id: threadId||null, file_id: (fileId||null), dataset_id: (datasetId||null) }));
+          }
         } catch(e){}
       };
       ws.onmessage = function(ev){
@@ -2381,6 +2385,10 @@ SELECT * FROM demo LIMIT 10;""")
         if (!m) return;
         if (m.type === 'prompt') {
           try {
+            try {
+              window.__cedar_last_prompts = window.__cedar_last_prompts || {};
+              if (m.thread_id) { window.__cedar_last_prompts[String(m.thread_id)] = m.messages || []; }
+            } catch(_){ }
             var detIdP = 'det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
             var wrapP = document.createElement('div'); wrapP.className = 'msg assistant';
             var metaP = document.createElement('div'); metaP.className = 'meta small'; metaP.innerHTML = "<span class='pill'>assistant</span> <span class='title' style='font-weight:600'>Assistant</span>";
@@ -2447,6 +2455,44 @@ SELECT * FROM demo LIMIT 10;""")
             var metaF = document.createElement('div'); metaF.className = 'meta small'; metaF.innerHTML = "<span class='pill'>assistant</span> <span class='title' style='font-weight:600'>" + fnF + "</span>";
             var bubF = document.createElement('div'); bubF.className = 'bubble assistant'; if (detIdF) bubF.setAttribute('data-details-id', detIdF);
             var contF = document.createElement('div'); contF.className='content'; contF.style.whiteSpace='pre-wrap'; contF.textContent = (fnF ? (fnF + ' ') : '') + (m.text||'');
+            // Add edit prompt link if we have a stored prompt for this thread
+            try {
+              var last = (window.__cedar_last_prompts||{})[String(threadId||'')];
+              if (last && last.length) {
+                var edit = document.createElement('a'); edit.href='#'; edit.className='small muted'; edit.style.marginLeft='8px'; edit.textContent='(edit prompt)';
+                edit.addEventListener('click', function(ev){
+                  try { ev.preventDefault(); } catch(_){}
+                  // Open simple modal
+                  var overlay = document.getElementById('promptEditModal');
+                  if (!overlay) {
+                    overlay = document.createElement('div'); overlay.id='promptEditModal'; overlay.style.position='fixed'; overlay.style.inset='0'; overlay.style.background='rgba(0,0,0,0.4)'; overlay.style.zIndex='9999';
+                    var pane = document.createElement('div'); pane.style.position='absolute'; pane.style.top='10%'; pane.style.left='50%'; pane.style.transform='translateX(-50%)'; pane.style.width='80%'; pane.style.maxWidth='900px'; pane.style.background='#fff'; pane.style.borderRadius='8px'; pane.style.padding='12px';
+                    var h = document.createElement('div'); h.innerHTML = "<b>Edit Prompt JSON</b>"; pane.appendChild(h);
+                    var ta = document.createElement('textarea'); ta.id='promptEditArea'; ta.style.width='100%'; ta.style.height='320px'; ta.style.fontFamily='ui-monospace, Menlo, monospace'; pane.appendChild(ta);
+                    var bar = document.createElement('div'); bar.style.marginTop='8px';
+                    var runBtn = document.createElement('button'); runBtn.textContent='Run with edited prompt';
+                    var cancelBtn = document.createElement('button'); cancelBtn.textContent='Cancel'; cancelBtn.className='secondary'; cancelBtn.style.marginLeft='8px';
+                    bar.appendChild(runBtn); bar.appendChild(cancelBtn); pane.appendChild(bar);
+                    overlay.appendChild(pane);
+                    document.body.appendChild(overlay);
+                    cancelBtn.addEventListener('click', function(){ try { overlay.remove(); } catch(_){} });
+                    runBtn.addEventListener('click', function(){
+                      try {
+                        var txt = document.getElementById('promptEditArea').value || '[]';
+                        var parsed = JSON.parse(txt);
+                        try { overlay.remove(); } catch(_){ }
+                        // Reuse the same thread/file/dataset context, but pass replay messages
+                        startWS('', threadId, fileId, datasetId, parsed);
+                      } catch(e) {
+                        alert('Invalid JSON: ' + e);
+                      }
+                    });
+                  }
+                  try { document.getElementById('promptEditArea').value = JSON.stringify(last, null, 2); } catch(_){}
+                });
+                contF.appendChild(edit);
+              }
+            } catch(_){ }
             bubF.appendChild(contF);
             wrapF.appendChild(metaF); wrapF.appendChild(bubF);
             if (detIdF) {
@@ -5699,28 +5745,31 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
             "final": {"function": "final", "args": {"text": "2+2=4", "title": "Simple Arithmetic"}, "output_to_user": "2+2=4", "changelog_summary": "finalized answer"}
         }
 
-        messages = [
-            {"role": "system", "content": sys_prompt},
-            {"role": "user",   "content": "Resources:"},
-            {"role": "user",   "content": json.dumps(resources, ensure_ascii=False)},
-            {"role": "user",   "content": "History:"},
-            {"role": "user",   "content": json.dumps(history, ensure_ascii=False)}
-        ]
-        if ctx:
+        if replay_messages:
+            messages = replay_messages
+        else:
+            messages = [
+                {"role": "system", "content": sys_prompt},
+                {"role": "user",   "content": "Resources:"},
+                {"role": "user",   "content": json.dumps(resources, ensure_ascii=False)},
+                {"role": "user",   "content": "History:"},
+                {"role": "user",   "content": json.dumps(history, ensure_ascii=False)}
+            ]
+            if ctx:
+                try:
+                    messages.append({"role": "user", "content": "Context:"})
+                    messages.append({"role": "user", "content": json.dumps(ctx, ensure_ascii=False)})
+                except Exception:
+                    pass
+            messages.append({"role": "user", "content": "Functions and examples:"})
             try:
-                messages.append({"role": "user", "content": "Context:"})
-                messages.append({"role": "user", "content": json.dumps(ctx, ensure_ascii=False)})
+                messages.append({"role": "user", "content": json.dumps(examples_json, ensure_ascii=False)})
             except Exception:
-                pass
-        messages.append({"role": "user", "content": "Functions and examples:"})
-        try:
-            messages.append({"role": "user", "content": json.dumps(examples_json, ensure_ascii=False)})
-        except Exception:
-            messages.append({"role": "user", "content": "{""error"":""examples unavailable""}"})
-        messages.append({"role": "user", "content": content})
+                messages.append({"role": "user", "content": "{\"error\":\"examples unavailable\"}"})
+            messages.append({"role": "user", "content": content})
         # Emit the prepared prompt so the UI can show an "assistant prompt" bubble with full JSON
         try:
-            await websocket.send_text(json.dumps({"type": "prompt", "messages": messages}))
+            await websocket.send_text(json.dumps({"type": "prompt", "messages": messages, "thread_id": thr.id}))
         except Exception:
             pass
     except Exception as e:
@@ -5982,6 +6031,18 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
         timeout_s = 90
     t0 = _time.time()
     timed_out = False
+
+    # Allow replay mode: if the payload provides a full messages array, use it instead of building
+    replay_messages = None
+    try:
+        try:
+            # payload is available from earlier parse scope; guard for NameError
+            if isinstance(payload, dict) and payload.get('replay_messages'):
+                replay_messages = payload.get('replay_messages')
+        except Exception:
+            replay_messages = None
+    except Exception:
+        replay_messages = None
 
     try:
         while loop_count < 8:
