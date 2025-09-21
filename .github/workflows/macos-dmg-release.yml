@@ -5,6 +5,9 @@ on:
     tags: [ 'v*' ]
   workflow_dispatch: {}
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: macos-latest
@@ -36,9 +39,11 @@ jobs:
           name: CedarPy.dmg
           path: packaging/dist-qt/CedarPy-qt.dmg
 
-  release:
+release:
     needs: build
     runs-on: macos-latest
+    permissions:
+      contents: write
     steps:
       - name: Download artifact
         uses: actions/download-artifact@v4
