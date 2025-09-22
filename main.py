@@ -2975,6 +2975,7 @@ SELECT * FROM demo LIMIT 10;""")
               try {
                 var rows = m.call.steps.map(function(st){ var f=String(st.function||''); var ti=String(st.title||''); var de=String(st.description||''); var stS=String(st.status||'in queue'); return "- ["+stS+"] "+f+": "+ti+ (de? (" — "+de):''); }).join('\\n');
                 cont.textContent = 'Plan:\\n' + rows;
+              } catch(_){ }
             } else if (fn === 'submit_step' || fn === 'tool_result') {
               cont.textContent = text;
             } else {
