@@ -106,6 +106,7 @@ LEGACY_UPLOAD_DIR = os.getenv("CEDARPY_UPLOAD_DIR", _default_legacy_dir)
 SHELL_API_ENABLED = str(os.getenv("CEDARPY_SHELL_API_ENABLED", "1")).strip().lower() not in {"", "0", "false", "no", "off"}
 SHELL_API_TOKEN = os.getenv("CEDARPY_SHELL_API_TOKEN")
 
+
 # Logs directory for shell runs (outside DMG and writable)
 LOGS_DIR = os.path.join(DATA_DIR, "logs", "shell")
 os.makedirs(LOGS_DIR, exist_ok=True)
@@ -1018,6 +1019,11 @@ def _tabular_import_via_llm(project_id: int, branch_id: int, file_rec: FileEntry
         "- Return a JSON-serializable dict: {ok: bool, table: str, rows_inserted: int, columns: [str], warnings: [str]}.\n"
         "- Print minimal progress is okay; main signal should be the returned dict.\n"
         "- Do not write any files except via sqlite3 to the provided sqlite_path.\n"
+        "Implementation constraints (strict):\n"
+        "- ALWAYS specify the column list in INSERT statements as (project_id, branch_id, <data columns...>). Do NOT include id in the INSERT column list; id is auto-incremented.\n"
+        "- Ensure the number of placeholders matches the number of specified columns exactly.\n"
+        "- For CSV: open with newline='' and the correct encoding; use csv.reader and call next(reader) to consume the header when present (or skip header_skip rows).\n"
+        "- When returning the 'columns' field, include ONLY the inferred data columns (exclude id, project_id, branch_id).\n"
         "Take into account optional hints provided in the 'options' object (e.g., header_skip, delimiter, quotechar, encoding, date_formats, rename).\n"
         "Output: ONLY Python source code, no surrounding explanations."
     )
@@ -1065,6 +1071,25 @@ def _tabular_import_via_llm(project_id: int, branch_id: int, file_rec: FileEntry
 
     # Prepare a restricted exec environment
     import csv as _csv, json as _json2, sqlite3 as _sqlite3, re as _re, io as _io, math as _math
+    import types as _types
+
+    # Provide a small typing shim so "from typing import List" doesn't fail
+    class _TypingParam:
+        def __getitem__(self, item):
+            return object
+
+    _typing_dummy = _types.SimpleNamespace(
+        __name__="typing",
+        List=list,
+        Dict=dict,
+        Tuple=tuple,
+        Set=set,
+        Optional=_TypingParam(),
+        Any=object,
+        Iterable=_TypingParam(),
+        Union=_TypingParam(),
+        Callable=_TypingParam(),
+    )
 
     allowed_modules = {
         "csv": _csv,
@@ -1073,16 +1098,12 @@ def _tabular_import_via_llm(project_id: int, branch_id: int, file_rec: FileEntry
         "re": _re,
         "io": _io,
         "math": _math,
-        "typing": None,  # allow import but not used at runtime
+        "typing": _typing_dummy,
     }
 
     def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):
         if name in allowed_modules and allowed_modules[name] is not None:
             return allowed_modules[name]
-        if name in allowed_modules and allowed_modules[name] is None:
-            # create a minimal dummy module for typing
-            import types as _types
-            return _types.SimpleNamespace(__name__="typing")
         raise ImportError(f"disallowed import: {name}")
 
     def _safe_open(p, mode="r", *args, **kwargs):
@@ -1096,7 +1117,7 @@ def _tabular_import_via_llm(project_id: int, branch_id: int, file_rec: FileEntry
     allowed_builtin_names = [
         "abs", "min", "max", "sum", "len", "range", "enumerate", "zip", "map", "filter",
         "any", "all", "sorted", "reversed", "str", "int", "float", "bool", "list", "dict", "set", "tuple",
-        "print"
+        "print", "Exception", "isinstance", "StopIteration", "next", "iter"
     ]
     _base_builtins = {}
     try:
@@ -4560,19 +4581,38 @@ class ToolExecRequest(BaseModel):
 
 @app.post("/api/test/tool")
 def api_test_tool_exec(body: ToolExecRequest, request: Request):
-    # Only allow in test mode and from local requests
+    # Only allow from local requests. Require either:
+    # - CEDARPY_TEST_MODE=1 (CI/test), or
+    # - CEDARPY_DEV_ALLOW_TEST_TOOL=1 (local dev override)
     try:
         test_mode = str(os.getenv("CEDARPY_TEST_MODE", "")).strip().lower() in {"1","true","yes","on"}
     except Exception:
         test_mode = False
+    try:
+        dev_allow = str(os.getenv("CEDARPY_DEV_ALLOW_TEST_TOOL", "")).strip().lower() in {"1","true","yes","on"}
+    except Exception:
+        dev_allow = False
     host = (request.client.host if request and request.client else "")
-    if not test_mode or host not in {"127.0.0.1","::1","localhost"}:
+    local_ok = host in {"127.0.0.1","::1","localhost","testclient"}
+    if not local_ok:
+        raise HTTPException(status_code=403, detail="forbidden")
+    if not (test_mode or dev_allow):
         raise HTTPException(status_code=403, detail="forbidden")
 
     fn = (body.function or "").strip().lower()
     args = body.args or {}
     pid = int(body.project_id or 0)
     bid = int(body.branch_id or 0)
+
+    def _branch_id_or_main(project_id: int, bid_hint: int | None) -> int:
+        SessionLocal = sessionmaker(bind=_get_project_engine(project_id), autoflush=False, autocommit=False, future=True)
+        with SessionLocal() as dbs:
+            if bid_hint:
+                b = dbs.query(Branch).filter(Branch.id==int(bid_hint), Branch.project_id==project_id).first()
+                if b:
+                    return b.id
+            m = ensure_main_branch(dbs, project_id)
+            return m.id
 
     if fn == "db":
         if not pid:
@@ -4581,7 +4621,8 @@ def api_test_tool_exec(body: ToolExecRequest, request: Request):
         if not sql_text:
             raise HTTPException(status_code=400, detail="sql required")
         return _execute_sql(sql_text, pid, max_rows=200)
-    elif fn == "code":
+
+    if fn == "code":
         if not pid:
             raise HTTPException(status_code=400, detail="project_id required for code")
         # Minimal sandbox identical to ws_chat tool_code
@@ -4597,22 +4638,14 @@ def api_test_tool_exec(body: ToolExecRequest, request: Request):
         def _cedar_query(sql_text: str):
             return tool_db_local(sql_text)
         def _cedar_list_files():
-            try:
-                ids = branch_filter_ids(next(get_project_db(pid)), pid, bid or 1)  # type: ignore
-            except Exception:
-                ids = []
-            # Fallback to querying per-project engine
-            SessionLocal = sessionmaker(bind=_get_project_engine(pid), autoflush=False, autocommit=False, future=True)
-            dbs = SessionLocal()
-            files_info = []
+            SessionLocal2 = sessionmaker(bind=_get_project_engine(pid), autoflush=False, autocommit=False, future=True)
+            dbs = SessionLocal2()
             try:
                 recs = dbs.query(FileEntry).filter(FileEntry.project_id==pid).order_by(FileEntry.created_at.desc()).limit(200).all()
-                for ff in recs:
-                    files_info.append({"id": ff.id, "display_name": ff.display_name, "file_type": ff.file_type})
+                return [{"id": ff.id, "display_name": ff.display_name, "file_type": ff.file_type} for ff in recs]
             finally:
                 try: dbs.close()
                 except Exception: pass
-            return files_info
         safe_globals: Dict[str, Any] = {"__builtins__": {"print": print, "len": len, "range": range, "str": str, "int": int, "float": float, "bool": bool, "list": list, "dict": dict, "set": set, "tuple": tuple}, "cedar": type("CedarHelpers", (), {"query": _cedar_query, "list_files": _cedar_list_files})(), "sqlite3": sqlite3, "json": json, "re": re, "io": io}
         try:
             with contextlib.redirect_stdout(logs):
@@ -4620,10 +4653,10 @@ def api_test_tool_exec(body: ToolExecRequest, request: Request):
         except Exception as e:
             return {"ok": False, "error": f"{type(e).__name__}: {e}", "logs": logs.getvalue()}
         return {"ok": True, "logs": logs.getvalue()}
-    elif fn == "web":
+
+    if fn == "web":
         url = str(args.get("url") or "").strip()
         query = str(args.get("query") or "").strip()
-        # Minimal fetch identical to ws_chat tool_web
         import urllib.request as _req
         import re as _re
         if url:
@@ -4636,11 +4669,153 @@ def api_test_tool_exec(body: ToolExecRequest, request: Request):
             except Exception as e:
                 return {"ok": False, "error": f"{type(e).__name__}: {e}"}
         if query:
-            # Non-deterministic HTML search can be omitted in test mode
             return {"ok": True, "query": query}
         return {"ok": False, "error": "missing url or query"}
-    else:
-        raise HTTPException(status_code=400, detail="unsupported function")
+
+    if fn == "download":
+        if not pid:
+            raise HTTPException(status_code=400, detail="project_id required")
+        urls = args.get("urls") or []
+        if not isinstance(urls, list) or not urls:
+            raise HTTPException(status_code=400, detail="urls required")
+        import urllib.request as _req
+        import re as _re
+        SessionLocal2 = sessionmaker(bind=_get_project_engine(pid), autoflush=False, autocommit=False, future=True)
+        with SessionLocal2() as dbs:
+            b_id = _branch_id_or_main(pid, bid or None)
+            paths = _project_dirs(pid)
+            # Ensure branch name
+            b = dbs.query(Branch).filter(Branch.id==b_id).first()
+            branch_name = b.name if b else "Main"
+            project_dir = os.path.join(paths["files_root"], f"branch_{branch_name}")
+            os.makedirs(project_dir, exist_ok=True)
+            results = []
+            for u in urls[:5]:
+                try:
+                    with _req.urlopen(u, timeout=45) as resp:
+                        data = resp.read()
+                    parsed = _re.sub(r'[^a-zA-Z0-9._-]', '_', os.path.basename(u.split('?')[0]) or 'download.bin')
+                    ts = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+                    storage_name = f"{ts}__{parsed}"
+                    disk_path = os.path.join(project_dir, storage_name)
+                    with open(disk_path, 'wb') as fh:
+                        fh.write(data)
+                    size = len(data)
+                    mime, _ = mimetypes.guess_type(parsed)
+                    ftype = file_extension_to_type(parsed)
+                    rec = FileEntry(project_id=pid, branch_id=b_id, filename=storage_name, display_name=parsed, file_type=ftype, structure=None, mime_type=mime or '', size_bytes=size, storage_path=os.path.abspath(disk_path), metadata_json=None, ai_processing=False)
+                    dbs.add(rec); dbs.commit(); dbs.refresh(rec)
+                    results.append({"url": u, "file_id": rec.id, "display_name": parsed, "bytes": size})
+                except Exception as e:
+                    results.append({"url": u, "error": f"{type(e).__name__}: {e}"})
+            return {"ok": True, "downloads": results}
+
+    if fn == "extract":
+        if not pid:
+            raise HTTPException(status_code=400, detail="project_id required")
+        fid = args.get("file_id")
+        if fid is None:
+            raise HTTPException(status_code=400, detail="file_id required")
+        SessionLocal2 = sessionmaker(bind=_get_project_engine(pid), autoflush=False, autocommit=False, future=True)
+        with SessionLocal2() as dbs:
+            f = dbs.query(FileEntry).filter(FileEntry.id==int(fid), FileEntry.project_id==pid).first()
+            if not f or not f.storage_path or not os.path.isfile(f.storage_path):
+                return {"ok": False, "error": "file not found"}
+            try:
+                with open(f.storage_path, 'r', encoding='utf-8') as fh:
+                    txt = fh.read()
+            except Exception:
+                return {"ok": False, "error": "binary or non-utf8 file; PDF extraction not installed"}
+            lines = [ln.strip() for ln in txt.splitlines() if ln.strip()]
+            claims = [ln for ln in lines[:200]]
+            import re as _re
+            citations = []
+            rx = _re.compile(r'\[(\d+)\]|doi:|arxiv|http', _re.I)
+            for ln in lines:
+                if rx.search(ln):
+                    citations.append(ln)
+                    if len(citations) >= 200:
+                        break
+            return {"ok": True, "claims": claims[:200], "citations": citations[:200]}
+
+    if fn == "image":
+        if not pid:
+            raise HTTPException(status_code=400, detail="project_id required")
+        fid = args.get("image_id") or args.get("file_id")
+        purpose = str(args.get("purpose") or "")
+        if fid is None:
+            raise HTTPException(status_code=400, detail="image_id (file_id) required")
+        # Minimal inline implementation similar to ws_chat tool_image
+        try:
+            SessionLocal2 = sessionmaker(bind=_get_project_engine(pid), autoflush=False, autocommit=False, future=True)
+            with SessionLocal2() as dbs:
+                f = dbs.query(FileEntry).filter(FileEntry.id==int(fid), FileEntry.project_id==pid).first()
+                if not f or not f.storage_path or not os.path.isfile(f.storage_path):
+                    return {"ok": False, "error": "image not found"}
+                import base64 as _b64
+                with open(f.storage_path, 'rb') as fh:
+                    b = fh.read()
+                ext = (os.path.splitext(f.storage_path)[1].lower() or ".png").lstrip('.')
+                mime = f.mime_type or ("image/" + (ext if ext in {"png","jpeg","jpg","webp","gif"} else "png"))
+                data_url = f"data:{mime};base64,{_b64.b64encode(b).decode('ascii')}"
+                return {"ok": True, "image_id": f.id, "purpose": purpose, "data_url_head": data_url[:120000]}
+        except Exception as e:
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+    if fn == "shell":
+        script = str(args.get("script") or "").strip()
+        if not script:
+            raise HTTPException(status_code=400, detail="script required")
+        try:
+            base = os.environ.get('SHELL') or '/bin/zsh'
+            proc = subprocess.run([base, '-lc', script], capture_output=True, text=True, timeout=60)
+            return {"ok": proc.returncode == 0, "return_code": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr}
+        except Exception as e:
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+    if fn == "notes":
+        if not pid:
+            raise HTTPException(status_code=400, detail="project_id required")
+        themes = args.get("themes") or []
+        content = json.dumps({"themes": themes}, ensure_ascii=False)
+        SessionLocal2 = sessionmaker(bind=_get_project_engine(pid), autoflush=False, autocommit=False, future=True)
+        with SessionLocal2() as dbs:
+            b_id = _branch_id_or_main(pid, bid or None)
+            n = Note(project_id=pid, branch_id=b_id, content=content, tags=["notes"])
+            dbs.add(n); dbs.commit(); dbs.refresh(n)
+            return {"ok": True, "note_id": n.id}
+
+    if fn == "compose":
+        if not pid:
+            raise HTTPException(status_code=400, detail="project_id required")
+        sections = args.get("sections") or []
+        content = json.dumps({"sections": sections}, ensure_ascii=False)
+        SessionLocal2 = sessionmaker(bind=_get_project_engine(pid), autoflush=False, autocommit=False, future=True)
+        with SessionLocal2() as dbs:
+            b_id = _branch_id_or_main(pid, bid or None)
+            n = Note(project_id=pid, branch_id=b_id, content=content, tags=["compose"])
+            dbs.add(n); dbs.commit(); dbs.refresh(n)
+            return {"ok": True, "note_id": n.id}
+
+    if fn == "tabular_import":
+        if not pid:
+            raise HTTPException(status_code=400, detail="project_id required")
+        fid = args.get("file_id")
+        options = args.get("options") if isinstance(args, dict) else None
+        if fid is None:
+            raise HTTPException(status_code=400, detail="file_id required")
+        SessionLocal2 = sessionmaker(bind=_get_project_engine(pid), autoflush=False, autocommit=False, future=True)
+        with SessionLocal2() as dbs:
+            b_id = _branch_id_or_main(pid, bid or None)
+            rec = dbs.query(FileEntry).filter(FileEntry.id==int(fid), FileEntry.project_id==pid).first()
+            if not rec:
+                return {"ok": False, "error": "file not found"}
+            res = _tabular_import_via_llm(pid, b_id, rec, dbs, options=options)
+            out = {"ok": bool(res.get("ok"))}
+            out.update(res)
+            return out
+
+    raise HTTPException(status_code=400, detail="unsupported function")
 
 # Client log ingestion API
 # This endpoint receives client-side console/error logs sent by the injected script in layout().
@@ -7238,6 +7413,7 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
             changelog = []
 
         # Research tool system prompt and examples
+        # When chat_mode == single-shot, we override this with a simpler directive that returns plain text, not JSON.
         sys_prompt = """
 You are an orchestrator that ALWAYS uses the LLM on each user prompt.
 
@@ -7348,6 +7524,7 @@ Response formatting:
         except Exception:
             replay_messages = None
 
+        # Build LLM messages (orchestrated mode)
         if replay_messages:
             messages = replay_messages
         else:
