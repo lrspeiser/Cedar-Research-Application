@@ -288,7 +288,9 @@ jobs:
           # UI test expects progress within ~90s; we don't want long server timeouts here
           CEDARPY_CHAT_TIMEOUT_SECONDS: "120"
         run: |
-          pytest -vv tests/test_playwright_chat_ack.py
+          pytest -vv \
+            tests/test_playwright_chat_ack.py \
+            tests/test_playwright_chat_submit.py
       - name: Upload UI test artifacts
         if: always()
         uses: actions/upload-artifact@v4
