@@ -503,8 +503,55 @@ def _launch_server_inprocess(host: str, port: int):
     log_dir = os.getenv("CEDARPY_LOG_DIR", LOG_DIR_DEFAULT)
     os.makedirs(log_dir, exist_ok=True)
     # uvicorn logs will go to stdout/stderr; they are captured by our redirected f in _init_logging
+    # Wrap app with a lightweight ASGI logger to trace response start/body for debugging embedded multipart uploads
+    try:
+        import asyncio  # noqa: F401
+        def _b2s(b: bytes) -> str:
+            try:
+                return b.decode('latin-1', errors='ignore')
+            except Exception:
+                return ''
+        class _ASGILogMiddleware:
+            def __init__(self, app):
+                self.app = app
+            async def __call__(self, scope, receive, send):
+                if scope.get('type') == 'http':
+                    try:
+                        hdrs = scope.get('headers') or []
+                        ua = ''
+                        for k, v in hdrs:
+                            if _b2s(k).lower() == 'user-agent':
+                                ua = _b2s(v)
+                                break
+                        print(f"[cedarqt-asgi] request {scope.get('method')} {scope.get('path')} ua={ua}")
+                    except Exception:
+                        pass
+                    async def _send(msg):
+                        try:
+                            if msg.get('type') == 'http.response.start':
+                                status = msg.get('status')
+                                hlist = msg.get('headers') or []
+                                # summarize a few headers
+                                hsum = []
+                                for k, v in hlist:
+                                    ks = _b2s(k).lower()
+                                    if ks in ('content-length','location','content-type','connection'):
+                                        hsum.append(f"{ks}={_b2s(v)}")
+                                print(f"[cedarqt-asgi] response.start {status} {'; '.join(hsum)}")
+                            elif msg.get('type') == 'http.response.body':
+                                body = msg.get('body') or b''
+                                more = bool(msg.get('more_body'))
+                                print(f"[cedarqt-asgi] response.body bytes={len(body)} more={more}")
+                        except Exception:
+                            pass
+                        return await send(msg)
+                    return await self.app(scope, receive, _send)
+                return await self.app(scope, receive, send)
+        fastapi_app = _ASGILogMiddleware(fastapi_app)
+    except Exception:
+        pass
     # Use httptools HTTP parser to avoid h11 edge cases with multipart uploads in embedded harness
-    config = Config(app=fastapi_app, host=host, port=port, log_level="info", http="httptools")
+    config = Config(app=fastapi_app, host=host, port=port, log_level="info", http="httptools", timeout_keep_alive=1, access_log=True)
     server = Server(config)
     t = Thread(target=server.run, daemon=True)
     print(f"[cedarqt] starting uvicorn in-process on http://{host}:{port}")

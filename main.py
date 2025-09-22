@@ -8291,6 +8291,124 @@ def _run_langextract_ingest_background(project_id: int, branch_id: int, file_id:
         except Exception: pass
 
 
+def _run_upload_postprocess_background(project_id: int, branch_id: int, file_id: int, thread_id: int, original_name: str, meta: Dict[str, Any]) -> None:
+    """Background worker for upload post-processing in embedded harness mode.
+
+    Performs:
+    - LLM classification (updates file record; writes assistant message)
+    - Versioning and changelog (file.upload+classify)
+    - Optionally kick off LangExtract indexing + tabular import in its own background thread
+
+    Notes:
+    - Uses a fresh DB session bound to the per-project engine.
+    - See README (WebSocket-first flow and LLM key setup) for API keys configuration.
+    """
+    try:
+        from sqlalchemy.orm import sessionmaker as _sessionmaker
+        import threading as _threading
+        import json as _json
+    except Exception:
+        return
+    try:
+        SessionLocal = _sessionmaker(bind=_get_project_engine(project_id), autoflush=False, autocommit=False, future=True)
+        dbj = SessionLocal()
+    except Exception:
+        return
+    try:
+        # Load the file record
+        rec = dbj.query(FileEntry).filter(FileEntry.id == int(file_id), FileEntry.project_id == project_id).first()
+        if not rec:
+            return
+        # Build meta for LLM
+        meta_for_llm = dict(meta or {})
+        meta_for_llm["display_name"] = original_name
+        # LLM classification (best-effort)
+        ai_result = None
+        try:
+            ai_result = _llm_classify_file(meta_for_llm)
+            if ai_result:
+                rec.structure = ai_result.get("structure")
+                rec.ai_title = ai_result.get("ai_title")
+                rec.ai_description = ai_result.get("ai_description")
+                rec.ai_category = ai_result.get("ai_category")
+            rec.ai_processing = False
+            dbj.commit(); dbj.refresh(rec)
+        except Exception:
+            try:
+                rec.ai_processing = False
+                dbj.commit()
+            except Exception:
+                dbj.rollback()
+        # Assistant message reflecting analysis outcome (keeps tests/UI consistent)
+        try:
+            if ai_result:
+                disp_title = f"File analyzed — {rec.structure or 'unknown'}"
+                dbj.add(ThreadMessage(
+                    project_id=project_id,
+                    branch_id=branch_id,
+                    thread_id=thread_id,
+                    role="assistant",
+                    display_title=disp_title,
+                    content=_json.dumps({
+                        "event": "file_analyzed",
+                        "file_id": file_id,
+                        "structure": rec.structure,
+                        "ai_title": rec.ai_title,
+                        "ai_category": rec.ai_category,
+                    }),
+                    payload_json=ai_result,
+                ))
+                dbj.commit()
+            else:
+                # Explicitly record a skipped analysis
+                msg = ThreadMessage(project_id=project_id, branch_id=branch_id, thread_id=thread_id, role="assistant", display_title="File analysis skipped", content="LLM classification disabled, missing key, or error")
+                dbj.add(msg); dbj.commit()
+        except Exception:
+            try: dbj.rollback()
+            except Exception: pass
+        # Version entry for file metadata
+        try:
+            add_version(dbj, "file", rec.id, {
+                "project_id": project_id, "branch_id": branch_id,
+                "filename": rec.filename, "display_name": rec.display_name,
+                "file_type": rec.file_type, "structure": rec.structure,
+                "mime_type": rec.mime_type, "size_bytes": rec.size_bytes,
+                "metadata": meta,
+            })
+        except Exception:
+            pass
+        # Changelog
+        try:
+            input_payload = {"action": "classify_file", "metadata_for_llm": meta_for_llm}
+            output_payload = {"ai": ai_result, "thread_id": thread_id}
+            record_changelog(dbj, project_id, branch_id, "file.upload+classify", input_payload, output_payload)
+        except Exception:
+            pass
+        # LangExtract indexing + (later) tabular import
+        try:
+            _lx_ingest_enabled = str(os.getenv("CEDARPY_LX_INGEST", "1")).strip().lower() not in {"", "0", "false", "no", "off"}
+        except Exception:
+            _lx_ingest_enabled = True
+        try:
+            _lx_bg_on = str(os.getenv("CEDARPY_LANGEXTRACT_BG", "1")).strip().lower() not in {"", "0", "false", "no", "off"}
+        except Exception:
+            _lx_bg_on = True
+        if _lx_ingest_enabled and _lx_bg_on:
+            try:
+                # System message indicating ingestion start
+                dbj.add(ThreadMessage(project_id=project_id, branch_id=branch_id, thread_id=thread_id, role="system", display_title="Indexing file chunks...", content=json.dumps({"action":"langextract_ingest","file_id": file_id, "display_name": original_name})))
+                dbj.commit()
+            except Exception:
+                dbj.rollback()
+            try:
+                _threading.Thread(target=_run_langextract_ingest_background, args=(project_id, branch_id, int(file_id), int(thread_id)), daemon=True).start()
+            except Exception:
+                pass
+    finally:
+        try: dbj.close()
+        except Exception: pass
+
+
 @app.post("/project/{project_id}/files/upload")
 # LLM classification runs after file is saved. See README for API key setup.
 # If LLM fails or is disabled, the file is kept and structure fields remain unset.
@@ -8376,6 +8494,42 @@ def upload_file(project_id: int, request: Request, file: UploadFile = File(...),
         db.add(tm); db.commit()
     except Exception:
         db.rollback()
+
+    # In embedded Qt harness mode, respond immediately and defer all post-processing to a background worker.
+    try:
+        _qt_harness = str(os.getenv("CEDARPY_QT_HARNESS", "")).strip().lower() in {"1","true","yes"}
+    except Exception:
+        _qt_harness = False
+    _loc = f"/project/{project.id}?branch_id={branch.id}&file_id={record.id}&thread_id={thr.id}&msg=File+uploaded"
+    if _qt_harness:
+        try:
+            print("[upload-api] qt_harness=1: deferring post-processing to background; responding early")
+        except Exception:
+            pass
+        # Kick off background post-processing (classification + indexing + tabular import)
+        try:
+            import threading as _threading
+            _threading.Thread(target=_run_upload_postprocess_background, args=(project.id, branch.id, record.id, thr.id, original_name, meta), daemon=True).start()
+        except Exception as ebg:
+            try:
+                print(f"[upload-api] qt_harness bg error {type(ebg).__name__}: {ebg}")
+            except Exception:
+                pass
+        # Stable 200 OK with explicit Connection: close and Content-Length
+        try:
+            from starlette.responses import Response as _Resp  # type: ignore
+        except Exception:
+            _Resp = None  # type: ignore
+        body = f"""
+        <!doctype html><html><head><meta charset='utf-8'><title>Uploaded</title></head>
+        <body><p>File uploaded. <a href='{_loc}'>Continue</a></p></body></html>
+        """
+        data = body.encode('utf-8')
+        if _Resp is not None:
+            return _Resp(content=data, status_code=200, media_type='text/html; charset=utf-8', headers={"Connection": "close", "Content-Length": str(len(data))})
+        else:
+            from starlette.responses import HTMLResponse as _HTML  # type: ignore
+            return _HTML(content=body, status_code=200)
 
     # LLM classification (best-effort, no fallbacks). See README for details.
     ai_result = None
@@ -8515,14 +8669,54 @@ def upload_file(project_id: int, request: Request, file: UploadFile = File(...),
         ua_lc = str(getattr(request, 'headers', {}).get('user-agent', '')).lower()
     except Exception:
         ua_lc = ''
-    if 'httpx' in ua_lc:
+    # Prefer a stable 200 OK in embedded harness to avoid client parser edge cases
+    try:
+        _qt_harness = str(os.getenv("CEDARPY_QT_HARNESS", "")).strip().lower() in {"1","true","yes"}
+    except Exception:
+        _qt_harness = False
+    try:
+        print(f"[upload-api] build-response ua={ua_lc} qt_harness={int(_qt_harness)} loc={_loc}")
+    except Exception:
+        pass
+    try:
+        if _qt_harness:
+            try:
+                print("[upload-api] respond=200 (qt_harness)")
+            except Exception:
+                pass
+            from starlette.responses import HTMLResponse as _HTML  # type: ignore
+            body = f"""
+            <!doctype html><html><head><meta charset='utf-8'><title>Uploaded</title></head>
+            <body><p>File uploaded. <a href='{_loc}'>Continue</a></p></body></html>
+            """
+            return _HTML(content=body, status_code=200)
+        if 'httpx' in ua_lc:
+            try:
+                print("[upload-api] respond=200 (httpx UA)")
+            except Exception:
+                pass
+            from starlette.responses import HTMLResponse as _HTML  # type: ignore
+            body = f"""
+            <!doctype html><html><head><meta charset='utf-8'><title>Uploaded</title></head>
+            <body><p>File uploaded. <a href='{_loc}'>Continue</a></p></body></html>
+            """
+            return _HTML(content=body, status_code=200)
+        if _Resp is not None:
+            try:
+                print("[upload-api] respond=303 with Content-Length:0")
+            except Exception:
+                pass
+            return _Resp(status_code=303, headers={"Location": _loc, "Content-Length": "0"})
+        else:
+            try:
+                print("[upload-api] respond=303 RedirectResponse")
+            except Exception:
+                pass
+            return RedirectResponse(_loc, status_code=303)
+    except Exception as _e_final:
+        try:
+            print(f"[upload-api] response-exception {type(_e_final).__name__}: {_e_final}")
+        except Exception:
+            pass
         from starlette.responses import HTMLResponse as _HTML  # type: ignore
-        body = f"""
-        <!doctype html><html><head><meta charset='utf-8'><title>Uploaded</title></head>
-        <body><p>File uploaded. <a href='{_loc}'>Continue</a></p></body></html>
-        """
-        return _HTML(content=body, status_code=200)
-    if _Resp is not None:
-        return _Resp(status_code=303, headers={"Location": _loc, "Content-Length": "0"})
-    else:
-        return RedirectResponse(_loc, status_code=303)
+        return _HTML(content="Upload completed.", status_code=200)
