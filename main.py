@@ -2852,9 +2852,8 @@ SELECT * FROM demo LIMIT 10;""")
             var cont = document.createElement('div'); cont.className='content'; cont.style.whiteSpace='pre-wrap';
             if (fn === 'plan' && m.call && m.call.steps && Array.isArray(m.call.steps)) {
               try {
-                var rows = m.call.steps.map(function(st){ var f=String(st.function||''); var ti=String(st.title||''); var de=String(st.description||''); var stS=String(st.status||'in queue'); return "- ["+stS+"] "+f+": "+ti+ (de? (" — "+de):''); }).join('\n');
-                cont.textContent = 'Plan:\n' + rows;
-              } catch(_){ cont.textContent = (fn ? (fn + ' ') : '') + text; }
+                var rows = m.call.steps.map(function(st){ var f=String(st.function||''); var ti=String(st.title||''); var de=String(st.description||''); var stS=String(st.status||'in queue'); return "- ["+stS+"] "+f+": "+ti+ (de? (" — "+de):''); }).join('\\n');
+                cont.textContent = 'Plan:\\n' + rows;
             } else if (fn === 'submit_step' || fn === 'tool_result') {
               cont.textContent = text;
             } else {
