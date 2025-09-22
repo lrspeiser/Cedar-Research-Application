@@ -3254,6 +3254,30 @@ SELECT * FROM demo LIMIT 10;""")
   document.addEventListener('DOMContentLoaded', function(){
     try {
       var chatForm = document.getElementById('chatForm');
+
+      // Ensure we always have a thread as soon as the page opens so submissions are instant and consistent
+      // Do NOT create a new thread if one is already in the URL (e.g., after upload redirect)
+      try {
+        (async function(){
+          try {
+            var sp0 = new URLSearchParams(location.search || '');
+            var tidFromUrl = sp0.get('thread_id');
+            if (chatForm && !chatForm.getAttribute('data-thread-id') && !tidFromUrl) {
+              var fidInit = chatForm.getAttribute('data-file-id') || null;
+              var dsidInit = chatForm.getAttribute('data-dataset-id') || null;
+              var tidInit = await ensureThreadId(null, fidInit, dsidInit);
+              if (tidInit) {
+                // Normalize URL to include the created thread_id
+                try {
+                  var urlInit = `/project/${PROJECT_ID}?branch_id=${BRANCH_ID}&thread_id=${encodeURIComponent(tidInit)}` + (fidInit?`&file_id=${encodeURIComponent(fidInit)}`:'') + (dsidInit?`&dataset_id=${encodeURIComponent(dsidInit)}`:'');
+                  if (history && history.replaceState) { history.replaceState({}, '', urlInit); }
+                } catch(_){}
+              }
+            }
+          } catch(_){}
+        })();
+      } catch(_){}
+
       // Auto-start chat once after upload redirect so user sees processing in Chat
       try {
         if (UPLOAD_AUTOCHAT && !window.__uploadAutoChatStarted) {
