@@ -6163,14 +6163,28 @@ def ask_orchestrator(project_id: int, request: Request, query: str = Form(...), 
             return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
     # First LLM call
-    messages: List[Dict[str, Any]] = [
+            messages: List[Dict[str, Any]] = [
         {"role": "system", "content": sys_prompt},
         {"role": "user", "content": "Context:"},
         {"role": "user", "content": _json.dumps(context_obj, ensure_ascii=False)},
+    ]
+    # If focused file is tabular, instruct model to import it into SQL DB first via code
+    try:
+        _fctx0 = (context_obj or {}).get("file") if isinstance(context_obj, dict) else None
+        if _fctx0 and str(_fctx0.get("structure") or "").strip().lower() == "tabular":
+            fid_hint0 = int(getattr(fctx, 'id', 0)) if fctx and getattr(fctx, 'id', None) is not None else None
+            import re as _re0
+            base0 = str(getattr(fctx, 'display_name', '') or getattr(fctx, 'filename', '') or 'table')
+            base0 = _re0.sub(r"\.[A-Za-z0-9]+$", "", base0)
+            base0 = _re0.sub(r"[^A-Za-z0-9]+", "_", base0).strip("_") or "tabular_file"
+            messages.append({"role": "user", "content": f"Tabular import policy: Context.file is tabular. Include a 'code' step to import file_id {fid_hint0 if fid_hint0 is not None else '<file_id>'} into SQL (CREATE TABLE {base0.lower()}, INSERT rows), then use 'db' for analysis."})
+    except Exception:
+        pass
+    messages.extend([
         {"role": "user", "content": "Schema and rules (example):"},
         {"role": "user", "content": _json.dumps(example, ensure_ascii=False)},
         {"role": "user", "content": query},
-    ]
+    ])
 
     loop_count = 0
     final_text: Optional[str] = None
@@ -6452,6 +6466,18 @@ def thread_chat(project_id: int, request: Request, content: str = Form(...), thr
             if ctx:
                 messages.append({"role": "user", "content": "Context:"})
                 messages.append({"role": "user", "content": _json.dumps(ctx, ensure_ascii=False)})
+            # If the focused file is tabular, instruct the model to import it into the per-project SQL DB first
+            try:
+                _fctx_ws = ctx.get("file") if isinstance(ctx, dict) else None
+                if _fctx_ws and str(_fctx_ws.get("structure") or "").strip().lower() == "tabular":
+                    fid_hint_ws = int(getattr(fctx, 'id', 0)) if fctx and getattr(fctx, 'id', None) is not None else None
+                    import re as _re1
+                    base1 = str(getattr(fctx, 'display_name', '') or getattr(fctx, 'filename', '') or 'table')
+                    base1 = _re1.sub(r"\.[A-Za-z0-9]+$", "", base1)
+                    base1 = _re1.sub(r"[^A-Za-z0-9]+", "_", base1).strip("_") or "tabular_file"
+                    messages.append({"role": "user", "content": f"Tabular import policy: Context.file is tabular. Include a 'code' step to import file_id {fid_hint_ws if fid_hint_ws is not None else '<file_id>'} into SQL (CREATE TABLE {base1.lower()}, INSERT rows), then use 'db' for analysis."})
+            except Exception:
+                pass
             messages.append({"role": "user", "content": "Functions and examples:"})
             messages.append({"role": "user", "content": _json.dumps(examples_json, ensure_ascii=False)})
             messages.append({"role": "user", "content": content})
