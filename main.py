@@ -3169,8 +3169,42 @@ SELECT * FROM demo LIMIT 10;""")
           }
         }
       } catch(_) {}
+
+      // Auto-scroll behavior similar to modern chat apps: scroll to bottom on new messages unless user scrolled up
+      function initAutoScroll(){
+        try {
+          var msgs = document.getElementById('msgs');
+          if (!msgs) return;
+          var userScrolledUp = false;
+          msgs.addEventListener('scroll', function(){
+            try {
+              var delta = msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight;
+              userScrolledUp = delta > 80; // pixels from bottom
+            } catch(_) {}
+          });
+          var obs = new MutationObserver(function(){
+            try {
+              if (!userScrolledUp) {
+                if (msgs.lastElementChild && msgs.lastElementChild.scrollIntoView) {
+                  msgs.lastElementChild.scrollIntoView({block:'end'});
+                } else {
+                  msgs.scrollTop = msgs.scrollHeight;
+                }
+              }
+            } catch(_) {}
+          });
+          obs.observe(msgs, {childList:true});
+        } catch(_) {}
+      }
+      initAutoScroll();
+
       if (chatForm) {
         chatForm.addEventListener('submit', async function(ev){
+          // Ensure the Chat tab is active (left pane) and messages are visible
+          try {
+            var leftChatTab = document.querySelector(".tabs[data-pane='left'] .tab[data-target='left-chat']");
+            if (leftChatTab) leftChatTab.click();
+          } catch(_) {}
           try { ev.preventDefault(); } catch(_){ }
           var t = document.getElementById('chatInput');
           var text = (t && t.value || '').trim(); if (!text) return;
@@ -4320,6 +4354,97 @@ def api_shell_status(job_id: str, request: Request, x_api_token: Optional[str] =
 # ----------------------------------------------------------------------------------
 # Routes
 # ----------------------------------------------------------------------------------
+
+# Test-only tool execution API (local + CEDARPY_TEST_MODE only)
+class ToolExecRequest(BaseModel):
+    function: str
+    args: Optional[Dict[str, Any]] = None
+    project_id: Optional[int] = None
+    branch_id: Optional[int] = None
+
+@app.post("/api/test/tool")
+def api_test_tool_exec(body: ToolExecRequest, request: Request):
+    # Only allow in test mode and from local requests
+    try:
+        test_mode = str(os.getenv("CEDARPY_TEST_MODE", "")).strip().lower() in {"1","true","yes","on"}
+    except Exception:
+        test_mode = False
+    host = (request.client.host if request and request.client else "")
+    if not test_mode or host not in {"127.0.0.1","::1","localhost"}:
+        raise HTTPException(status_code=403, detail="forbidden")
+
+    fn = (body.function or "").strip().lower()
+    args = body.args or {}
+    pid = int(body.project_id or 0)
+    bid = int(body.branch_id or 0)
+
+    if fn == "db":
+        if not pid:
+            raise HTTPException(status_code=400, detail="project_id required for db")
+        sql_text = str(args.get("sql") or "").strip()
+        if not sql_text:
+            raise HTTPException(status_code=400, detail="sql required")
+        return _execute_sql(sql_text, pid, max_rows=200)
+    elif fn == "code":
+        if not pid:
+            raise HTTPException(status_code=400, detail="project_id required for code")
+        # Minimal sandbox identical to ws_chat tool_code
+        source = str(args.get("source") or "")
+        if not source:
+            raise HTTPException(status_code=400, detail="source required")
+        logs = io.StringIO()
+        def tool_db_local(sql_text: str):
+            try:
+                return _execute_sql(sql_text, pid, max_rows=200)
+            except Exception as e:
+                return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        def _cedar_query(sql_text: str):
+            return tool_db_local(sql_text)
+        def _cedar_list_files():
+            try:
+                ids = branch_filter_ids(next(get_project_db(pid)), pid, bid or 1)  # type: ignore
+            except Exception:
+                ids = []
+            # Fallback to querying per-project engine
+            SessionLocal = sessionmaker(bind=_get_project_engine(pid), autoflush=False, autocommit=False, future=True)
+            dbs = SessionLocal()
+            files_info = []
+            try:
+                recs = dbs.query(FileEntry).filter(FileEntry.project_id==pid).order_by(FileEntry.created_at.desc()).limit(200).all()
+                for ff in recs:
+                    files_info.append({"id": ff.id, "display_name": ff.display_name, "file_type": ff.file_type})
+            finally:
+                try: dbs.close()
+                except Exception: pass
+            return files_info
+        safe_globals: Dict[str, Any] = {"__builtins__": {"print": print, "len": len, "range": range, "str": str, "int": int, "float": float, "bool": bool, "list": list, "dict": dict, "set": set, "tuple": tuple}, "cedar": type("CedarHelpers", (), {"query": _cedar_query, "list_files": _cedar_list_files})(), "sqlite3": sqlite3, "json": json, "re": re, "io": io}
+        try:
+            with contextlib.redirect_stdout(logs):
+                exec(compile(source, filename="<test_code>", mode="exec"), safe_globals, safe_globals)
+        except Exception as e:
+            return {"ok": False, "error": f"{type(e).__name__}: {e}", "logs": logs.getvalue()}
+        return {"ok": True, "logs": logs.getvalue()}
+    elif fn == "web":
+        url = str(args.get("url") or "").strip()
+        query = str(args.get("query") or "").strip()
+        # Minimal fetch identical to ws_chat tool_web
+        import urllib.request as _req
+        import re as _re
+        if url:
+            try:
+                with _req.urlopen(url, timeout=20) as resp:
+                    body = resp.read().decode('utf-8', errors='replace')
+                title_m = _re.search(r'<title[^>]*>(.*?)</title>', body, _re.IGNORECASE | _re.DOTALL)
+                title = title_m.group(1).strip() if title_m else ''
+                return {"ok": True, "url": url, "title": title, "bytes": len(body)}
+            except Exception as e:
+                return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        if query:
+            # Non-deterministic HTML search can be omitted in test mode
+            return {"ok": True, "query": query}
+        return {"ok": False, "error": "missing url or query"}
+    else:
+        raise HTTPException(status_code=400, detail="unsupported function")
 
 # Client log ingestion API
 # This endpoint receives client-side console/error logs sent by the injected script in layout().
@@ -7056,6 +7181,8 @@ Response formatting:
     final_call_obj: Optional[Dict[str, Any]] = None
     # In-session plan tracking (steps, pointer)
     plan_ctx: Dict[str, Any] = {"steps": [], "ptr": None}
+    plan_seen = False
+    forced_submit_once = False
 
     # Overall budget: ensure we eventually time out and inform the client
     import time as _time
@@ -7237,6 +7364,8 @@ Response formatting:
                         try: dbp.close()
                         except Exception: pass
 
+                    plan_seen = True
+
                     # Update in-session plan state and set first step to running
                     try:
                         # Normalize steps: add step_id and clear timing
@@ -7302,6 +7431,68 @@ Response formatting:
             # If we handled a plan this turn, skip executing any tool and continue the loop
             if plan_handled:
                 continue
+
+            # Guardrail: after first plan, reject new plans and require a single function call.
+            if name == 'plan' and plan_seen:
+                try:
+                    _send_info('plan-reject')
+                except Exception:
+                    pass
+                # Nudge: request a single function call for the current (or first) step
+                if not forced_submit_once:
+                    pass
+                try:
+                    cur_idx = 0
+                    try:
+                        cur_idx = int(plan_ctx.get('ptr') or 0)
+                    except Exception:
+                        cur_idx = 0
+                    tmpl = {"function": "final", "args": {"text": ""}}
+                    try:
+                        # Use examples_json template for next step function when available
+                        next_fn = None
+                        if isinstance(plan_ctx.get('steps'), list) and len(plan_ctx['steps'])>cur_idx:
+                            next_fn = str(plan_ctx['steps'][cur_idx].get('function') or '').strip().lower()
+                        if next_fn and isinstance(examples_json, dict) and examples_json.get(next_fn):
+                            e = examples_json.get(next_fn)
+                            tmpl = {"function": e.get('function') or next_fn, "args": (e.get('args') or {})}
+                    except Exception:
+                        pass
+                    messages.append({"role": "user", "content": "Respond NOW with ONE function call ONLY (STRICT JSON) matching this template:"})
+                    messages.append({"role": "user", "content": json.dumps(tmpl, ensure_ascii=False)})
+                except Exception:
+                    pass
+                # If we already nudged once, synthesize and execute step 1 directly
+                if forced_submit_once:
+                    try:
+                        cur_idx2 = int(plan_ctx.get('ptr') or 0)
+                    except Exception:
+                        cur_idx2 = 0
+                    # Synthesize call object from template
+                    synth_fn = None
+                    synth_args = {}
+                    try:
+                        if isinstance(plan_ctx.get('steps'), list) and len(plan_ctx['steps'])>cur_idx2:
+                            synth_fn = str(plan_ctx['steps'][cur_idx2].get('function') or '').strip().lower()
+                        if synth_fn and isinstance(examples_json, dict) and examples_json.get(synth_fn):
+                            e2 = examples_json.get(synth_fn)
+                            synth_fn = e2.get('function') or synth_fn
+                            synth_args = e2.get('args') or {}
+                    except Exception:
+                        pass
+                    if synth_fn:
+                        name = synth_fn
+                        args = synth_args
+                        call_obj = {"function": synth_fn, "args": synth_args, "output_to_user": "Submitting synthesized step"}
+                    else:
+                        # Fall back to final if we cannot synthesize properly
+                        name = 'final'
+                        args = {"text": "Attempted to synthesize step but no template was available."}
+                        call_obj = {"function": 'final', "args": args}
+                else:
+                    forced_submit_once = True
+                    # Loop to next turn after the nudge
+                    continue
 
             if name in ('final', 'question'):
                 if name == 'final':
@@ -7444,6 +7635,7 @@ Response formatting:
                                 })
                                 messages.append({"role": "user", "content": f"Re-attempt plan step {idx+1}. Respond with ONE function call ONLY matching this template (STRICT JSON):"})
                                 messages.append({"role": "user", "content": json.dumps({"function": tmpl.get("function"), "args": tmpl.get("args") or {}}, ensure_ascii=False)})
+                                forced_submit_once = False  # reset nudge/synthesize counter for this step
                             except Exception:
                                 pass
             except Exception:
