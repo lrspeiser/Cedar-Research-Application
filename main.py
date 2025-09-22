@@ -3365,6 +3365,7 @@ SELECT * FROM demo LIMIT 10;""")
             <div class="tabs" data-pane="right">
               <a href="#" class="tab active" data-target="right-plan">Plan</a>
               <a href="#" class="tab" data-target="right-files">Files</a>
+              <a href="#" class="tab" data-target="right-code">Code</a>
               <a href=\"#\" class=\"tab\" data-target=\"right-upload\" data-testid=\"open-uploader\">Upload</a>
               <a href="#" class="tab" data-target="right-sql">SQL</a>
               <a href="#" class="tab" data-target="right-dbs">Databases</a>
@@ -3377,6 +3378,12 @@ SELECT * FROM demo LIMIT 10;""")
                 <div class="card" style="max-height:220px; overflow:auto; padding:12px">
                   <h3 style='margin-bottom:6px'>Files</h3>
                   {file_list_html}
+                </div>
+              </div>
+              <div id="right-code" class="panel hidden">
+                <div class="card" style="max-height:220px; overflow:auto; padding:12px">
+                  <h3 style='margin-bottom:6px'>Code</h3>
+                  <ul style='list-style:none; padding-left:0; margin:0'><li class='muted'>No code yet.</li></ul>
                 </div>
               </div>
               <div id="right-upload" class="panel">
