@@ -5715,6 +5715,8 @@ def merge_project_view(project_id: int, db: Session = Depends(get_project_db)):
 
     body = f"""
       <h1>Merge: {escape(project.title)}</h1>
+      <div class='small muted'>This page lists branches for this project only and lets you merge a feature branch back into Main.</div>
+      <div style='height:8px'></div>
       <div class='row'>
         {''.join(cards)}
       </div>
@@ -6553,6 +6555,7 @@ def thread_chat(project_id: int, request: Request, content: str = Form(...), thr
                 "image": {"function": "image", "args": {"image_id": 2, "purpose": "diagram analysis"}, "output_to_user": "Analyzed image", "changelog_summary": "image"},
                 "db": {"function": "db", "args": {"sql": "SELECT COUNT(*) FROM citations"}, "output_to_user": "Ran SQL", "changelog_summary": "db query"},
                 "code": {"function": "code", "args": {"language": "python", "packages": ["pandas"], "source": "print(2+2)"}, "output_to_user": "Executed code", "changelog_summary": "code run"},
+                "code_tabular_import": {"function": "code", "args": {"language": "python", "packages": ["pandas"], "source": "import base64\nimport io as _io\nimport pandas as pd\n\n# Read file contents by id (text or base64)\nRAW = cedar.read(123)  # replace 123 with actual file_id\nif isinstance(RAW, str) and RAW.startswith('base64:'):\n    RAW = base64.b64decode(RAW[7:]).decode('utf-8', errors='replace')\n\n# Parse CSV (adjust for TSV or other delimiters as needed)\ndf = pd.read_csv(_io.StringIO(RAW))\n\n# Derive a simple table name and create table with basic types\nTABLE = 'tabular_file'\ncols = []\nfor name, dtype in zip(df.columns, df.dtypes):\n    col = str(name).strip().replace(' ', '_')\n    sqlt = 'REAL' if str(dtype).lower().startswith(('float','int')) else 'TEXT'\n    cols.append(col + ' ' + sqlt)\ncedar.query('CREATE TABLE IF NOT EXISTS ' + TABLE + ' (' + ', '.join(cols) + ')')\n\n# Insert all rows\nfor _, row in df.iterrows():\n    names = [str(c).strip().replace(' ', '_') for c in df.columns]\n    vals = []\n    for v in row.values.tolist():\n        if v is None or (isinstance(v, float) and (v != v)):\n            vals.append('NULL')\n        elif isinstance(v, (int, float)):\n            vals.append(str(v))\n        else:\n            s = str(v).replace("'", "''")\n            vals.append("'" + s + "'")\n    cedar.query('INSERT INTO ' + TABLE + ' (' + ', '.join(names) + ') VALUES (' + ', '.join(vals) + ')')\n\nprint('imported rows:', len(df))"}, "output_to_user": "Imported tabular file into SQL", "changelog_summary": "tabular import"},
                 "shell": {"function": "shell", "args": {"script": "echo hello"}, "output_to_user": "Ran shell", "changelog_summary": "shell"},
                 "notes": {"function": "notes", "args": {"themes": [{"name": "Background", "notes": ["note1"]}]}, "output_to_user": "Saved notes", "changelog_summary": "notes saved"},
                 "compose": {"function": "compose", "args": {"sections": [{"title": "Intro", "text": "…"}]}, "output_to_user": "Drafted text", "changelog_summary": "compose"},

@@ -65,6 +65,12 @@ cp -r ~/CedarPyData ~/CedarPyData.backup
   - The server does not rewrite SQL. For tables that include project_id and branch_id, mutating statements must explicitly reference both (see BRANCH_SQL_POLICY.md).
 - Branch merging only affects app-managed tables (files, threads, datasets)
 
+## Merge semantics (per-project)
+
+- The Merge dashboard is scoped to a single project and lists only that project’s branches.
+- Merge actions copy Files, Threads, Datasets, and branch-aware table rows into Main within the same project database.
+- Cross-project merges are not supported by design. To reuse data across projects, export/import or re-upload as needed.
+
 ## Environment Variables
 - `CEDARPY_DATA_DIR`: Base directory (default: `~/CedarPyData`)
 - `CEDARPY_DATABASE_URL`: Now only for central registry

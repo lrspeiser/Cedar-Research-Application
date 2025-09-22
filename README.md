@@ -78,6 +78,16 @@ This starts the FastAPI server and opens the UI inside a QtWebEngine window. Jav
 
 This matches: *"I should be able to see that file in the branch and in main, but not in a separate branch from the one it was put in, unless it was put in main."*
 
+## Merge (project-scoped)
+
+- The Merge tab operates within a single project. It shows only that project’s branches and merges a selected branch back into Main.
+- Navigation preserves project context (project_id and branch_id) so clicking Merge from a project will land on the correct page.
+- Visiting /merge without context will either:
+  - redirect to /merge/{project_id} if there’s exactly one project, or
+  - show guidance to open a project first (it no longer lists all projects).
+
+This design matches per-project data separation and avoids cross-project merges. To move data across projects, export/import files or datasets rather than merging.
+
 ## Uploads
 
 Uploaded files are saved under `user_uploads/project_{id}/branch_{branchName}/...` (relative to the app working directory by default).  
