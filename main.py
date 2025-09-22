@@ -2620,48 +2620,6 @@ SELECT * FROM demo LIMIT 10;""")
                     details = f"<div id='{details_id}' style='display:none'><pre class='small' style='white-space:pre-wrap; background:#f8fafc; padding:8px; border-radius:6px'>" + escape(m.content) + "</pre></div>"
             except Exception:
                 details = f"<div id='{details_id}' style='display:none'><pre class='small' style='white-space:pre-wrap; background:#f8fafc; padding:8px; border-radius:6px'>" + escape(m.content) + "</pre></div>"
-            # Build a short preview to show inline in a bubble
-            try:
-                if getattr(m, 'payload_json', None) is not None:
-                    import json as _json
-                    pj = m.payload_json
-                    if isinstance(pj, dict) and 'function' in pj and ('output_to_user' in pj):
-                        try:
-                            fn = str(pj.get('function') or '')
-                            ut = str(pj.get('output_to_user') or '')
-                            preview = ((fn + ' ' + ut)[:400])
-                        except Exception:
-                            _preview_json = _json.dumps(pj, ensure_ascii=False)
-                            preview = (_preview_json[:400] + ('…' if len(_preview_json) > 400 else ''))
-                    else:
-                        _preview_json = _json.dumps(pj, ensure_ascii=False)
-                        preview = (_preview_json[:400] + ('…' if len(_preview_json) > 400 else ''))
-                else:
-                    txt = m.content or ''
-                    preview = (txt[:400] + ('…' if len(txt) > 400 else ''))
-            except Exception:
-                preview = ''
-            # Role class for styling
-            try:
-                role_raw = (getattr(m, 'role', '') or '').strip().lower()
-                role_css = 'user' if role_raw == 'user' else ('assistant' if role_raw == 'assistant' else 'system')
-            except Exception:
-                role_css = 'assistant'
-
-            msg_rows.append(
-                f"<div class='msg {role_css}'>"
-                f"  <div class='meta small'>"
-                f"    <span class='pill'>{role}</span> "
-                f"    <span class='title' style='font-weight:600'>{title_txt}</span> "
-                f"    <a href='#' class='small muted' onclick=\"var e=document.getElementById('{details_id}'); if(e){{ e.style.display = (e.style.display==='none'?'block':'none'); }} return false;\">details</a>"
-                f"  </div>"
-                f"  <div class='bubble {role_css}' data-details-id='{details_id}'><div class='content' style='white-space:pre-wrap'>{escape(preview)}</div></div>"
-                f"  {details}"
-                f"</div>"
-            )
-    else:
-        msg_rows.append("<div class='muted small'>(No messages yet)</div>")
-    msgs_html = "".join(msg_rows)
 
     # Chat form (LLM keys required; see README)
     # Only include hidden ids when present to avoid posting empty strings, which cause int parsing errors.
@@ -2676,6 +2634,7 @@ SELECT * FROM demo LIMIT 10;""")
         <button type='submit'>Submit</button>
       </form>
     """
+
     # Client-side WebSocket streaming script (word-by-word). Falls back to simulated by-word if server returns full text.
     script_js = """
 <script>
@@ -6533,6 +6492,44 @@ def thread_chat(project_id: int, request: Request, content: str = Form(...), thr
             except Exception:
                 pass
 
+            # Keep example code out of inline JSON literal to avoid string-escape issues
+            EXAMPLE_TABULAR_SOURCE = '''import base64
+import io as _io
+import pandas as pd
+
+# Read file contents by id (text or base64)
+RAW = cedar.read(123)  # replace 123 with actual file_id
+if isinstance(RAW, str) and RAW.startswith('base64:'):
+    RAW = base64.b64decode(RAW[7:]).decode('utf-8', errors='replace')
+
+# Parse CSV (adjust for TSV or other delimiters as needed)
+df = pd.read_csv(_io.StringIO(RAW))
+
+# Derive a simple table name and create table with basic types
+TABLE = 'tabular_file'
+cols = []
+for name, dtype in zip(df.columns, df.dtypes):
+    col = str(name).strip().replace(' ', '_')
+    sqlt = 'REAL' if str(dtype).lower().startswith(('float','int')) else 'TEXT'
+    cols.append(col + ' ' + sqlt)
+cedar.query('CREATE TABLE IF NOT EXISTS ' + TABLE + ' (' + ', '.join(cols) + ')')
+
+# Insert all rows
+for _, row in df.iterrows():
+    names = [str(c).strip().replace(' ', '_') for c in df.columns]
+    vals = []
+    for v in row.values.tolist():
+        if v is None or (isinstance(v, float) and (v != v)):
+            vals.append('NULL')
+        elif isinstance(v, (int, float)):
+            vals.append(str(v))
+        else:
+            s = str(v).replace("'", "''")
+            vals.append("'" + s + "'")
+    cedar.query('INSERT INTO ' + TABLE + ' (' + ', '.join(names) + ') VALUES (' + ', '.join(vals) + ')')
+
+print('imported rows:', len(df))'''
+
             examples_json = {
                 "plan": {
                     "function": "plan",
@@ -6555,7 +6552,7 @@ def thread_chat(project_id: int, request: Request, content: str = Form(...), thr
                 "image": {"function": "image", "args": {"image_id": 2, "purpose": "diagram analysis"}, "output_to_user": "Analyzed image", "changelog_summary": "image"},
                 "db": {"function": "db", "args": {"sql": "SELECT COUNT(*) FROM citations"}, "output_to_user": "Ran SQL", "changelog_summary": "db query"},
                 "code": {"function": "code", "args": {"language": "python", "packages": ["pandas"], "source": "print(2+2)"}, "output_to_user": "Executed code", "changelog_summary": "code run"},
-                "code_tabular_import": {"function": "code", "args": {"language": "python", "packages": ["pandas"], "source": "import base64\nimport io as _io\nimport pandas as pd\n\n# Read file contents by id (text or base64)\nRAW = cedar.read(123)  # replace 123 with actual file_id\nif isinstance(RAW, str) and RAW.startswith('base64:'):\n    RAW = base64.b64decode(RAW[7:]).decode('utf-8', errors='replace')\n\n# Parse CSV (adjust for TSV or other delimiters as needed)\ndf = pd.read_csv(_io.StringIO(RAW))\n\n# Derive a simple table name and create table with basic types\nTABLE = 'tabular_file'\ncols = []\nfor name, dtype in zip(df.columns, df.dtypes):\n    col = str(name).strip().replace(' ', '_')\n    sqlt = 'REAL' if str(dtype).lower().startswith(('float','int')) else 'TEXT'\n    cols.append(col + ' ' + sqlt)\ncedar.query('CREATE TABLE IF NOT EXISTS ' + TABLE + ' (' + ', '.join(cols) + ')')\n\n# Insert all rows\nfor _, row in df.iterrows():\n    names = [str(c).strip().replace(' ', '_') for c in df.columns]\n    vals = []\n    for v in row.values.tolist():\n        if v is None or (isinstance(v, float) and (v != v)):\n            vals.append('NULL')\n        elif isinstance(v, (int, float)):\n            vals.append(str(v))\n        else:\n            s = str(v).replace("'", "''")\n            vals.append("'" + s + "'")\n    cedar.query('INSERT INTO ' + TABLE + ' (' + ', '.join(names) + ') VALUES (' + ', '.join(vals) + ')')\n\nprint('imported rows:', len(df))"}, "output_to_user": "Imported tabular file into SQL", "changelog_summary": "tabular import"},
+                "code_tabular_import": {"function": "code", "args": {"language": "python", "packages": ["pandas"], "source": EXAMPLE_TABULAR_SOURCE}, "output_to_user": "Imported tabular file into SQL", "changelog_summary": "tabular import"},
                 "shell": {"function": "shell", "args": {"script": "echo hello"}, "output_to_user": "Ran shell", "changelog_summary": "shell"},
                 "notes": {"function": "notes", "args": {"themes": [{"name": "Background", "notes": ["note1"]}]}, "output_to_user": "Saved notes", "changelog_summary": "notes saved"},
                 "compose": {"function": "compose", "args": {"sections": [{"title": "Intro", "text": "…"}]}, "output_to_user": "Drafted text", "changelog_summary": "compose"},

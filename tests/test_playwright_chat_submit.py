@@ -5,6 +5,7 @@ import socket
 import threading
 import importlib
 from pathlib import Path
+import re
 
 import pytest
 from playwright.sync_api import Page, expect
@@ -77,7 +78,7 @@ def test_chat_submit_triggers_processing_and_submitted(page: Page, path: str):
         page.locator("#chatForm button[type=submit]").click()
 
         # 1) Visible processing acknowledgment appears quickly (… or ...)
-        expect(page.locator("#msgs")).to_contain_text(r"Processing(\u2026|\.\.\.)", use_regex=True, timeout=5000)
+        expect(page.locator("#msgs")).to_contain_text(re.compile(r"Processing(\u2026|\.\.\.)"), timeout=5000)
         # 2) The server-side 'submitted' stage should appear soon after
         expect(page.locator("#msgs")).to_contain_text("submitted", timeout=5000)
     finally:
