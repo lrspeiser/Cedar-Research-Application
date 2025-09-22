@@ -93,6 +93,13 @@ This design matches per-project data separation and avoids cross-project merges.
 Uploaded files are saved under `user_uploads/project_{id}/branch_{branchName}/...` (relative to the app working directory by default).  
 Override with `CEDARPY_UPLOAD_DIR` if desired.
 
+### Embedded Qt harness (uploads)
+- When CEDARPY_QT_HARNESS=1 is set (used by the embedded test harness and macOS embedded UI e2e test), the upload endpoint responds immediately with a small 200 OK HTML page and `Connection: close`. All post-processing — LLM classification, versioning, changelog, and background indexing — runs in a background worker.
+- Why: this avoids intermittent HTTP parser edge cases (httpx/httptools/h11) observed when emitting response headers for multipart POSTs under the embedded harness.
+- Normal runs (without CEDARPY_QT_HARNESS) keep the standard behavior (303 redirect with `Content-Length: 0`).
+- Logs: look for `[upload-api] qt_harness=1` followed by background logs.
+- Keys: classification uses the same OpenAI key setup described in "LLM classification on file upload" in this README. The code includes comments pointing back to this section.
+
 ## Client-side logging
 
 What gets captured

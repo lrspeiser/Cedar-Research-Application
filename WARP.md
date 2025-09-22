@@ -79,6 +79,7 @@ Architecture overview
   - POST /project/{project_id}/branches/create: Create a new branch (validates unique name; “Main” is reserved).
   - POST /project/{project_id}/threads/create?branch_id=...: Create a thread under the resolved branch.
   - POST /project/{project_id}/files/upload?branch_id=...: Save uploaded file to UPLOAD_DIR/project_{id}/branch_{name}/timestamp__filename and create a FileEntry record. Serves back via /uploads.
+    - Embedded Qt harness mode: when `CEDARPY_QT_HARNESS=1`, the upload endpoint returns a small `200 OK` (with `Connection: close`) immediately and defers LLM classification/versioning/changelog/indexing to a background worker. This avoids protocol edge cases seen in httpx/h11/httptools during multipart POST under the embedded harness. Normal runs return a `303` redirect with `Content-Length: 0`.
 - HTML rendering
   - Simple inline layout/styles and string-built HTML generators (no templating engine). Links to /uploads for file previews when storage_path is inside UPLOAD_DIR.
 
