@@ -2788,94 +2788,19 @@ SELECT * FROM demo LIMIT 10;""")
         currentStep = { label: String(label||''), t0: now, node: node || null };
       }
 
-      if (msgs && !replay && text) {
-        // Remove placeholder if present
-        try { var first = msgs.firstElementChild; if (first && first.classList.contains('muted')) { first.remove(); } } catch(_){ }
-        var u = document.createElement('div');
-        u.className = 'small';
-        u.innerHTML = "<span class='pill'>user</span> " + text.replace(/</g,'&lt;');
-        msgs.appendChild(u);
-        stepAdvance('user', u);
-      }
-      var stream = document.createElement('div');
-      stream.className = 'small';
-      var pill = document.createElement('span'); pill.className = 'pill'; pill.textContent = 'assistant';
-      var streamText = document.createElement('span');
-      stream.appendChild(pill); stream.appendChild(document.createTextNode(' ')); stream.appendChild(streamText);
-      // Add a collapsible details area for streaming console logs under Processing
-      var procDetId = 'proc_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
-      stream.setAttribute('data-details-id', procDetId);
-      stream.style.cursor = 'pointer';
-      stream.title = 'Click to toggle processing details (logs)';
-      stream.addEventListener('click', function(){ try { var e=document.getElementById(procDetId); if(e){ e.style.display=(e.style.display==='none'?'block':'none'); } } catch(_){} });
-      var procDetails = document.createElement('div'); procDetails.id = procDetId; procDetails.style.display='none';
-      // Use a <div> instead of <pre> to avoid interfering with tests that select the first <pre> under #msgs
-      var procPre = document.createElement('div'); procPre.className='small'; procPre.style.whiteSpace='pre-wrap'; procPre.style.background='#0b1021'; procPre.style.color='#e6e6e6'; procPre.style.padding='8px'; procPre.style.borderRadius='6px'; procPre.style.maxHeight='260px'; procPre.style.overflow='auto';
-      procDetails.appendChild(procPre);
-      // Initial visible ACK to the user
-      var spin = null;
-      try {
-        // Show filename in the processing ACK when available
-        var fileName = null;
-        try {
-          if (fileId) {
-            var cf = document.getElementById('chatForm');
-            if (cf && String(cf.getAttribute('data-file-id')||'') === String(fileId||'')) {
-              fileName = cf.getAttribute('data-file-name') || '';
-            }
-            if (!fileName) {
-              var link = document.querySelector(".thread-create[data-file-id='"+String(fileId)+"']");
-              if (link) { fileName = link.getAttribute('data-display-name') || (link.textContent||''); }
-            }
-          }
-        } catch(_){ fileName = null; }
-        streamText.textContent = fileName ? ('Processing ' + fileName + '…') : 'Processing…';
-        spin = document.createElement('span'); spin.className = 'spinner'; spin.style.marginLeft = '6px'; stream.appendChild(spin);
-        // Add Cancel button next to spinner
-        var cancelBtn = document.createElement('button'); cancelBtn.textContent = 'Cancel'; cancelBtn.className = 'secondary'; cancelBtn.style.marginLeft = '8px';
-        cancelBtn.addEventListener('click', async function(){
-          try {
-            // Close out timing for current step
-            var now = _now();
-            if (currentStep && currentStep.node) {
-              var dt = now - currentStep.t0;
-              annotateTime(currentStep.node, dt);
-              try { stepsHistory.push({ from: currentStep.label, to: 'cancel', dt_ms: Math.round(dt) }); } catch(_){}
-              currentStep = null;
-            }
-            finalOrError = true;
-            try { ws.close(); } catch(_){ }
-            try { streamText.textContent = (streamText.textContent||'') + ' [cancelled]'; } catch(_){}
-            // Send cancellation summary request
-            var promptMsgs = [];
-            try { promptMsgs = (window.__cedar_last_prompts||{})[String(threadId||'')] || []; } catch(_){}
-            var body = { project_id: PROJECT_ID, branch_id: BRANCH_ID, thread_id: threadId||null, timings: stepsHistory, prompt_messages: promptMsgs, reason: 'user_clicked_cancel' };
-            var resp = await fetch('/api/chat/cancel_summary', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-            var data = null; try { data = await resp.json(); } catch(_) { data = null; }
-            if (data && data.ok && data.text) {
-              try {
-                var wrapC = document.createElement('div'); wrapC.className = 'msg assistant';
-                var metaC = document.createElement('div'); metaC.className = 'meta small'; metaC.innerHTML = "<span class='pill'>assistant</span> <span class='title' style='font-weight:600'>Cancelled</span>";
-                var bubC = document.createElement('div'); bubC.className = 'bubble assistant';
-                var contC = document.createElement('div'); contC.className = 'content'; contC.style.whiteSpace = 'pre-wrap'; contC.textContent = String(data.text||'');
-                bubC.appendChild(contC); wrapC.appendChild(metaC); wrapC.appendChild(bubC);
-                if (msgs) msgs.appendChild(wrapC);
-              } catch(_){}
-            }
-          } catch(_){}
-        });
-        stream.appendChild(cancelBtn);
-      } catch(_){ }
-      if (msgs) { msgs.appendChild(stream); msgs.appendChild(procDetails); }
-      stepAdvance('assistant:processing', stream);
-      // Subscribe to client console logs while this WS session is active
+      // Variables for backend-driven UI
+      var stream = null; // processing bubble node, created on backend 'processing' action
+      var spin = null;   // spinner element inside processing bubble
+      var procPre = null; // processing log area (details) created on 'processing' action
+
+      // Subscribe to client console logs while this WS session is active (appended to procPre when available)
       var logSub = function(pl){
         try {
+          if (!procPre) return;
           var line = '[' + (pl.level||'INFO') + '] ' + (pl.message||'');
           var when = (pl.when||'').replace('T',' ').replace('Z','')
           if (when) line = when + ' ' + line;
           procPre.textContent += (procPre.textContent ? '\\n' : '') + line;
-          // Trim lines to last 8000 chars to avoid runaway growth
           if (procPre.textContent.length > 8000) {
             procPre.textContent = procPre.textContent.slice(-8000);
           }
@@ -2928,7 +2853,18 @@ SELECT * FROM demo LIMIT 10;""")
         refreshTimeout();
         var m = null; try { m = JSON.parse(ev.data); } catch(_){ return; }
         if (!m) return;
-        if (m.type === 'prompt') {
+        if (m.type === 'message') {
+          try {
+            var r = String(m.role||'assistant');
+            var wrapM = document.createElement('div'); wrapM.className = 'msg ' + (r==='user'?'user':(r==='system'?'system':'assistant'));
+            var metaM = document.createElement('div'); metaM.className = 'meta small'; metaM.innerHTML = "<span class='pill'>" + (r||'assistant') + "</span> <span class='title' style='font-weight:600'>" + (r.toUpperCase()) + "</span>";
+            var bubM = document.createElement('div'); bubM.className = 'bubble ' + (r==='user'?'user':(r==='system'?'system':'assistant'));
+            var contM = document.createElement('div'); contM.className='content'; contM.style.whiteSpace='pre-wrap'; contM.textContent = String(m.text||'');
+            bubM.appendChild(contM); wrapM.appendChild(metaM); wrapM.appendChild(bubM);
+            if (msgs) msgs.appendChild(wrapM);
+            stepAdvance(r, wrapM);
+          } catch(_) { }
+        } else if (m.type === 'prompt') {
           try {
             try {
               window.__cedar_last_prompts = window.__cedar_last_prompts || {};
@@ -2970,6 +2906,32 @@ SELECT * FROM demo LIMIT 10;""")
           try {
             var fn = String(m.function||'').trim();
             var text = String(m.text||'');
+
+            // Backend-driven processing ACK as assistant bubble with spinner
+            if (fn === 'processing') {
+              try {
+                // Remove placeholder if present
+                try { var first = msgs.firstElementChild; if (first && first.classList.contains('muted')) { first.remove(); } } catch(_){ }
+                stream = document.createElement('div');
+                stream.className = 'msg assistant';
+                var meta0 = document.createElement('div'); meta0.className = 'meta small'; meta0.innerHTML = "<span class='pill'>assistant</span> <span class='title' style='font-weight:600'>processing</span>";
+                var bub0 = document.createElement('div'); bub0.className = 'bubble assistant';
+                var cont0 = document.createElement('div'); cont0.className = 'content'; cont0.style.whiteSpace='pre-wrap'; cont0.textContent = text || 'Processing…';
+                // Spinner
+                spin = document.createElement('span'); spin.className = 'spinner'; spin.style.marginLeft = '6px'; cont0.appendChild(spin);
+                bub0.appendChild(cont0);
+                // Collapsible details area for logs
+                var procDetId = 'proc_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
+                bub0.setAttribute('data-details-id', procDetId);
+                var details0 = document.createElement('div'); details0.id = procDetId; details0.style.display='none';
+                procPre = document.createElement('div'); procPre.className='small'; procPre.style.whiteSpace='pre-wrap'; procPre.style.background='#0b1021'; procPre.style.color='#e6e6e6'; procPre.style.padding='8px'; procPre.style.borderRadius='6px'; procPre.style.maxHeight='260px'; procPre.style.overflow='auto';
+                details0.appendChild(procPre);
+                stream.appendChild(meta0); stream.appendChild(bub0); stream.appendChild(details0);
+                if (msgs) msgs.appendChild(stream);
+                stepAdvance('assistant:processing', stream);
+              } catch(_){}
+              return;
+            }
 
             // Lightweight plan updates should not create extra bubbles
             if (fn === 'plan_update') {
@@ -3238,8 +3200,8 @@ SELECT * FROM demo LIMIT 10;""")
             // Fallback to replacing the processing text if bubble rendering fails
             try { streamText.textContent = m.text; } catch(_){}
           }
+          // Clear spinner once final is ready; remove the transient processing bubble so tests don't see it anymore
           clearSpinner();
-          // Remove the temporary processing line once final is rendered; allow a short delay so tests can observe the ACK
           try {
             setTimeout(function(){ try { if (stream && stream.parentNode) stream.parentNode.removeChild(stream); } catch(_){} }, 400);
           } catch(_) { try { if (stream && stream.parentNode) stream.parentNode.removeChild(stream); } catch(_){} }
@@ -7065,6 +7027,24 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
         if content:
             db.add(ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="user", content=content))
             db.commit()
+            # Emit backend-driven user message and processing ACK (frontend only renders backend events)
+            try:
+                _enqueue({"type": "message", "role": "user", "text": content})
+            except Exception:
+                pass
+            try:
+                ack_text = "Processing…"
+                try:
+                    fid_ack = payload.get("file_id") if isinstance(payload, dict) else None
+                    if fid_ack is not None:
+                        f_ack = db.query(FileEntry).filter(FileEntry.id == int(fid_ack), FileEntry.project_id == project_id).first()
+                        if f_ack and getattr(f_ack, 'display_name', None):
+                            ack_text = f"Processing {f_ack.display_name}…"
+                except Exception:
+                    pass
+                _enqueue({"type": "action", "function": "processing", "text": ack_text})
+            except Exception:
+                pass
     except Exception:
         try: db.rollback()
         except Exception: pass
