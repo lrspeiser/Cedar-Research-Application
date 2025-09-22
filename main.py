@@ -1547,7 +1547,7 @@ def layout(title: str, body: str, header_label: Optional[str] = None, header_lin
     * {{ box-sizing: border-box; }}
     body {{ margin: 0; font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Oxygen, Ubuntu, Cantarell, \"Helvetica Neue\", Arial, \"Apple Color Emoji\", \"Segoe UI Emoji\"; color: var(--fg); background: var(--bg); }}
     header {{ padding: 16px 20px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg); }}
-    main {{ padding: 20px; max-width: 1100px; margin: 0 auto; }}
+    main {{ padding: 20px; margin: 0; width: 100%; }}
     h1, h2, h3 {{ margin: 0 0 12px; }}
     a {{ color: var(--accent); text-decoration: none; }}
     a:hover {{ text-decoration: underline; }}
@@ -2072,7 +2072,7 @@ def _is_trivial_math(msg: str) -> bool:
     * {{ box-sizing: border-box; }}
     body {{ margin: 0; font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Oxygen, Ubuntu, Cantarell, \"Helvetica Neue\", Arial, \"Apple Color Emoji\", \"Segoe UI Emoji\"; color: var(--fg); background: var(--bg); }}
     header {{ padding: 16px 20px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg); }}
-    main {{ padding: 20px; max-width: 1100px; margin: 0 auto; }}
+    main {{ padding: 20px; margin: 0; width: 100%; }}
     h1, h2, h3 {{ margin: 0 0 12px; }}
     a {{ color: var(--accent); text-decoration: none; }}
     a:hover {{ text-decoration: underline; }}
@@ -2760,6 +2760,10 @@ SELECT * FROM demo LIMIT 10;""")
       // Simple step timing helpers (annotate previous bubble/line with elapsed time)
       var currentStep = null;
       function _now(){ try { return performance.now(); } catch(_) { return Date.now(); } }
+      // Running timer state for the active step
+      var _timerId = null;
+      var _timerEl = null;
+      function _clearRunningTimer(){ try { if (_timerId) { clearInterval(_timerId); _timerId = null; } } catch(_){} }
       function annotateTime(node, dtMs){
         try {
           if (!node) return;
@@ -2771,12 +2775,32 @@ SELECT * FROM demo LIMIT 10;""")
           node.appendChild(t);
         } catch(_) {}
       }
+      function startRunningTimer(node, t0){
+        try {
+          if (!node) return;
+          var target = (function(){ try { return node.querySelector('.meta .title'); } catch(_) { return null; } })() || node;
+          _timerEl = document.createElement('span');
+          _timerEl.className = 'small muted';
+          _timerEl.style.marginLeft = '6px';
+          target.appendChild(_timerEl);
+          var lastText = '';
+          _timerId = setInterval(function(){
+            try {
+              var dt = _now() - t0;
+              var sec = (dt/1000).toFixed(dt >= 1000 ? 1 : 2);
+              var text = '(' + sec + 's)';
+              if (_timerEl && text !== lastText) { _timerEl.textContent = text; lastText = text; }
+            } catch(_){}
+          }, 250);
+        } catch(_){}
+      }
       var stepsHistory = [];
       function stepAdvance(label, node){
         var now = _now();
         try {
           if (currentStep && currentStep.node){
             var dt = now - currentStep.t0;
+            _clearRunningTimer();
             annotateTime(currentStep.node, dt);
             try {
               var rec = { project: PROJECT_ID, thread: threadId||null, from: currentStep.label, to: String(label||''), dt_ms: Math.round(dt) };
@@ -2786,6 +2810,7 @@ SELECT * FROM demo LIMIT 10;""")
           }
         } catch(_){ }
         currentStep = { label: String(label||''), t0: now, node: node || null };
+        if (node) { startRunningTimer(node, now); }
       }
 
       // Variables for backend-driven UI
@@ -3391,8 +3416,8 @@ SELECT * FROM demo LIMIT 10;""")
                 <style>
                 /* Chat area grows to fill viewport; input stays at bottom regardless of window size */
                   #left-chat {{ display:flex; flex-direction:column; flex:1; min-height:0; }}
-                  #left-chat .chat-log {{ flex:1; display:flex; flex-direction:column; gap:8px; overflow-y:auto; padding-bottom:6px; }}
-                  #left-chat .chat-input {{ margin-top:auto; padding-top:6px; background:#fff; }}
+                  #left-chat .chat-log {{ flex:1; display:flex; flex-direction:column; gap:8px; overflow-y:auto; padding-bottom:80px; }}
+                  #left-chat .chat-input {{ position: sticky; bottom: 0; margin-top:auto; padding-top:6px; background:#fff; border-top:1px solid var(--border); }}
                   .msg {{ display:flex; flex-direction:column; max-width:80%; }}
                   .msg.user {{ align-self:flex-end; }}
                   .msg.assistant {{ align-self:flex-start; }}
@@ -7597,6 +7622,45 @@ Response formatting:
             try: tdb.close()
             except Exception: pass
 
+    # Decide if a plan step has enough args to execute directly without re-asking the LLM
+    def _args_complete_for(fn: str, args: dict) -> bool:
+        try:
+            fn = (fn or '').strip().lower()
+        except Exception:
+            fn = ''
+        if not isinstance(args, dict):
+            return False
+        if fn == 'code':
+            return bool(str(args.get('language') or '').strip() and str(args.get('source') or '').strip())
+        if fn == 'db':
+            return bool(str(args.get('sql') or '').strip())
+        if fn == 'download':
+            return isinstance(args.get('urls'), list) and len(args.get('urls')) > 0
+        if fn == 'extract':
+            try:
+                int(args.get('file_id'))
+                return True
+            except Exception:
+                return False
+        if fn == 'image':
+            try:
+                int(args.get('image_id'))
+                return True
+            except Exception:
+                return False
+        if fn == 'tabular_import':
+            try:
+                int(args.get('file_id'))
+                return True
+            except Exception:
+                return False
+        if fn in {'notes','compose','shell','web'}:
+            # These are generally safe to send back to LLM for one-call confirmation; treat as incomplete here
+            return False
+        if fn == 'final':
+            return bool(str((args or {}).get('text') or '').strip())
+        return False
+
     tools_map = {
         "web": tool_web,
         "download": tool_download,
@@ -7842,12 +7906,14 @@ Response formatting:
                     except Exception:
                         pass
 
-                    # Nudge the model to execute step 1 now with an explicit one-function template
+                    # Execute step 1 immediately if args are complete; otherwise nudge LLM once
                     try:
                         step = (plan_ctx["steps"] or [])[0] if plan_ctx.get("ptr") == 0 else None
                         if step:
                             fn = str(step.get("function") or "").strip().lower()
+                            args0 = step.get("args") or {}
                             tmpl = (examples_json.get(fn) if isinstance(examples_json, dict) else None) or {"function": fn, "args": {}}
+                            # Emit a submit_step event for UX regardless
                             try:
                                 _enqueue({
                                     "type": "action",
@@ -7857,16 +7923,33 @@ Response formatting:
                                 })
                             except Exception:
                                 pass
-                            messages.append({"role": "user", "content": "Execute plan step 1 NOW. Respond with ONE function call ONLY matching this template (STRICT JSON):"})
-                            messages.append({"role": "user", "content": json.dumps({"function": tmpl.get("function"), "args": tmpl.get("args") or {}}, ensure_ascii=False)})
-                            messages.append({"role": "user", "content": "Important: Do NOT use placeholders (e.g., image_file: \"${uploaded_file}\"). If a required file/image id is not available in Resources, return {\"function\":\"question\"} asking the user to upload or select the file. Use only concrete args (e.g., image_id, file_id, sql). STRICT JSON only."})
+                            if _args_complete_for(fn, args0) and (fn in tools_map):
+                                # Run this step now in the current turn (no extra LLM roundtrip)
+                                name = fn
+                                args = args0
+                                call_obj = {"function": fn, "args": args0, "output_to_user": str(step.get('output_to_user') or '')}
+                                # Do NOT mark plan_handled; allow execution path below
+                            else:
+                                # Incomplete: ask the LLM to return the one function call now
+                                messages.append({"role": "user", "content": "Execute plan step 1 NOW. Respond with ONE function call ONLY matching this template (STRICT JSON):"})
+                                messages.append({"role": "user", "content": json.dumps({"function": tmpl.get("function"), "args": tmpl.get("args") or {}}, ensure_ascii=False)})
+                                messages.append({"role": "user", "content": "Important: Do NOT use placeholders (e.g., image_file: \"${uploaded_file}\"). If a required file/image id is not available in Resources, return {\"function\":\"question\"} asking the user to upload or select the file. Use only concrete args (e.g., image_id, file_id, sql). STRICT JSON only."})
+                                plan_handled = True
+                                name = None; args = {}; call_obj = {}
                     except Exception:
-                        pass
+                        # On any error, fall back to nudge behavior
+                        try:
+                            tmpl = {"function": "final", "args": {"text": ""}}
+                            messages.append({"role": "user", "content": "Respond NOW with ONE function call ONLY (STRICT JSON) matching this template:"})
+                            messages.append({"role": "user", "content": json.dumps(tmpl, ensure_ascii=False)})
+                            plan_handled = True
+                            name = None; args = {}; call_obj = {}
+                        except Exception:
+                            pass
 
-                    plan_handled = True
-                    name = None; args = {}; call_obj = {}
-                    break
-            # If we handled a plan this turn, skip executing any tool and continue the loop
+                    if plan_handled:
+                        break
+            # If we deferred execution to the LLM (plan_handled==True), skip executing any tool and continue the loop
             if plan_handled:
                 continue
 
