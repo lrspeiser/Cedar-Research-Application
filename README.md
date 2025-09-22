@@ -102,6 +102,21 @@ What was wrong and how it was fixed
 - Mistake: We weren’t emitting any console logs for file input clicks/changes or form submission, so nothing was sent to /api/client-log during the upload flow.
 - Fix: Added explicit client-side instrumentation for the upload UI and added server-side [upload-api] prints before/after save and after classification. Verified by uploading a test file and seeing both the [ui] logs in /log and [upload-api] lines in the server logs.
 
+## Auto-start chat on upload
+
+When an upload completes, CedarPy now automatically opens the chat for the upload-created thread and posts an initial user message:
+
+- "The user uploaded this file to the system"
+
+This lets you watch classification, tabular import (when applicable), and LangExtract indexing activity in one place and immediately start planning follow-up analysis.
+
+Configuration
+- CEDARPY_UPLOAD_AUTOCHAT=1 (default). Set to 0/false to disable auto-start (useful for demos/tests that don’t want the chat to kick off).
+
+Notes
+- The right-side Files panel still opens so the UI remains consistent with existing tests.
+- Background upload steps remain the source of truth; the orchestrator will not re-run ingestion.
+
 ## LLM classification on file upload
 
 When a file is uploaded, CedarPy can call an LLM to classify and annotate it. The model returns:
@@ -162,6 +177,12 @@ Notes and guardrails
 
 Where to look in code
 - main.py: search for "Tabular import via LLM codegen" and _tabular_import_via_llm(). Comments in code link back to this section.
+
+Planner tool
+- The WebSocket chat orchestrator exposes a tabular_import tool you can call to refine imports (e.g., header_skip, delimiter). It replaces the per-file table in-place and posts the result back to the thread. See the orchestrator prompt examples for usage.
+
+Dataset naming
+- After a successful import, Cedar suggests a short human-friendly dataset name (uses a small model). The stable storage table name remains the same and is recorded in the Dataset description ("table: <name>").
 
 Where to put your OpenAI key (.env) when packaged
 - For the Qt DMG and embedded builds, environment variables from your shell are not inherited when launching via Finder.

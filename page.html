@@ -1,0 +1,786 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Dbg Project</title>
+  <style>
+    :root { --fg: #111; --bg: #fff; --accent: #2563eb; --muted: #6b7280; --border: #e5e7eb; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Helvetica Neue", Arial, "Apple Color Emoji", "Segoe UI Emoji"; color: var(--fg); background: var(--bg); }
+    header { padding: 16px 20px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg); }
+    main { padding: 20px; max-width: 1100px; margin: 0 auto; }
+    h1, h2, h3 { margin: 0 0 12px; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .row { display: flex; gap: 16px; flex-wrap: wrap; }
+    .card { border: 1px solid var(--border); border-radius: 8px; padding: 16px; background: #fff; flex: 1 1 340px; }
+    .muted { color: var(--muted); }
+    .table { width: 100%; border-collapse: collapse; }
+    .table th, .table td { border-bottom: 1px solid var(--border); padding: 8px 6px; text-align: left; vertical-align: top; }
+    .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; background: #eef2ff; color: #3730a3; font-size: 12px; }
+    .small { font-size: 12px; }
+    .topbar { display:flex; align-items:center; gap:12px; }
+    .spinner { display:inline-block; width:12px; height:12px; border:2px solid #cbd5e1; border-top-color:#334155; border-radius:50%; animation: spin 1s linear infinite; }
+    @keyframes spin { from { transform: rotate(0deg);} to { transform: rotate(360deg);} }
+
+    /* Two-column layout and tabs */
+    .two-col { display: grid; grid-template-columns: 1fr 360px; gap: 16px; align-items: start; }
+    .pane { display: flex; flex-direction: column; gap: 8px; }
+    .tabs { display: flex; gap: 6px; border-bottom: 1px solid var(--border); }
+    .tab { display:inline-block; padding:6px 10px; border:1px solid var(--border); border-bottom:none; border-radius:6px 6px 0 0; background:#f3f4f6; color:#111; cursor:pointer; user-select:none; }
+    .tab.active { background:#fff; font-weight:600; }
+    .tab-panels { border:1px solid var(--border); border-radius:0 6px 6px 6px; background:#fff; padding:12px; }
+    .panel.hidden { display:none !important; }
+    @media (max-width: 900px) { .two-col { grid-template-columns: 1fr; } }
+  </style>
+  
+<script>
+(function(){
+  if (window.__cedarpyClientLogInitialized) return; window.__cedarpyClientLogInitialized = true;
+  const endpoint = '/api/client-log';
+  // Lightweight pub/sub for client logs so chat UI can mirror logs under the Processing line
+  window.__cedarLogSubscribers = window.__cedarLogSubscribers || [];
+  window.__cedarLogBuffer = window.__cedarLogBuffer || [];
+  function emitLog(payload){
+    try {
+      window.__cedarLogBuffer.push(payload);
+      if (window.__cedarLogBuffer.length > 2000) { window.__cedarLogBuffer.shift(); }
+      (window.__cedarLogSubscribers||[]).forEach(function(fn){ try { fn(payload); } catch(_){} });
+    } catch(_) {}
+  }
+  window.subscribeCedarLogs = function(fn){ try { (window.__cedarLogSubscribers||[]).push(fn); } catch(_){} };
+  window.unsubscribeCedarLogs = function(fn){ try { var a=window.__cedarLogSubscribers||[]; var i=a.indexOf(fn); if(i>=0) a.splice(i,1); } catch(_){} };
+
+  function post(payload){
+    try {
+      const body = JSON.stringify(payload);
+      if (navigator.sendBeacon) {
+        const blob = new Blob([body], {type: 'application/json'});
+        navigator.sendBeacon(endpoint, blob);
+      } else {
+        fetch(endpoint, {method: 'POST', headers: {'Content-Type': 'application/json'}, body, keepalive: true}).catch(function(){});
+      }
+    } catch(e) {}
+  }
+  function base(level, message, origin, extra){
+    var pl = Object.assign({
+      when: new Date().toISOString(),
+      level: String(level||'info'),
+      message: String(message||''),
+      url: String(location.href||''),
+      userAgent: navigator.userAgent || '',
+      origin: origin || 'console'
+    }, extra||{});
+    post(pl);
+    emitLog(pl);
+  }
+  var orig = { log: console.log, info: console.info, warn: console.warn, error: console.error };
+  console.log = function(){ try { base('info', Array.from(arguments).join(' '), 'console.log'); } catch(e){}; return orig.log.apply(console, arguments); };
+  console.info = function(){ try { base('info', Array.from(arguments).join(' '), 'console.info'); } catch(e){}; return orig.info.apply(console, arguments); };
+  console.warn = function(){ try { base('warn', Array.from(arguments).join(' '), 'console.warn'); } catch(e){}; return orig.warn.apply(console, arguments); };
+  console.error = function(){ try { base('error', Array.from(arguments).join(' '), 'console.error', { stack: (arguments && arguments[0] && arguments[0].stack) ? String(arguments[0].stack) : null }); } catch(e){}; return orig.error.apply(console, arguments); };
+  window.addEventListener('error', function(ev){
+    try { base('error', ev.message || 'window.onerror', 'window.onerror', { line: ev.lineno||null, column: ev.colno||null, stack: ev.error && ev.error.stack ? String(ev.error.stack) : null }); } catch(e){}
+  }, true);
+  window.addEventListener('unhandledrejection', function(ev){
+    try { var r = ev && ev.reason; base('error', (r && (r.message || r.toString())) || 'unhandledrejection', 'unhandledrejection', { stack: r && r.stack ? String(r.stack) : null }); } catch(e){}
+  });
+  document.addEventListener('DOMContentLoaded', function(){ try { console.log('[ui] page ready'); } catch(e){} }, { once: true });
+})();
+</script>
+
+  <script>
+  (function(){
+    function activateTab(tab) {
+      try {
+        var pane = tab.closest('.pane') || document;
+        var tabs = tab.parentElement.querySelectorAll('.tab');
+        tabs.forEach(function(t){ t.classList.remove('active'); });
+        tab.classList.add('active');
+        var target = tab.getAttribute('data-target');
+        if (!target) return;
+        var panelsRoot = pane.querySelector('.tab-panels');
+        if (!panelsRoot) return;
+        panelsRoot.querySelectorAll('.panel').forEach(function(p){ p.classList.add('hidden'); });
+        var el = pane.querySelector('#' + target);
+        if (el) el.classList.remove('hidden');
+      } catch(e) { try { console.error('[ui] tab error', e); } catch(_) {} }
+    }
+    function initTabs(){
+      document.querySelectorAll('.tabs .tab').forEach(function(tab){
+        tab.addEventListener('click', function(ev){ ev.preventDefault(); activateTab(tab); });
+      });
+    }
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', initTabs, { once: true });
+    } else {
+      initTabs();
+    }
+  })();
+  </script>
+</head>
+<body>
+  <header>
+    <div class="topbar">
+      <div><strong>Cedar</strong> <span class='muted'>•</span> <a href='/project/1?branch_id=1' style='font-weight:600'>Dbg Project</a></div>
+      <div style="margin-left:auto"><a href='/'>&#8203;Projects</a> | <a href='/shell?project_id=1&branch_id=1'>Shell</a> | <a href='/merge?project_id=1&branch_id=1'>Merge</a> | <a href='/changelog?project_id=1&branch_id=1'>Changelog</a> | <a href='/log?project_id=1&branch_id=1'>Log</a> | <a href='/settings'>Settings</a> <a href='/settings' class='pill' title='LLM connected — click to manage key'>LLM: gpt-5</a></div>
+    </div>
+  </header>
+  <main>
+    
+      <h1>Dbg Project</h1>
+      <div class="muted small">Project ID: 1</div>
+      <div style="height:10px"></div>
+      <div>Branches: <a style='font-weight:600' href='/project/1?branch_id=1' class='pill'>Main</a>
+      <form id='branchCreateForm' method='post' action='/project/1/branches/create' class='inline' style='display:none; margin-left:8px'>
+        <input type='text' name='name' placeholder='experiment-1' required style='width:160px; padding:6px; border:1px solid var(--border); border-radius:6px' />
+        <button type='submit' class='secondary'>Create</button>
+      </form>
+      <a href='#' class='pill' title='New branch' onclick="var f=document.getElementById('branchCreateForm'); if(f){f.style.display=(f.style.display==='none'?'inline-block':'none'); var i=f.querySelector('input[name=name]'); if(i){i.focus();}} return false;">+</a>
+    </div>
+
+      <div style="margin-top:8px; display:flex; gap:8px; align-items:center">
+        <form method="post" action="/project/1/delete" class="inline" onsubmit="return confirm('Delete project Dbg Project and all its data?');">
+          <button type="submit" class="secondary">Delete Project</button>
+        </form>
+      </div>
+
+      <div id="page-root" style="min-height:100vh; display:flex; flex-direction:column">
+        <div class="two-col" style="margin-top:8px; flex:1; min-height:0">
+          <div class="pane" style="display:flex; flex-direction:column; min-height:0">
+            <div class="tabs" data-pane="left">
+              <a href="#" class="tab active" data-target="left-chat">Chat</a>
+              <a href="#" class="tab" data-target="left-allchats">All Chats</a>
+            </div>
+            <div class="tab-panels" style="flex:1; min-height:0">
+              <div id="left-chat" class="panel">
+                <div class='tabbar thread-tabs' style='margin-bottom:6px'> <a href='/project/1/threads/new?branch_id=1' class='tab new thread-create' title='New Thread'>+</a></div>
+                <h3>Chat</h3>
+                <style>
+                  /* Chat area grows to fill viewport; input stays at bottom regardless of window size */
+                  #left-chat { display:flex; flex-direction:column; flex:1; min-height:0; }
+                  #left-chat .chat-log { flex:1; display:flex; flex-direction:column; gap:8px; overflow-y:auto; padding-bottom:6px; }
+                  #left-chat .chat-input { margin-top:auto; padding-top:6px; background:#fff; }
+                  .msg { display:flex; flex-direction:column; max-width:80%; }
+                  .msg.user { align-self:flex-end; }
+                  .msg.assistant { align-self:flex-start; }
+                  .msg.system { align-self:flex-start; }
+                  .msg .meta { display:flex; gap:8px; align-items:center; margin-bottom:4px; }
+                  .bubble { border:1px solid var(--border); border-radius:18px; padding:12px 14px; font-size:14px; line-height:1.45; box-shadow: 0 1px 1px rgba(0,0,0,0.04); }
+                  .bubble.user { background:#d9fdd3; border-color:#b2e59a; }
+                  .bubble.assistant { background:#ffffff; border-color:#e6e6e6; }
+                  .bubble.system { background:#e7f3ff; border-color:#cfe8ff; }
+                  .thread-tabs .tab { display:inline-block; padding:6px 10px; border:1px solid var(--border); border-bottom:none; border-radius:6px 6px 0 0; background:#f3f4f6; color:#111; margin-right:4px; }
+                  .thread-tabs .tab.active { background:#fff; font-weight:600; }
+                  .thread-tabs .tab.new { background:#e5f6ff; }
+                </style>
+                
+                <div id='msgs' class='chat-log'><div class='muted small'>(No messages yet)</div></div>
+                <div class='chat-input'>
+      <form id='chatForm' data-project-id='1' data-branch-id='1' data-thread-id='' data-file-id='' data-dataset-id='' method='post' action='/project/1/threads/chat?branch_id=1' style='margin-top:8px'>
+        
+        <textarea id='chatInput' name='content' rows='3' placeholder='Ask a question about this file/context...' style='width:100%; font-family: ui-monospace, Menlo, monospace;'></textarea>
+        <div style='height:6px'></div>
+        <button type='submit'>Submit</button>
+      </form>
+    </div>
+                
+<script>
+(function(){
+  var PROJECT_ID = 1;
+  var BRANCH_ID = 1;
+  async function ensureThreadId(tid, fid, dsid) {
+    if (tid) return tid;
+    try {
+      var url = `/project/${PROJECT_ID}/threads/new?branch_id=${BRANCH_ID}` + (fid?`&file_id=${encodeURIComponent(fid)}`:'') + (dsid?`&dataset_id=${encodeURIComponent(dsid)}`:'') + `&json=1`;
+      var resp = await fetch(url, { method: 'GET' });
+      if (!resp.ok) throw new Error('thread create failed');
+      var data = await resp.json();
+      var newTid = data.thread_id ? String(data.thread_id) : null;
+      if (newTid) {
+        try {
+          var chatForm = document.getElementById('chatForm');
+          if (chatForm) {
+            chatForm.setAttribute('data-thread-id', newTid);
+            var hiddenTid = chatForm.querySelector("input[name='thread_id']");
+            if (hiddenTid) hiddenTid.value = newTid; else { var hi = document.createElement('input'); hi.type='hidden'; hi.name='thread_id'; hi.value=newTid; chatForm.appendChild(hi); }
+          }
+          var tabsBar = document.querySelector('.thread-tabs');
+          if (tabsBar) {
+            var a = document.createElement('a');
+            a.href = data.redirect || (`/project/${PROJECT_ID}?branch_id=${BRANCH_ID}&thread_id=${newTid}`);
+            a.className = 'tab active';
+            a.textContent = data.title || 'New Thread';
+            tabsBar.appendChild(a);
+          }
+        } catch(_){ }
+      }
+      return newTid;
+    } catch(_err) {
+      return null;
+    }
+  }
+
+      function startWS(text, threadId, fileId, datasetId, replay){
+    try {
+      var msgs = document.getElementById('msgs');
+
+      // Simple step timing helpers (annotate previous bubble/line with elapsed time)
+      var currentStep = null;
+      function _now(){ try { return performance.now(); } catch(_) { return Date.now(); } }
+      function annotateTime(node, dtMs){
+        try {
+          if (!node) return;
+          var t = document.createElement('span');
+          t.className = 'small muted';
+          t.style.marginLeft = '6px';
+          var sec = (dtMs/1000).toFixed(dtMs >= 1000 ? 1 : 2);
+          t.textContent = '(' + sec + 's)';
+          node.appendChild(t);
+        } catch(_) {}
+      }
+      var stepsHistory = [];
+      function stepAdvance(label, node){
+        var now = _now();
+        try {
+          if (currentStep && currentStep.node){
+            var dt = now - currentStep.t0;
+            annotateTime(currentStep.node, dt);
+            try {
+              var rec = { project: PROJECT_ID, thread: threadId||null, from: currentStep.label, to: String(label||''), dt_ms: Math.round(dt) };
+              stepsHistory.push({ from: rec.from, to: rec.to, dt_ms: rec.dt_ms });
+              console.log('[perf] ' + JSON.stringify(rec));
+            } catch(_) {}
+          }
+        } catch(_){ }
+        currentStep = { label: String(label||''), t0: now, node: node || null };
+      }
+
+      if (msgs && !replay && text) {
+        // Remove placeholder if present
+        try { var first = msgs.firstElementChild; if (first && first.classList.contains('muted')) { first.remove(); } } catch(_){ }
+        var u = document.createElement('div');
+        u.className = 'small';
+        u.innerHTML = "<span class='pill'>user</span> " + text.replace(/</g,'&lt;');
+        msgs.appendChild(u);
+        stepAdvance('user', u);
+      }
+      var stream = document.createElement('div');
+      stream.className = 'small';
+      var pill = document.createElement('span'); pill.className = 'pill'; pill.textContent = 'assistant';
+      var streamText = document.createElement('span');
+      stream.appendChild(pill); stream.appendChild(document.createTextNode(' ')); stream.appendChild(streamText);
+      // Add a collapsible details area for streaming console logs under Processing
+      var procDetId = 'proc_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
+      stream.setAttribute('data-details-id', procDetId);
+      stream.style.cursor = 'pointer';
+      stream.title = 'Click to toggle processing details (logs)';
+      stream.addEventListener('click', function(){ try { var e=document.getElementById(procDetId); if(e){ e.style.display=(e.style.display==='none'?'block':'none'); } } catch(_){} });
+      var procDetails = document.createElement('div'); procDetails.id = procDetId; procDetails.style.display='none';
+      var procPre = document.createElement('pre'); procPre.className='small'; procPre.style.whiteSpace='pre-wrap'; procPre.style.background='#0b1021'; procPre.style.color='#e6e6e6'; procPre.style.padding='8px'; procPre.style.borderRadius='6px'; procPre.style.maxHeight='260px'; procPre.style.overflow='auto';
+      procDetails.appendChild(procPre);
+      // Initial visible ACK to the user
+      var spin = null;
+      try {
+        streamText.textContent = 'Processing…';
+        spin = document.createElement('span'); spin.className = 'spinner'; spin.style.marginLeft = '6px'; stream.appendChild(spin);
+        // Add Cancel button next to spinner
+        var cancelBtn = document.createElement('button'); cancelBtn.textContent = 'Cancel'; cancelBtn.className = 'secondary'; cancelBtn.style.marginLeft = '8px';
+        cancelBtn.addEventListener('click', async function(){
+          try {
+            // Close out timing for current step
+            var now = _now();
+            if (currentStep && currentStep.node) {
+              var dt = now - currentStep.t0;
+              annotateTime(currentStep.node, dt);
+              try { stepsHistory.push({ from: currentStep.label, to: 'cancel', dt_ms: Math.round(dt) }); } catch(_){}
+              currentStep = null;
+            }
+            finalOrError = true;
+            try { ws.close(); } catch(_){ }
+            try { streamText.textContent = (streamText.textContent||'') + ' [cancelled]'; } catch(_){}
+            // Send cancellation summary request
+            var promptMsgs = [];
+            try { promptMsgs = (window.__cedar_last_prompts||{})[String(threadId||'')] || []; } catch(_){}
+            var body = { project_id: PROJECT_ID, branch_id: BRANCH_ID, thread_id: threadId||null, timings: stepsHistory, prompt_messages: promptMsgs, reason: 'user_clicked_cancel' };
+            var resp = await fetch('/api/chat/cancel_summary', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+            var data = null; try { data = await resp.json(); } catch(_) { data = null; }
+            if (data && data.ok && data.text) {
+              try {
+                var wrapC = document.createElement('div'); wrapC.className = 'msg assistant';
+                var metaC = document.createElement('div'); metaC.className = 'meta small'; metaC.innerHTML = "<span class='pill'>assistant</span> <span class='title' style='font-weight:600'>Cancelled</span>";
+                var bubC = document.createElement('div'); bubC.className = 'bubble assistant';
+                var contC = document.createElement('div'); contC.className = 'content'; contC.style.whiteSpace = 'pre-wrap'; contC.textContent = 'final ' + String(data.text||'');
+                bubC.appendChild(contC); wrapC.appendChild(metaC); wrapC.appendChild(bubC);
+                if (msgs) msgs.appendChild(wrapC);
+              } catch(_){}
+            }
+          } catch(_){}
+        });
+        stream.appendChild(cancelBtn);
+      } catch(_){ }
+      if (msgs) { msgs.appendChild(stream); msgs.appendChild(procDetails); }
+      stepAdvance('assistant:processing', stream);
+      // Subscribe to client console logs while this WS session is active
+      var logSub = function(pl){
+        try {
+          var line = '[' + (pl.level||'INFO') + '] ' + (pl.message||'');
+          var when = (pl.when||'').replace('T',' ').replace('Z','')
+          if (when) line = when + ' ' + line;
+          procPre.textContent += (procPre.textContent ? '
+' : '') + line;
+          // Trim lines to last 8000 chars to avoid runaway growth
+          if (procPre.textContent.length > 8000) {
+            procPre.textContent = procPre.textContent.slice(-8000);
+          }
+        } catch(_){}
+      };
+      try { if (window.subscribeCedarLogs) window.subscribeCedarLogs(logSub); } catch(_){}
+
+      var lastW = null;
+      var stagesSeen = {};
+      var wsScheme = (location.protocol === 'https:') ? 'wss' : 'ws';
+      var ws = new WebSocket(wsScheme + '://' + location.host + '/ws/chat/' + PROJECT_ID);
+
+      // Client-side watchdog to ensure the user always sees progress or a timeout
+      var timeoutMs = 300000; // mirrors server CEDARPY_CHAT_TIMEOUT_SECONDS
+      var finalOrError = false;
+      var timedOut = false;
+      var timeoutId = null;
+      function clearSpinner(){ try { if (spin && spin.parentNode) spin.remove(); } catch(_){} }
+      function refreshTimeout(){
+        try { if (timeoutId) clearTimeout(timeoutId); } catch(_){}
+        timeoutId = setTimeout(function(){
+          if (!finalOrError) {
+            try { streamText.textContent = '[timeout] Took too long. Please try again.'; } catch(_){ }
+            clearSpinner();
+            stepAdvance('timeout', stream);
+            finalOrError = true; timedOut = true;
+            try { ws.close(); } catch(_){ }
+          }
+        }, timeoutMs);
+      }
+
+      ws.onopen = function(){
+        try {
+          refreshTimeout();
+          // Do not print a local 'submitted'; rely on server info events for true order
+          if (replay) {
+            ws.send(JSON.stringify({action:'chat', replay_messages: replay, branch_id: BRANCH_ID, thread_id: threadId||null, file_id: (fileId||null), dataset_id: (datasetId||null) }));
+          } else {
+            ws.send(JSON.stringify({action:'chat', content: text, branch_id: BRANCH_ID, thread_id: threadId||null, file_id: (fileId||null), dataset_id: (datasetId||null) }));
+          }
+        } catch(e){}
+      };
+      ws.onmessage = function(ev){
+        refreshTimeout();
+        var m = null; try { m = JSON.parse(ev.data); } catch(_){ return; }
+        if (!m) return;
+        if (m.type === 'prompt') {
+          try {
+            try {
+              window.__cedar_last_prompts = window.__cedar_last_prompts || {};
+              if (m.thread_id) { window.__cedar_last_prompts[String(m.thread_id)] = m.messages || []; }
+            } catch(_){ }
+            var detIdP = 'det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
+            var wrapP = document.createElement('div'); wrapP.className = 'msg assistant';
+            var metaP = document.createElement('div'); metaP.className = 'meta small'; metaP.innerHTML = "<span class='pill'>assistant</span> <span class='title' style='font-weight:600'>Assistant</span>";
+            var bubP = document.createElement('div'); bubP.className = 'bubble assistant'; bubP.setAttribute('data-details-id', detIdP);
+            var contP = document.createElement('div'); contP.className='content'; contP.style.whiteSpace='pre-wrap';
+            try { contP.textContent = 'Prepared LLM prompt (click to view JSON).'; } catch(_){}
+            bubP.appendChild(contP);
+            var detailsP = document.createElement('div'); detailsP.id = detIdP; detailsP.style.display='none';
+            var preP = document.createElement('pre'); preP.className='small'; preP.style.whiteSpace='pre-wrap'; preP.style.background='#f8fafc'; preP.style.padding='8px'; preP.style.borderRadius='6px';
+            try { preP.textContent = JSON.stringify(m.messages || [], null, 2); } catch(_){ preP.textContent = String(m.messages || ''); }
+            // Action bar for details: Copy JSON
+            var barP = document.createElement('div'); barP.className='small'; barP.style.margin='6px 0 8px 0';
+            var copyBtnP = document.createElement('button'); copyBtnP.textContent='Copy JSON'; copyBtnP.className='secondary';
+            copyBtnP.addEventListener('click', function(){ try { navigator.clipboard.writeText(preP.textContent); } catch(_){} });
+            barP.appendChild(copyBtnP);
+            detailsP.appendChild(barP);
+            detailsP.appendChild(preP);
+            wrapP.appendChild(metaP); wrapP.appendChild(bubP); wrapP.appendChild(detailsP);
+            // Allow clicking the title to toggle details (to satisfy tests)
+            try {
+              var titleElP = metaP.querySelector('.title');
+              if (titleElP) {
+                titleElP.setAttribute('role', 'button');
+                titleElP.setAttribute('tabindex', '0');
+                var _tglP = function(){ try { var e=document.getElementById(detIdP); if (e) { e.style.display = (e.style.display==='none'?'block':'none'); } } catch(_){} };
+                titleElP.addEventListener('click', function(ev){ try { ev.preventDefault(); } catch(_){}; _tglP(); });
+                titleElP.addEventListener('keydown', function(ev){ try { if (ev && (ev.key==='Enter' || ev.key===' ')) { ev.preventDefault(); _tglP(); } } catch(_){} });
+              }
+            } catch(_) {}
+            if (msgs) msgs.appendChild(wrapP);
+            stepAdvance('assistant:prompt', wrapP);
+          } catch(_) { }
+        } else if (m.type === 'action') {
+          try {
+            var fn = String(m.function||'').trim();
+            var text = String(m.text||'');
+            var detId = 'det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
+            var wrap = document.createElement('div'); wrap.className = 'msg system';
+            var meta = document.createElement('div'); meta.className = 'meta small'; meta.innerHTML = "<span class='pill'>system</span> <span class='title' style='font-weight:600'>" + fn + "</span>";
+            var bub = document.createElement('div'); bub.className = 'bubble system'; bub.setAttribute('data-details-id', detId);
+            var cont = document.createElement('div'); cont.className='content'; cont.style.whiteSpace='pre-wrap';
+            cont.textContent = (fn ? (fn + ' ') : '') + text;
+            bub.appendChild(cont);
+            var details = document.createElement('div'); details.id = detId; details.style.display='none';
+            var pre = document.createElement('pre'); pre.className='small'; pre.style.whiteSpace='pre-wrap'; pre.style.background='#f8fafc'; pre.style.padding='8px'; pre.style.borderRadius='6px';
+            try { pre.textContent = JSON.stringify(m.call || {}, null, 2); } catch(_){ pre.textContent = String(m.call || {}); }
+            details.appendChild(pre);
+            wrap.appendChild(meta); wrap.appendChild(bub); wrap.appendChild(details);
+            if (msgs) msgs.appendChild(wrap);
+            stepAdvance('system:'+fn, wrap);
+          } catch(_){ }
+        } else if (m.type === 'token' && m.word) {
+          if (lastW !== m.word) {
+            streamText.textContent = (streamText.textContent ? (streamText.textContent + ' ') : '') + String(m.word);
+            lastW = m.word;
+          }
+        } else if (m.type === 'info') {
+          try {
+            var label = String(m.stage || m.message || 'info');
+            if (!stagesSeen[label]) {
+              stagesSeen[label] = 1;
+              var inf = document.createElement('div');
+              inf.className = 'small muted';
+              inf.textContent = label;
+              if (msgs) msgs.appendChild(inf);
+              stepAdvance('info:'+label, inf);
+            }
+            if (label === 'finalizing' || label === 'persisted' || label === 'timeout') {
+              clearSpinner();
+              if (label === 'timeout') { finalOrError = true; }
+            }
+          } catch(_){ }
+        } else if (m.type === 'final' && m.text) {
+          finalOrError = true;
+          try { if (timeoutId) clearTimeout(timeoutId); } catch(_){}
+          // Render a proper assistant bubble for the final answer, with optional JSON details
+          try {
+            var detIdF = m.json ? ('det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8)) : null;
+            var wrapF = document.createElement('div'); wrapF.className = 'msg assistant';
+            var fnF = (m && m.json && m.json.function) ? String(m.json.function) : 'final';
+            var metaF = document.createElement('div'); metaF.className = 'meta small'; metaF.innerHTML = "<span class='pill'>assistant</span> <span class='title' style='font-weight:600'>" + fnF + "</span>";
+            var bubF = document.createElement('div'); bubF.className = 'bubble assistant'; if (detIdF) bubF.setAttribute('data-details-id', detIdF);
+            var contF = document.createElement('div'); contF.className='content'; contF.style.whiteSpace='pre-wrap'; contF.textContent = (fnF ? (fnF + ' ') : '') + (m.text||'');
+            // Add edit prompt link if we have a stored prompt for this thread
+            try {
+              var last = (window.__cedar_last_prompts||{})[String(threadId||'')];
+              if (last && last.length) {
+                var edit = document.createElement('a'); edit.href='#'; edit.className='small muted'; edit.style.marginLeft='8px'; edit.textContent='(edit prompt)';
+                edit.addEventListener('click', function(ev){
+                  try { ev.preventDefault(); } catch(_){}
+                  // Open simple modal
+                  var overlay = document.getElementById('promptEditModal');
+                  if (!overlay) {
+                    overlay = document.createElement('div'); overlay.id='promptEditModal'; overlay.style.position='fixed'; overlay.style.inset='0'; overlay.style.background='rgba(0,0,0,0.4)'; overlay.style.zIndex='9999';
+                    var pane = document.createElement('div'); pane.style.position='absolute'; pane.style.top='10%'; pane.style.left='50%'; pane.style.transform='translateX(-50%)'; pane.style.width='80%'; pane.style.maxWidth='900px'; pane.style.background='#fff'; pane.style.borderRadius='8px'; pane.style.padding='12px';
+                    var h = document.createElement('div'); h.innerHTML = "<b>Edit Prompt JSON</b>"; pane.appendChild(h);
+                    var ta = document.createElement('textarea'); ta.id='promptEditArea'; ta.style.width='100%'; ta.style.height='320px'; ta.style.fontFamily='ui-monospace, Menlo, monospace'; pane.appendChild(ta);
+                    var bar = document.createElement('div'); bar.style.marginTop='8px';
+                    var runBtn = document.createElement('button'); runBtn.textContent='Run with edited prompt';
+                    var cancelBtn = document.createElement('button'); cancelBtn.textContent='Cancel'; cancelBtn.className='secondary'; cancelBtn.style.marginLeft='8px';
+                    var copyBtnM = document.createElement('button'); copyBtnM.textContent='Copy JSON'; copyBtnM.className='secondary'; copyBtnM.style.marginLeft='8px';
+                    var restoreBtn = document.createElement('button'); restoreBtn.textContent='Restore default'; restoreBtn.className='secondary'; restoreBtn.style.marginLeft='8px';
+                    bar.appendChild(runBtn); bar.appendChild(cancelBtn); bar.appendChild(copyBtnM); bar.appendChild(restoreBtn); pane.appendChild(bar);
+                    // Schema hint
+                    var hint = document.createElement('pre'); hint.className='small'; hint.style.whiteSpace='pre-wrap'; hint.style.background='#f8fafc'; hint.style.padding='8px'; hint.style.borderRadius='6px'; hint.style.marginTop='8px';
+                    hint.textContent = `Messages JSON schema (simplified):
+[
+  { "role": "system|user|assistant", "content": "string" },
+  ...
+]
+You may add multiple user entries (Resources/History/Context/examples) followed by the current user message.`;
+                    pane.appendChild(hint);
+                    overlay.appendChild(pane);
+                    document.body.appendChild(overlay);
+                    cancelBtn.addEventListener('click', function(){ try { overlay.remove(); } catch(_){} });
+                    copyBtnM.addEventListener('click', function(){ try { navigator.clipboard.writeText(ta.value||''); } catch(_){} });
+                    var _orig = null; try { _orig = JSON.stringify(last, null, 2); } catch(_) { _orig = '[]'; }
+                    restoreBtn.addEventListener('click', function(){ try { ta.value = _orig; } catch(_){} });
+                    runBtn.addEventListener('click', function(){
+                      try {
+                        var txt = document.getElementById('promptEditArea').value || '[]';
+                        var parsed = JSON.parse(txt);
+                        try { overlay.remove(); } catch(_){ }
+                        // Reuse the same thread/file/dataset context, but pass replay messages
+                        startWS('', threadId, fileId, datasetId, parsed);
+                      } catch(e) {
+                        alert('Invalid JSON: ' + e);
+                      }
+                    });
+                  }
+                  try { document.getElementById('promptEditArea').value = JSON.stringify(last, null, 2); } catch(_){}
+                });
+                contF.appendChild(edit);
+              }
+            } catch(_){ }
+            bubF.appendChild(contF);
+            wrapF.appendChild(metaF); wrapF.appendChild(bubF);
+            if (detIdF) {
+              var detailsF = document.createElement('div'); detailsF.id = detIdF; detailsF.style.display='none';
+              var preF = document.createElement('pre'); preF.className='small'; preF.style.whiteSpace='pre-wrap'; preF.style.background='#f8fafc'; preF.style.padding='8px'; preF.style.borderRadius='6px';
+              try { preF.textContent = JSON.stringify(m.json, null, 2); } catch(_){ preF.textContent = String(m.json); }
+              // Action bar for details: Copy JSON
+              var barF = document.createElement('div'); barF.className='small'; barF.style.margin='6px 0 8px 0';
+              var copyBtnF = document.createElement('button'); copyBtnF.textContent='Copy JSON'; copyBtnF.className='secondary';
+              copyBtnF.addEventListener('click', function(){ try { navigator.clipboard.writeText(preF.textContent); } catch(_){} });
+              barF.appendChild(copyBtnF);
+              detailsF.appendChild(barF);
+              detailsF.appendChild(preF);
+              wrapF.appendChild(detailsF);
+            }
+            if (msgs) msgs.appendChild(wrapF);
+            // Ensure an Assistant prompt bubble exists for JSON drilldown, even if the initial 'prompt' event was missed
+            try {
+              // Only synthesize if no existing Assistant-titled message exists. The final bubble's title may be 'final' or a function name,
+              // so do not treat that as satisfying the Assistant prompt presence check.
+              var titles = Array.from(document.querySelectorAll('#msgs .msg.assistant .meta .title'));
+              var haveAssistantTitle = false;
+              try {
+                haveAssistantTitle = titles.some(function(el){ return String(el.textContent||'').trim().toLowerCase() === 'assistant'; });
+              } catch(_){ haveAssistantTitle = false; }
+              if (!haveAssistantTitle) {
+                var detIdP2 = 'det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
+                var wrapP2 = document.createElement('div'); wrapP2.className = 'msg assistant';
+                var metaP2 = document.createElement('div'); metaP2.className = 'meta small'; metaP2.innerHTML = "<span class='pill'>assistant</span> <span class='title' style='font-weight:600'>Assistant</span>";
+                var bubP2 = document.createElement('div'); bubP2.className = 'bubble assistant'; bubP2.setAttribute('data-details-id', detIdP2);
+                var contP2 = document.createElement('div'); contP2.className='content'; contP2.style.whiteSpace='pre-wrap';
+                try { contP2.textContent = 'Prepared LLM prompt (click to view JSON).'; } catch(_){ }
+                bubP2.appendChild(contP2);
+                var detailsP2 = document.createElement('div'); detailsP2.id = detIdP2; detailsP2.style.display='none';
+                var preP2 = document.createElement('pre'); preP2.className='small'; preP2.style.whiteSpace='pre-wrap'; preP2.style.background='#f8fafc'; preP2.style.padding='8px'; preP2.style.borderRadius='6px';
+                var fallbackMsgs = null;
+                try {
+                  var last = (window.__cedar_last_prompts||{})[String(threadId||'')];
+                  if (last && last.length) { fallbackMsgs = last; }
+                } catch(_){ }
+                if (!fallbackMsgs) {
+                  var fromFinal = null;
+                  try { if (m && m.prompt) { fromFinal = m.prompt; } } catch(_){ }
+                  if (fromFinal && Array.isArray(fromFinal)) {
+                    fallbackMsgs = fromFinal;
+                  } else {
+                    var reason = 'No LLM prompt available';
+                    try { if (m && m.json && m.json.meta && m.json.meta.fastpath) { reason = 'No LLM prompt: fast-path (' + String(m.json.meta.fastpath) + ')'; } } catch(_){ }
+                    fallbackMsgs = [{ role: 'system', content: reason }];
+                  }
+                }
+                try { preP2.textContent = JSON.stringify(fallbackMsgs, null, 2); } catch(_){ preP2.textContent = String(fallbackMsgs); }
+                var barP2 = document.createElement('div'); barP2.className='small'; barP2.style.margin='6px 0 8px 0';
+                var copyBtnP2 = document.createElement('button'); copyBtnP2.textContent='Copy JSON'; copyBtnP2.className='secondary';
+                copyBtnP2.addEventListener('click', function(){ try { navigator.clipboard.writeText(preP2.textContent); } catch(_){} });
+                barP2.appendChild(copyBtnP2);
+                detailsP2.appendChild(barP2);
+                detailsP2.appendChild(preP2);
+                wrapP2.appendChild(metaP2); wrapP2.appendChild(bubP2); wrapP2.appendChild(detailsP2);
+                // Allow clicking the title to toggle details (to satisfy tests)
+                try {
+                  var titleElP2 = metaP2.querySelector('.title');
+                  if (titleElP2) {
+                    titleElP2.setAttribute('role', 'button');
+                    titleElP2.setAttribute('tabindex', '0');
+                    var _tglP2 = function(){ try { var e=document.getElementById(detIdP2); if (e) { e.style.display = (e.style.display==='none'?'block':'none'); } } catch(_){} };
+                    titleElP2.addEventListener('click', function(ev){ try { ev.preventDefault(); } catch(_){}; _tglP2(); });
+                    titleElP2.addEventListener('keydown', function(ev){ try { if (ev && (ev.key==='Enter' || ev.key===' ')) { ev.preventDefault(); _tglP2(); } } catch(_){} });
+                  }
+                } catch(_) {}
+                if (msgs) { try { msgs.insertBefore(wrapP2, wrapF); } catch(_) { msgs.appendChild(wrapP2); } }
+                try { console.log('[ui] synthesized Assistant prompt bubble'); } catch(_){}
+                try { stepAdvance('assistant:prompt', wrapP2); } catch(_){}
+              }
+            } catch(_){ }
+          } catch(_) {
+            // Fallback to replacing the processing text if bubble rendering fails
+            try { streamText.textContent = m.text; } catch(_){}
+          }
+          clearSpinner();
+          // Remove the temporary processing line once final is rendered; allow a short delay so tests can observe the ACK
+          try {
+            setTimeout(function(){ try { if (stream && stream.parentNode) stream.parentNode.removeChild(stream); } catch(_){} }, 400);
+          } catch(_) { try { if (stream && stream.parentNode) stream.parentNode.removeChild(stream); } catch(_){} }
+          stepAdvance('assistant:final', null);
+        } else if (m.type === 'error') {
+          finalOrError = true;
+          try { if (timeoutId) clearTimeout(timeoutId); } catch(_){}
+          streamText.textContent = '[error] ' + (m.error || 'unknown');
+          clearSpinner();
+          try {
+            // Also append a system bubble with error details for visibility in the thread
+            var wrapE = document.createElement('div'); wrapE.className = 'msg system';
+            var metaE = document.createElement('div'); metaE.className = 'meta small'; metaE.innerHTML = "<span class='pill'>system</span> <span class='title' style='font-weight:600'>error</span>";
+            var bubE = document.createElement('div'); bubE.className = 'bubble system';
+            var contE = document.createElement('div'); contE.className = 'content'; contE.style.whiteSpace = 'pre-wrap'; contE.textContent = String(m.error||'unknown');
+            bubE.appendChild(contE); wrapE.appendChild(metaE); wrapE.appendChild(bubE);
+            if (msgs) msgs.appendChild(wrapE);
+          } catch(_){}
+        }
+      };
+      ws.onerror = function(){ try { streamText.textContent = (streamText.textContent||'') + ' [ws-error]'; } catch(_){} };
+      ws.onclose = function(){ try { if (window.unsubscribeCedarLogs && logSub) window.unsubscribeCedarLogs(logSub); } catch(_){}; try { if (currentStep && currentStep.node && !timedOut) { annotateTime(currentStep.node, _now() - currentStep.t0); currentStep = null; } if (!finalOrError && !timedOut) { streamText.textContent = (streamText.textContent||'') + ' [closed]'; } } catch(_){} };
+    } catch(e) {}
+  }
+  document.addEventListener('DOMContentLoaded', function(){
+    try {
+      var chatForm = document.getElementById('chatForm');
+      if (chatForm) {
+        chatForm.addEventListener('submit', async function(ev){
+          try { ev.preventDefault(); } catch(_){ }
+          var t = document.getElementById('chatInput');
+          var text = (t && t.value || '').trim(); if (!text) return;
+          var tid = chatForm.getAttribute('data-thread-id') || null;
+          var fid = chatForm.getAttribute('data-file-id') || null;
+          var dsid = chatForm.getAttribute('data-dataset-id') || null;
+          if (!tid) { tid = await ensureThreadId(tid, fid, dsid); }
+          startWS(text, tid, fid, dsid); try { t.value=''; } catch(_){ }
+        });
+      }
+
+      // Toggle details by clicking the bubble/content
+      try {
+        var msgsEl = document.getElementById('msgs');
+        if (msgsEl) {
+          msgsEl.addEventListener('click', function(ev){
+            var root = ev.target && ev.target.closest ? ev.target.closest('.msg') : null;
+            if (!root) return;
+            var bubble = root.querySelector('.bubble[data-details-id]');
+            if (!bubble) return;
+            var did = bubble.getAttribute('data-details-id');
+            if (!did) return;
+            var el = document.getElementById(did);
+            if (el) { el.style.display = (el.style.display==='none'?'block':'none'); }
+          });
+        }
+      } catch(_){ }
+
+      // Intercept clicks on file/db links to create a new tab without navigation
+      document.addEventListener('click', function(ev){
+        var a = ev.target && ev.target.closest ? ev.target.closest('a.thread-create') : null;
+        if (!a) return;
+        try { ev.preventDefault(); } catch(_){ }
+        var fid = a.getAttribute('data-file-id') || null;
+        var dsid = a.getAttribute('data-dataset-id') || null;
+        if (!fid || !dsid) {
+          try {
+            var urlObj = new URL(a.getAttribute('href'), window.location.href);
+            if (!fid) fid = urlObj.searchParams.get('file_id');
+            if (!dsid) dsid = urlObj.searchParams.get('dataset_id');
+          } catch(_){ }
+        }
+        (async function(){
+          var tid = await ensureThreadId(null, fid, dsid);
+          if (!tid) return;
+          // Update chat form context
+          try {
+            var f = document.getElementById('chatForm');
+            if (f) {
+              f.setAttribute('data-thread-id', tid);
+              f.setAttribute('data-file-id', fid||'');
+              f.setAttribute('data-dataset-id', dsid||'');
+              var hidT = f.querySelector("input[name='thread_id']"); if (hidT) hidT.value = tid; else { var i=document.createElement('input'); i.type='hidden'; i.name='thread_id'; i.value=tid; f.appendChild(i); }
+              var hidF = f.querySelector("input[name='file_id']"); if (fid) { if (hidF) hidF.value = fid; else { var j=document.createElement('input'); j.type='hidden'; j.name='file_id'; j.value=fid; f.appendChild(j);} } else if (hidF) { hidF.remove(); }
+              var hidD = f.querySelector("input[name='dataset_id']"); if (dsid) { if (hidD) hidD.value = dsid; else { var k=document.createElement('input'); k.type='hidden'; k.name='dataset_id'; k.value=dsid; f.appendChild(k);} } else if (hidD) { hidD.remove(); }
+            }
+          } catch(_){ }
+          // Clear messages panel to indicate a fresh thread
+          try {
+            var msgs = document.getElementById('msgs');
+            if (msgs) { msgs.innerHTML = "<div class='muted small'>(No messages yet)</div>"; }
+          } catch(_){ }
+          // Update URL
+          try {
+            var url = `/project/${PROJECT_ID}?branch_id=${BRANCH_ID}&thread_id=${encodeURIComponent(tid)}` + (fid?`&file_id=${encodeURIComponent(fid)}`:'') + (dsid?`&dataset_id=${encodeURIComponent(dsid)}`:'');
+            if (history && history.pushState) { history.pushState({}, '', url); }
+          } catch(_){ }
+        })();
+      }, true);
+
+    } catch(_) {}
+  }, { once: true });
+})();
+</script>
+
+                
+              </div>
+              <div id="left-allchats" class="panel hidden">
+                <div class='card' style='padding:12px'>  <h3 style='margin-bottom:6px'>All Chats</h3><div class='muted small'>(No threads yet)</div></div>
+              </div>
+            </div>
+          </div
+
+          <div class="pane right">
+            <div class="tabs" data-pane="right">
+              <a href="#" class="tab active" data-target="right-plan">Plan</a>
+              <a href="#" class="tab" data-target="right-files">Files</a>
+              <a href="#" class="tab" data-target="right-upload" data-testid="open-uploader">Upload</a>
+              <a href="#" class="tab" data-target="right-sql">SQL</a>
+              <a href="#" class="tab" data-target="right-dbs">Databases</a>
+            </div>
+            <div class="tab-panels">
+              <div id="right-plan" class="panel">
+                <div class='card' style='padding:12px'><h3>Plan</h3><div class='muted small'>(No plan yet)</div></div>
+              </div>
+              <div id="right-files" class="panel hidden">
+                <div class="card" style="max-height:220px; overflow:auto; padding:12px">
+                  <h3 style='margin-bottom:6px'>Files</h3>
+                  <ul style='list-style:none; padding-left:0; margin:0'><li class='muted'>No files yet.</li></ul>
+                </div>
+              </div>
+              <div id="right-upload" class="panel hidden">
+                <div class="card" style='padding:12px'>
+                  <h3 style='margin-bottom:6px'>Upload</h3>
+                  <form method="post" action="/project/1/files/upload?branch_id=1" enctype="multipart/form-data" data-testid="upload-form">
+                    <input type="file" name="file" required data-testid="upload-input" />
+                    <div style="height:6px"></div>
+                    <div style="height:6px"></div>
+                    <button type="submit" data-testid="upload-submit">Upload</button>
+                  </form>
+                </div>
+              </div>
+              <div id="right-sql" class="panel hidden">
+                
+      <div class="card" style="padding:12px">
+        <h3>SQL Console</h3>
+        <form method="post" action="/project/1/sql?branch_id=1" class="inline" onsubmit="return cedarSqlConfirm(this)"> 
+          <textarea name="sql" rows="6" placeholder="WRITE SQL HERE" style="width:100%; font-family: ui-monospace, Menlo, Monaco, 'Courier New', monospace;"></textarea>
+          <div style="height:8px"></div>
+          <button type="submit">Run SQL</button>
+        </form>
+        <script>
+        function cedarSqlConfirm(f) {
+          var t = (f.querySelector('[name=sql]')||{}).value || '';
+          var re = /^\s*(drop|delete|truncate|update|alter)\b/i;
+          if (re.test(t)) {
+            return confirm('This SQL looks destructive. Proceed?');
+          }
+          return true;
+        }
+        </script>
+        <form method="post" action="/project/1/sql/undo_last?branch_id=1" class="inline" style="margin-top:6px">
+          <button type="submit" class="secondary">Undo Last SQL</button>
+        </form>
+        
+      </div>
+    
+              </div>
+              <div id="right-dbs" class="panel hidden">
+                <div class="card" style="padding:12px">
+                  <h3>Databases</h3>
+                  <table class="table">
+                    <thead><tr><th>Name</th><th>Branch</th><th>Created</th></tr></thead>
+                    <tbody><tr><td colspan="3" class="muted">No databases yet.</td></tr></tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+      </div>
+    </div>
+
+    
+  </main>
+</body>
+</html>

@@ -208,6 +208,10 @@ try:
 except Exception:
     pass
 
+# Auto-start chat on upload (client uses this to initiate WS after redirect)
+# See README: "Auto-start chat on upload" for configuration and behavior.
+UPLOAD_AUTOCHAT_ENABLED = str(os.getenv("CEDARPY_UPLOAD_AUTOCHAT", "1")).strip().lower() not in {"", "0", "false", "no", "off"}
+
 # ----------------------------------------------------------------------------------
 # Database setup
 # - Central registry: global engine
@@ -884,6 +888,55 @@ def _llm_summarize_action(action: str, input_payload: Dict[str, Any], output_pay
         return None
 
 
+def _llm_dataset_friendly_name(file_rec: FileEntry, table_name: str, columns: List[str]) -> Optional[str]:
+    """Suggest a short, human-friendly dataset name based on file metadata and columns.
+    Uses a small/fast model. Returns None on error or when key is missing.
+    In test mode, returns a deterministic fallback.
+    """
+    try:
+        if str(os.getenv("CEDARPY_TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "on"}:
+            base = (file_rec.ai_title or file_rec.display_name or table_name or "Data").strip()
+            return (base[:60] if base else "Test Dataset")
+    except Exception:
+        pass
+    try:
+        from openai import OpenAI  # type: ignore
+    except Exception:
+        return None
+    api_key = os.getenv("CEDARPY_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return None
+    model = os.getenv("CEDARPY_SUMMARY_MODEL", "gpt-5-nano")
+    try:
+        client = OpenAI(api_key=api_key)
+        import json as _json
+        sys_prompt = (
+            "You propose concise, human-friendly dataset names (<= 60 chars). "
+            "Use the provided file title, category, and columns. Output plain text only."
+        )
+        info = {
+            "file_title": (file_rec.ai_title or file_rec.display_name),
+            "category": file_rec.ai_category,
+            "table": table_name,
+            "columns": list(columns or [])[:20],
+        }
+        messages = [
+            {"role": "system", "content": sys_prompt},
+            {"role": "user", "content": _json.dumps(info, ensure_ascii=False)}
+        ]
+        resp = client.chat.completions.create(model=model, messages=messages)
+        name = (resp.choices[0].message.content or "").strip()
+        name = name.replace("\n", " ").strip()
+        if len(name) > 60:
+            name = name[:60]
+        return name or None
+    except Exception as e:
+        try:
+            print(f"[dataset-namer] {type(e).__name__}: {e}")
+        except Exception:
+            pass
+        return None
+
 # ----------------------------------------------------------------------------------
 # Tabular import via LLM codegen
 # See README section "Tabular import via LLM codegen" for configuration and troubleshooting.
@@ -919,7 +972,7 @@ def _extract_code_from_markdown(s: str) -> str:
         return s
 
 
-def _tabular_import_via_llm(project_id: int, branch_id: int, file_rec: FileEntry, db: Session) -> Dict[str, Any]:
+def _tabular_import_via_llm(project_id: int, branch_id: int, file_rec: FileEntry, db: Session, options: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
     Generate Python code via LLM to import a tabular file into the per-project SQLite DB and execute it safely.
     - Uses only stdlib modules (csv/json/sqlite3/re/io) in a restricted exec environment.
@@ -960,10 +1013,12 @@ def _tabular_import_via_llm(project_id: int, branch_id: int, file_rec: FileEntry
         "- Create table if not exists with schema: id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER NOT NULL, branch_id INTEGER NOT NULL, and columns inferred from the file.\n"
         "- Infer column names from headers (for CSV/TSV) or keys (for NDJSON). Normalize to snake_case, TEXT/INTEGER/REAL types conservatively.\n"
         "- Insert rows with project_id and branch_id set from the function arguments.\n"
+        "- If this is a re-import, you may DROP TABLE IF EXISTS <table_name> first and then recreate it with the inferred schema before inserting rows.\n"
         "- Stream the file (avoid loading everything into memory).\n"
         "- Return a JSON-serializable dict: {ok: bool, table: str, rows_inserted: int, columns: [str], warnings: [str]}.\n"
         "- Print minimal progress is okay; main signal should be the returned dict.\n"
         "- Do not write any files except via sqlite3 to the provided sqlite_path.\n"
+        "Take into account optional hints provided in the 'options' object (e.g., header_skip, delimiter, quotechar, encoding, date_formats, rename).\n"
         "Output: ONLY Python source code, no surrounding explanations."
     )
 
@@ -981,6 +1036,7 @@ def _tabular_import_via_llm(project_id: int, branch_id: int, file_rec: FileEntry
         "paths": {"src_path": src_path, "sqlite_path": sqlite_path},
         "project": {"project_id": project_id, "branch_id": branch_id},
         "snippet_utf8": sample_text,
+        "options": (options or {}),
     }
 
     import json as _json
@@ -1092,7 +1148,12 @@ def _tabular_import_via_llm(project_id: int, branch_id: int, file_rec: FileEntry
     # Create Dataset entry on success
     if run_ok:
         try:
-            ds = Dataset(project_id=project_id, branch_id=branch_id, name=table_name, description=f"Imported from {file_rec.display_name}")
+            friendly = _llm_dataset_friendly_name(file_rec, table_name, (result.get("columns") or []))
+            desc = f"Imported from {file_rec.display_name} — table: {table_name}"
+            if friendly:
+                ds = Dataset(project_id=project_id, branch_id=branch_id, name=friendly[:60], description=desc)
+            else:
+                ds = Dataset(project_id=project_id, branch_id=branch_id, name=table_name, description=desc)
             db.add(ds); db.commit()
         except Exception:
             db.rollback()
@@ -2562,6 +2623,7 @@ SELECT * FROM demo LIMIT 10;""")
 (function(){
   var PROJECT_ID = __PID__;
   var BRANCH_ID = __BID__;
+  var UPLOAD_AUTOCHAT = __UPLOAD_AUTOCHAT__;
   async function ensureThreadId(tid, fid, dsid) {
     if (tid) return tid;
     try {
@@ -3093,6 +3155,20 @@ SELECT * FROM demo LIMIT 10;""")
   document.addEventListener('DOMContentLoaded', function(){
     try {
       var chatForm = document.getElementById('chatForm');
+      // Auto-start chat once after upload redirect so user sees processing in Chat
+      try {
+        if (UPLOAD_AUTOCHAT && !window.__uploadAutoChatStarted) {
+          var sp = new URLSearchParams(location.search || '');
+          var msg = (sp.get('msg')||'').replace(/\+/g,' ');
+          var tid0 = sp.get('thread_id') || (chatForm && chatForm.getAttribute('data-thread-id')) || null;
+          var fid0 = sp.get('file_id') || (chatForm && chatForm.getAttribute('data-file-id')) || null;
+          var dsid0 = sp.get('dataset_id') || (chatForm && chatForm.getAttribute('data-dataset-id')) || null;
+          if (msg === 'File uploaded' && (tid0 || fid0)) {
+            window.__uploadAutoChatStarted = true;
+            startWS('The user uploaded this file to the system', tid0, fid0, dsid0);
+          }
+        }
+      } catch(_) {}
       if (chatForm) {
         chatForm.addEventListener('submit', async function(ev){
           try { ev.preventDefault(); } catch(_){ }
@@ -3178,6 +3254,7 @@ SELECT * FROM demo LIMIT 10;""")
         _ws_timeout_s = 300
     _ws_timeout_ms = max(1000, _ws_timeout_s * 1000)
     script_js = script_js.replace("__PID__", str(project.id)).replace("__BID__", str(current.id)).replace("__WS_TIMEOUT_MS__", str(_ws_timeout_ms))
+    script_js = script_js.replace("__UPLOAD_AUTOCHAT__", "true" if UPLOAD_AUTOCHAT_ENABLED else "false")
     return f"""
       <h1>{escape(project.title)}</h1>
       <div class=\"muted small\">Project ID: {project.id}</div>
@@ -6146,18 +6223,15 @@ def thread_chat(project_id: int, request: Request, content: str = Form(...), thr
     else:
         try:
             sys_prompt = (
-                "This is a research tool to help people understand the breadth of existing research in the area,\n"
-                "collect and analyze data, and build out reports and visuals to help communicate their findings.\n"
-                "You will have a number of tools to select from when responding to a user.\n"
-                "For simple queries, you can answer with the \"final\" function.\n"
-                "For more complex queries, or ones that require precise numerical answers, begin with the \"plan\" function.\n"
-                "Within \"plan\" indicate the functions you will use for each step.\n"
-                "Functions include web, download, extract, image, db, code, shell, notes, compose, question, final.\n"
-        "In every response, output STRICT JSON and always include output_to_user and changelog_summary.\n"
-        "Also include a field named Thread_title with a concise (<=5 words) specific title for the theme of this conversation.\n"
-                "Include examples for each function so the system can parse it afterwards.\n"
+                "This is a research and coding tool to collect/analyze data and build reports and visuals.\n"
+                "You have multiple tools: web, download, extract, image, db, code, shell, notes, compose, question, final.\n"
+                "FIRST TURN POLICY: Your FIRST response MUST be a {\"function\":\"plan\"} object — no exceptions.\n"
+                "If user information is needed, include a 'question' as the first step in the plan; do NOT return a standalone question.\n"
+                "When the user asks to write code, your plan MUST include a 'code' step with language, packages, and source, followed by a 'final'.\n"
+                "Output STRICT JSON for every response (no prose) and include output_to_user and changelog_summary when appropriate.\n"
+                "Also include a field named Thread_title with a concise (<=5 words) title for this conversation.\n"
                 "We pass Resources (files/dbs), History (recent conversation), and Context (selected file/DB) with each query.\n"
-                "All data systems are queriable via db/download/extract—provide concrete, executable specs.\n"
+                "All data systems are queriable via db/download/extract/code — provide concrete, executable specs.\n"
             )
 
             # Build context JSON
@@ -6216,11 +6290,15 @@ def thread_chat(project_id: int, request: Request, content: str = Form(...), thr
             examples_json = {
                 "plan": {
                     "function": "plan",
+                    "title": "Research and draft",
+                    "description": "Gather info/files, analyze, and produce an answer.",
+                    "goal_outcome": "A concise answer grounded in data",
+                    "status": "in queue",
+                    "state": "new plan",
                     "steps": [
-                        {"description": "Search the web for background", "will_call": ["web", "download"]},
-                        {"description": "Extract claims/citations from PDFs", "will_call": ["extract"]},
-                        {"description": "Query DB for aggregates", "will_call": ["db"]},
-                        {"description": "Write draft", "will_call": ["compose", "final"]}
+                        {"function": "web", "title": "Search", "description": "Find background", "goal_outcome": "authoritative link", "status": "in queue", "state": "new plan", "args": {"query": "example query"}},
+                        {"function": "code", "title": "Compute", "description": "Run Python analysis", "goal_outcome": "computed result", "status": "in queue", "state": "new plan", "args": {"language": "python", "packages": ["numpy"], "source": "print(2+2)"}},
+                        {"function": "final", "title": "Write answer", "description": "Deliver final", "goal_outcome": "Clear answer", "status": "in queue", "state": "new plan", "args": {"text": "<answer>", "title": "<3-6 words>"}}
                     ],
                     "output_to_user": "Plan with steps and tools",
                     "changelog_summary": "created plan"
@@ -6535,10 +6613,7 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
         sys_prompt = """
 You are an orchestrator that ALWAYS uses the LLM on each user prompt.
 
-Decision on first turn:
-- If the query is trivially answerable (e.g., simple arithmetic), respond with a single {"function":"final"}.
-- If the query is AMBIGUOUS or requires user info BEFORE planning, respond with a single {"function":"question"} to clarify. DO THIS BEFORE returning a plan.
-- Otherwise, your FIRST response MUST be a {"function":"plan"} object. Do NOT narrate that you will plan; RETURN the plan object itself.
+FIRST TURN POLICY: Your FIRST response MUST be a {"function":"plan"} object — no exceptions. Do NOT return 'final' or a standalone 'question' on the first turn. If clarification is needed, include a 'question' step as step 1 in the plan.
 
 Plan requirements (STRICT JSON):
 - The plan is an executable list of function steps (web, download, extract, image, db, code, notes, compose, question, final).
@@ -6559,8 +6634,20 @@ Execution rules:
 Response formatting:
 - Respond with STRICT JSON only (no prose), one function object per turn.
 - For 'code', include: language, packages (list), and source. For 'db', include: sql.
+- When the user asks to write code, include a 'code' step (with language, packages, source) before 'final'.
 - Always end the session with a single {"function":"final"} that includes args.text (answer), args.title (3–6 words), and args.run_summary (bulleted summary of actions and outcomes).
         """
+
+        # If a file is focused, add upload policy notes so the plan avoids re-ingestion
+        try:
+            if ctx and isinstance(ctx, dict) and ctx.get('file') is not None:
+                sys_prompt = sys_prompt + "\n\nUPLOAD POLICY (strict):\n" + \
+                    "- The file has already been saved, classified (structure + ai_*), and (if tabular) may already be imported. Do NOT repeat ingestion steps.\n" + \
+                    "- If cleanup is needed for tabular data (e.g., header rows, wrong delimiter), propose a single 'tabular_import' tool call with explicit options (header_skip, delimiter, quotechar, encoding, date_formats, rename). The re-import should replace the existing table.\n" + \
+                    "- Otherwise, prefer 'db' queries (schema overview, COUNT/AVG/etc.) against the per-file table.\n" + \
+                    "- For non-tabular files, prefer retrieval/summarization over LangExtract chunks; avoid tabular steps.\n"
+        except Exception:
+            pass
 
         examples_json = {
             "plan": {
@@ -6620,6 +6707,7 @@ Response formatting:
             "shell": {"function": "shell", "args": {"script": "echo hello"}, "output_to_user": "Ran shell", "changelog_summary": "shell run"},
             "notes": {"function": "notes", "args": {"themes": [{"name": "Risks", "notes": ["…"]}]}, "output_to_user": "Saved notes", "changelog_summary": "notes saved"},
             "compose": {"function": "compose", "args": {"sections": [{"title": "Intro", "text": "…"}]}, "output_to_user": "Drafted section(s)", "changelog_summary": "compose partial"},
+            "tabular_import": {"function": "tabular_import", "args": {"file_id": 123, "options": {"header_skip": 1, "delimiter": ","}}, "output_to_user": "Re-imported tabular data", "changelog_summary": "tabular re-import"},
             "question": {"function": "question", "args": {"text": "Which domain do you care about?"}, "output_to_user": "Need clarification", "changelog_summary": "asked user"},
             "final": {"function": "final", "args": {"text": "2+2=4", "title": "Simple Arithmetic", "run_summary": ["Trivial query detected; skipped planning.", "No tools executed.", "No files created; no DB changes."]}, "output_to_user": "2+2=4", "changelog_summary": "finalized answer"}
         }
@@ -6925,6 +7013,27 @@ Response formatting:
             try: tdb.close()
             except Exception: pass
 
+    def tool_tabular_import(args: dict) -> dict:
+        try:
+            fid = int((args or {}).get("file_id"))
+        except Exception:
+            return {"ok": False, "error": "file_id required"}
+        options = (args or {}).get("options") if isinstance(args, dict) else None
+        tdb = SessionLocal()
+        try:
+            rec = tdb.query(FileEntry).filter(FileEntry.id==fid, FileEntry.project_id==project_id).first()
+            if not rec:
+                return {"ok": False, "error": "file not found"}
+            res = _tabular_import_via_llm(project_id, branch.id, rec, tdb, options=options)
+            out = {"ok": bool(res.get("ok"))}
+            out.update(res)
+            return out
+        except Exception as e:
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        finally:
+            try: tdb.close()
+            except Exception: pass
+
     tools_map = {
         "web": tool_web,
         "download": tool_download,
@@ -6935,6 +7044,7 @@ Response formatting:
         "shell": tool_shell,
         "notes": tool_notes,
         "compose": tool_compose,
+        "tabular_import": tool_tabular_import,
         "question": lambda args: {"ok": True, "question": (args or {}).get("text") or "Please clarify"},
         "final": lambda args: {"ok": True, "text": (args or {}).get("text") or "Done."},
     }
@@ -7087,13 +7197,13 @@ Response formatting:
                 name = str((call.get('function') or '')).strip().lower()
                 args = call.get('args') or {}
                 call_obj = call
-                # Enforce plan-first on first turn for non-trivial prompts
-                if (loop_count == 1) and (name == 'final') and (not _is_trivial_math(content)):
+                # Enforce plan-first on first turn (no exceptions)
+                if (loop_count == 1) and (name != 'plan'):
                     try:
                         _send_info('plan-enforce')
                     except Exception:
                         pass
-                    messages.append({"role": "user", "content": "FIRST TURN POLICY: Respond NOW with one JSON object only: {\"function\":\"plan\", ...}. Do NOT return final yet. Use the required schema (title, description, goal_outcome, status, state, steps[]. Each step: function, title, description, goal_outcome, status, state, args). STRICT JSON only."})
+                    messages.append({"role": "user", "content": "FIRST TURN POLICY: Respond NOW with exactly one JSON object: {\"function\":\"plan\", ...}. Do NOT return final/question directly. Use the required schema (title, description, goal_outcome, status, state, steps[]. Each step: function, title, description, goal_outcome, status, state, args). STRICT JSON only."})
                     name = None; args = {}; call_obj = {}
                     continue
                 if name == 'plan':
