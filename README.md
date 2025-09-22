@@ -129,6 +129,10 @@ Notes
 
 ## LLM classification on file upload
 
+Keys (how to configure)
+- Set OPENAI_API_KEY or CEDARPY_OPENAI_API_KEY in your shell before running. Never hardcode keys. When packaged (Qt app), environment variables can be loaded from the app’s Resources/.env (see cedarqt.py comments) — see this README for details.
+- Code paths that require keys include comments pointing back to this section so you always know where to configure them.
+
 When a file is uploaded, CedarPy can call an LLM to classify and annotate it. The model returns:
 - structure: one of [images | sources | code | tabular]
 - ai_title: friendly title (<= 100 chars)

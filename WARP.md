@@ -30,6 +30,15 @@ Common commands
   - Open http://127.0.0.1:8000 to see Projects.
   - Create a project via the UI, then create a branch and upload a file; verify visibility matches roll-up rules.
 
+WebSocket-first rendering
+- The frontend renders only backend WebSocket events (no front-end fallback logic). Back-end emits:
+  - message (user/assistant/system)
+  - action: processing | plan | plan_update | submit_step | tool_result
+  - prompt (full JSON prompt for drilldown)
+  - info: submitted | planning | plan-enforce | finalizing | timeout
+  - final (answer and last function-call JSON)
+- The Processing… spinner is created on action: processing and cleared at finalizing/final; the transient line is removed shortly after final.
+
 Notes on build/lint/tests
 - There is no build step (pure Python app run via uvicorn).
 - No linters or formatters are configured in this repo.

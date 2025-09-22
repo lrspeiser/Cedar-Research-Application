@@ -503,7 +503,8 @@ def _launch_server_inprocess(host: str, port: int):
     log_dir = os.getenv("CEDARPY_LOG_DIR", LOG_DIR_DEFAULT)
     os.makedirs(log_dir, exist_ok=True)
     # uvicorn logs will go to stdout/stderr; they are captured by our redirected f in _init_logging
-    config = Config(app=fastapi_app, host=host, port=port, log_level="info")
+    # Use httptools HTTP parser to avoid h11 edge cases with multipart uploads in embedded harness
+    config = Config(app=fastapi_app, host=host, port=port, log_level="info", http="httptools")
     server = Server(config)
     t = Thread(target=server.run, daemon=True)
     print(f"[cedarqt] starting uvicorn in-process on http://{host}:{port}")
