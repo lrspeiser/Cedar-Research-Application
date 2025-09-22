@@ -2229,6 +2229,8 @@ def project_page_html(
     sql_result_block: Optional[str] = None,
     last_msgs_map: Optional[Dict[int, List[ThreadMessage]]] = None,
     notes: Optional[List[Note]] = None,
+    code_items: Optional[list] = None,
+    selected_code: Optional[dict] = None,
 ) -> str:
     # See PROJECT_SEPARATION_README.md
     # branch tabs
@@ -2426,6 +2428,42 @@ SELECT * FROM demo LIMIT 10;""")
         file_list_items.append(f"<li style='margin:6px 0; {li_style}'>{status_icon}<a href='{href}' class='thread-create' data-file-id='{f.id}' data-display-name='{disp_name}' style='text-decoration:none; color:inherit; margin-left:6px'>{label_text}</a><div class='small muted'>{sub}</div></li>")
     file_list_html = "<ul style='list-style:none; padding-left:0; margin:0'>" + ("".join(file_list_items) or "<li class='muted'>No files yet.</li>") + "</ul>"
 
+    # Build right-side Code list
+    code_items_safe = code_items or []
+    def _code_label(ci: dict) -> str:
+        try:
+            t = (ci.get('title') or '').strip()
+        except Exception:
+            t = ''
+        if not t:
+            try:
+                c0 = ci.get('code') or ''
+            except Exception:
+                c0 = ''
+            t = (c0.splitlines()[0] if c0 else '')[:80]
+        return t or 'Code snippet'
+    code_list_items: List[str] = []
+    for ci in code_items_safe:
+        try:
+            mid = ci.get('mid')
+            idx = ci.get('idx', 0)
+            href = f"/project/{project.id}?branch_id={current.id}&code_mid={mid}&code_idx={idx}"
+            label = escape(_code_label(ci))
+            lang = escape(str(ci.get('language') or ''))
+            th_title = escape(str(ci.get('thread_title') or ''))
+            when = ''
+            try:
+                when = ci.get('created_at').strftime("%Y-%m-%d %H:%M:%S") + " UTC" if ci.get('created_at') else ''
+            except Exception:
+                when = ''
+            is_active = bool(selected_code and selected_code.get('mid') == mid and int(selected_code.get('idx', 0)) == int(idx))
+            li_style = "font-weight:600" if is_active else ""
+            sub = " · ".join([x for x in [lang, th_title, when] if x])
+            code_list_items.append(f"<li style='margin:6px 0; {li_style}'><a href='{href}' style='text-decoration:none; color:inherit'>{label}</a><div class='small muted'>{sub}</div></li>")
+        except Exception:
+            pass
+    code_list_html = "<ul style='list-style:none; padding-left:0; margin:0'>" + ("".join(code_list_items) or "<li class='muted'>No code yet.</li>") + "</ul>"
+
     # Left details panel for selected file
     def _file_detail_panel(f: Optional[FileEntry]) -> str:
         if not f:
@@ -2466,6 +2504,38 @@ SELECT * FROM demo LIMIT 10;""")
         return ai_block + tbl
 
     left_details = _file_detail_panel(selected_file)
+
+    # Code details panel (selected code)
+    code_details_html = ""
+    try:
+        ci = selected_code or None
+        if ci:
+            title = escape(str(ci.get('title') or 'Code'))
+            lang = escape(str(ci.get('language') or ''))
+            th_title = escape(str(ci.get('thread_title') or ''))
+            th_id = ci.get('thread_id')
+            when = ''
+            try:
+                when = ci.get('created_at').strftime("%Y-%m-%d %H:%M:%S") + " UTC" if ci.get('created_at') else ''
+            except Exception:
+                when = ''
+            code_text = str(ci.get('code') or '')
+            pre_id = f"code_src_{ci.get('mid', 'x')}_{ci.get('idx', 0)}"
+            thread_link = f"/project/{project.id}?branch_id={current.id}&thread_id={th_id}" if th_id else ""
+            meta_rows = []
+            meta_rows.append(f"<tr><th>Title</th><td>{title}</td></tr>")
+            if lang:
+                meta_rows.append(f"<tr><th>Language</th><td>{lang}</td></tr>")
+            if th_title:
+                meta_rows.append("<tr><th>Thread</th><td>" + (f"<a href='{thread_link}'>{th_title}</a>" if thread_link else th_title) + "</td></tr>")
+            if when:
+                meta_rows.append(f"<tr><th>Created</th><td class='small muted'>{when}</td></tr>")
+            meta_tbl = "<table class='table'><tbody>" + "".join(meta_rows) + "</tbody></table>"
+            copy_btn = f"<button class='secondary' onclick=\"try{{navigator.clipboard.writeText(document.getElementById('{pre_id}').innerText);}}catch(_){{}}\">Copy</button>"
+            code_pre = f"<pre id='{pre_id}' class='small' style='white-space:pre-wrap; background:#f8fafc; padding:8px; border-radius:6px; max-height:400px; overflow:auto'>" + escape(code_text) + "</pre>"
+            code_details_html = ("<div class='card' style='margin-top:8px; padding:12px'><h3 style='margin-bottom:6px'>Code Details</h3>" + meta_tbl + "<div class='small' style='margin:6px 0'>" + copy_btn + "</div>" + code_pre + "</div>")
+    except Exception:
+        code_details_html = ""
 
     # Thread tabs removed per new design — switching threads happens via the "All Chats" tab.
 
@@ -3376,6 +3446,7 @@ SELECT * FROM demo LIMIT 10;""")
                 <div class='chat-input'>{chat_form}</div>
                 {script_js}
                 { ("<div class='card' style='margin-top:8px; padding:12px'><h3>File Details</h3>" + left_details + "</div>") if selected_file else "" }
+                {code_details_html}
               </div>
               <div id="left-allchats" class="panel hidden">
                 {all_chats_panel_html}
@@ -3388,15 +3459,58 @@ SELECT * FROM demo LIMIT 10;""")
 
           <div class="pane right">
             <div class="tabs" data-pane="right">
-              <a href="#" class="tab active" data-target="right-plan">Plan</a>
+              {''}
+              {''}
+              {''}
+              {''}
+              {''}
+              {''}
+              {''}
+              {''}
+              {''}
+              {''}
+              {''}
+              {''}
+              {''}
+              {''}
+              {''}
+              {''}
+              {''}
+              {''}
+              {''}
+              {''}
+              {''}
+              {''}
+              {''}
+              {''}
+              {''}
+              {''}
+              {''}
+              {''}
+              {''}
+              {''}
+              {''}
+              {''}
+              {''}
+              {''}
+              {''}
+              {''}
+              {''}
+              {''}
+              {''}
+              {''}
+              {''}
+              {''}
+              {''}
+              <a href="#" class="{('tab active' if not (selected_code or False) else 'tab')}" data-target="right-plan">Plan</a>
               <a href="#" class="tab" data-target="right-files">Files</a>
-              <a href="#" class="tab" data-target="right-code">Code</a>
+              <a href="#" class="{('tab active' if (selected_code or False) else 'tab')}" data-target="right-code">Code</a>
               <a href=\"#\" class=\"tab\" data-target=\"right-upload\" data-testid=\"open-uploader\">Upload</a>
               <a href="#" class="tab" data-target="right-sql">SQL</a>
               <a href="#" class="tab" data-target="right-dbs">Databases</a>
             </div>
             <div class="tab-panels">
-              <div id="right-plan" class="panel">
+              <div id="right-plan" class="{('panel' if not (selected_code or False) else 'panel hidden')}">
                 {plan_panel_html}
               </div>
               <div id="right-files" class="panel">
@@ -3405,10 +3519,10 @@ SELECT * FROM demo LIMIT 10;""")
                   {file_list_html}
                 </div>
               </div>
-              <div id="right-code" class="panel hidden">
+              <div id="right-code" class="{('panel' if (selected_code or False) else 'panel hidden')}">
                 <div class="card" style="max-height:220px; overflow:auto; padding:12px">
                   <h3 style='margin-bottom:6px'>Code</h3>
-                  <ul style='list-style:none; padding-left:0; margin:0'><li class='muted'>No code yet.</li></ul>
+                  {code_list_html}
                 </div>
               </div>
               <div id="right-upload" class="panel">
@@ -5830,8 +5944,166 @@ def threads_index(project_id: Optional[int] = None, branch_id: Optional[int] = N
         """
         return layout(title, body, nav_query=f"project_id={project_id}&branch_id={(branch_id or 1)}")
 
+# ----------------------------------------------------------------------------------
+# Code collection helpers for right-side "Code" tab
+# ----------------------------------------------------------------------------------
+
+def _guess_language_from_path(path: str) -> str:
+    try:
+        p = (path or '').lower()
+    except Exception:
+        p = ''
+    mapping = {
+        '.py': 'python', '.js': 'javascript', '.ts': 'typescript', '.tsx': 'tsx', '.jsx': 'jsx',
+        '.sh': 'bash', '.bash': 'bash', '.zsh': 'bash', '.sql': 'sql', '.json': 'json',
+        '.yaml': 'yaml', '.yml': 'yaml', '.md': 'markdown', '.html': 'html', '.css': 'css',
+        '.go': 'go', '.rs': 'rust', '.java': 'java', '.rb': 'ruby', '.php': 'php',
+        '.c': 'c', '.h': 'c', '.cc': 'cpp', '.hpp': 'cpp', '.cpp': 'cpp', '.cs': 'csharp', '.swift': 'swift',
+    }
+    try:
+        import os as _os
+        _, ext = _os.path.splitext(p)
+        return mapping.get(ext, '')
+    except Exception:
+        return ''
+
+
+def _collect_code_items(db: Session, project_id: int, threads: List[Thread]) -> List[dict]:
+    tmap: Dict[int, Thread] = {}
+    try:
+        for t in threads:
+            try:
+                tmap[t.id] = t
+            except Exception:
+                pass
+    except Exception:
+        tmap = {}
+    tid_list: List[int] = []
+    try:
+        tid_list = [t.id for t in threads]
+    except Exception:
+        tid_list = []
+    items: List[dict] = []
+    try:
+        recs: List[ThreadMessage] = db.query(ThreadMessage) \
+            .filter(ThreadMessage.project_id == project_id, ThreadMessage.thread_id.in_(tid_list)) \
+            .order_by(ThreadMessage.created_at.asc()) \
+            .all()
+    except Exception:
+        recs = []
+
+    def _emit_from_dict(d: dict, acc: List[dict]):
+        # Find common patterns: d['code'], d['files'][].content/code, nested under d['call'], steps, etc.
+        try:
+            if not isinstance(d, dict):
+                return
+        except Exception:
+            return
+        try:
+            code_val = d.get('code')
+            if isinstance(code_val, str) and code_val.strip():
+                acc.append({
+                    'code': code_val,
+                    'language': d.get('language') or d.get('lang') or _guess_language_from_path(d.get('path') or d.get('file') or d.get('filename') or ''),
+                    'title': d.get('title') or d.get('name') or d.get('path') or d.get('function') or None,
+                    'function': d.get('function') or None,
+                    'path': d.get('path') or d.get('file') or d.get('filename') or None,
+                })
+        except Exception:
+            pass
+        # files array
+        try:
+            files_val = d.get('files')
+            if isinstance(files_val, list):
+                for f in files_val:
+                    try:
+                        if isinstance(f, dict):
+                            c = f.get('content') if isinstance(f.get('content'), str) else f.get('code')
+                            if isinstance(c, str) and c.strip():
+                                acc.append({
+                                    'code': c,
+                                    'language': f.get('language') or _guess_language_from_path(f.get('path') or f.get('file') or f.get('filename') or ''),
+                                    'title': f.get('title') or f.get('name') or f.get('path') or None,
+                                    'path': f.get('path') or f.get('file') or f.get('filename') or None,
+                                })
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        # dive into call/args/steps
+        for k in list(d.keys()):
+            try:
+                v = d.get(k)
+            except Exception:
+                v = None
+            if isinstance(v, dict):
+                _emit_from_dict(v, acc)
+            elif isinstance(v, list):
+                for it in v:
+                    if isinstance(it, dict):
+                        _emit_from_dict(it, acc)
+
+    import re as _re
+
+    for m in recs:
+        try:
+            snippets: List[dict] = []
+            pj = getattr(m, 'payload_json', None)
+            if isinstance(pj, dict):
+                _emit_from_dict(pj, snippets)
+            elif isinstance(pj, list):
+                for it in pj:
+                    if isinstance(it, dict):
+                        _emit_from_dict(it, snippets)
+            # Fallback: parse code fences from content
+            try:
+                txt = getattr(m, 'content', None)
+                if isinstance(txt, str) and '```' in txt:
+                    for match in _re.finditer(r"```([a-zA-Z0-9_+\-]*)\n([\s\S]*?)```", txt):
+                        lang = (match.group(1) or '').strip() or None
+                        code_block = match.group(2)
+                        if code_block and code_block.strip():
+                            snippets.append({'code': code_block, 'language': lang, 'title': None})
+            except Exception:
+                pass
+            # Dedupe by code content within message
+            seen_codes: set = set()
+            idx = 0
+            for sn in snippets:
+                try:
+                    code_str = sn.get('code')
+                    if not isinstance(code_str, str) or not code_str.strip():
+                        continue
+                    key = (code_str.strip(), str(sn.get('language') or ''))
+                    if key in seen_codes:
+                        continue
+                    seen_codes.add(key)
+                    t_title = ''
+                    try:
+                        th = tmap.get(m.thread_id)
+                        t_title = th.title if th else ''
+                    except Exception:
+                        t_title = ''
+                    items.append({
+                        'mid': m.id,
+                        'idx': idx,
+                        'title': sn.get('title') or sn.get('path') or sn.get('function') or (sn.get('language') or 'Code'),
+                        'language': sn.get('language') or _guess_language_from_path(sn.get('path') or ''),
+                        'code': code_str,
+                        'thread_id': m.thread_id,
+                        'thread_title': t_title,
+                        'created_at': getattr(m, 'created_at', None),
+                    })
+                    idx += 1
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    return items
+
+
 @app.get("/project/{project_id}", response_class=HTMLResponse)
-def view_project(project_id: int, branch_id: Optional[int] = None, msg: Optional[str] = None, file_id: Optional[int] = None, dataset_id: Optional[int] = None, thread_id: Optional[int] = None, db: Session = Depends(get_project_db)):
+def view_project(project_id: int, branch_id: Optional[int] = None, msg: Optional[str] = None, file_id: Optional[int] = None, dataset_id: Optional[int] = None, thread_id: Optional[int] = None, code_mid: Optional[int] = None, code_idx: Optional[int] = None, db: Session = Depends(get_project_db)):
     ensure_project_initialized(project_id)
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
@@ -5915,6 +6187,27 @@ def view_project(project_id: int, branch_id: Optional[int] = None, msg: Optional
     except Exception:
         notes = []
 
+    # Build Code items across visible threads
+    try:
+        code_items = _collect_code_items(db, project.id, threads)
+    except Exception:
+        code_items = []
+    # Resolve selected code item if query params provided
+    selected_code = None
+    try:
+        if code_mid is not None:
+            cmid = int(code_mid)
+            cidx = int(code_idx) if code_idx is not None else 0
+            for ci in code_items:
+                try:
+                    if int(ci.get('mid')) == cmid and int(ci.get('idx', 0)) == cidx:
+                        selected_code = ci
+                        break
+                except Exception:
+                    pass
+    except Exception:
+        selected_code = None
+
     return layout(
         project.title,
         project_page_html(
@@ -5931,6 +6224,8 @@ def view_project(project_id: int, branch_id: Optional[int] = None, msg: Optional
             msg=msg,
             last_msgs_map=last_msgs_map,
             notes=notes,
+            code_items=code_items,
+            selected_code=selected_code,
         ),
         header_label=project.title,
         header_link=f"/project/{project.id}?branch_id={current.id}",
