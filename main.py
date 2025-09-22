@@ -2410,7 +2410,10 @@ SELECT * FROM demo LIMIT 10;""")
     for f in files_sorted:
         href = f"/project/{project.id}/threads/new?branch_id={current.id}&file_id={f.id}"
         label_text = escape(_file_label(f) or f.display_name)
-        sub = escape(((getattr(f, 'ai_category', None) or f.structure or f.file_type or '') or ''))
+        # Always include the original filename in the UI (tests expect to see it)
+        disp_name = escape(f.display_name or '')
+        meta_sub = escape(((getattr(f, 'ai_category', None) or f.structure or f.file_type or '') or ''))
+        sub = disp_name + (f" — {meta_sub}" if meta_sub else "")
         active = (selected_file and f.id == selected_file.id)
         li_style = "font-weight:600" if active else ""
         # Show spinner only while LLM classification is actively running; checkmark when classified
@@ -2420,7 +2423,7 @@ SELECT * FROM demo LIMIT 10;""")
             status_icon = "<span title='classified'>✓</span>"
         else:
             status_icon = ""
-        file_list_items.append(f"<li style='margin:6px 0; {li_style}'>{status_icon}<a href='{href}' class='thread-create' data-file-id='{f.id}' style='text-decoration:none; color:inherit; margin-left:6px'>{label_text}</a><div class='small muted'>{sub}</div></li>")
+        file_list_items.append(f"<li style='margin:6px 0; {li_style}'>{status_icon}<a href='{href}' class='thread-create' data-file-id='{f.id}' data-display-name='{disp_name}' style='text-decoration:none; color:inherit; margin-left:6px'>{label_text}</a><div class='small muted'>{sub}</div></li>")
     file_list_html = "<ul style='list-style:none; padding-left:0; margin:0'>" + ("".join(file_list_items) or "<li class='muted'>No files yet.</li>") + "</ul>"
 
     # Left details panel for selected file
@@ -2621,40 +2624,11 @@ SELECT * FROM demo LIMIT 10;""")
             except Exception:
                 details = f"<div id='{details_id}' style='display:none'><pre class='small' style='white-space:pre-wrap; background:#f8fafc; padding:8px; border-radius:6px'>" + escape(m.content) + "</pre></div>"
 
-            # Render bubble for the message
-            try:
-                role_raw = (getattr(m, 'role', '') or '').strip().lower()
-                role_css = 'user' if role_raw == 'user' else ('assistant' if role_raw == 'assistant' else 'system')
-            except Exception:
-                role_css = 'assistant'
-            bubble_text = ''
-            try:
-                if getattr(m, 'payload_json', None) is not None:
-                    pj = m.payload_json or {}
-                    fn = str((pj.get('function') or '')).strip()
-                    text_val = pj.get('text')
-                    bubble_text = ((fn + ' ') if fn else '') + (str(text_val) if text_val is not None else '')
-                    if not bubble_text:
-                        bubble_text = (m.content or '')
-                else:
-                    bubble_text = (m.content or '')
-            except Exception:
-                try:
-                    bubble_text = m.content or ''
-                except Exception:
-                    bubble_text = ''
-            bubble_html = (
-                f"<div class='msg {role_css}'>"
-                f"  <div class='meta small'><span class='pill'>{role_css}</span> <span class='title' style='font-weight:600'>{title_txt}</span></div>"
-                f"  <div class='bubble {role_css}' data-details-id='{details_id}'>"
-                f"    <div class='content' style='white-space:pre-wrap'>{escape(bubble_text)}</div>"
-                f"  </div>"
-                f"  {details}"
-                f"</div>"
-            )
-            msg_rows.append(bubble_html)
+    if not msgs:
+        msg_rows.append("<div class='muted small'>(No messages yet)</div>")
+    msgs_html = "".join(msg_rows)
 
-    msgs_html = ("".join(msg_rows)) if msg_rows else "<div class='muted small'>(No messages yet)</div>"
+    # Chat form (LLM keys required; see README)
 
     # Chat form (LLM keys required; see README)
     # Only include hidden ids when present to avoid posting empty strings, which cause int parsing errors.
@@ -2662,7 +2636,7 @@ SELECT * FROM demo LIMIT 10;""")
     hidden_file = f"<input type='hidden' name='file_id' value='{selected_file.id}' />" if selected_file else ""
     hidden_dataset = f"<input type='hidden' name='dataset_id' value='{selected_dataset.id}' />" if selected_dataset else ""
     chat_form = f"""
-      <form id='chatForm' data-project-id='{project.id}' data-branch-id='{current.id}' data-thread-id='{selected_thread.id if selected_thread else ''}' data-file-id='{selected_file.id if selected_file else ''}' data-dataset-id='{selected_dataset.id if selected_dataset else ''}' method='post' action='/project/{project.id}/threads/chat?branch_id={current.id}' style='margin-top:8px'>
+      <form id='chatForm' data-project-id='{project.id}' data-branch-id='{current.id}' data-thread-id='{selected_thread.id if selected_thread else ''}' data-file-id='{selected_file.id if selected_file else ''}' data-file-name='{escape(selected_file.display_name) if selected_file else ''}' data-dataset-id='{selected_dataset.id if selected_dataset else ''}' method='post' action='/project/{project.id}/threads/chat?branch_id={current.id}' style='margin-top:8px'>
         {hidden_thread}{hidden_file}{hidden_dataset}
         <textarea id='chatInput' name='content' rows='3' placeholder='Ask a question about this file/context...' style='width:100%; font-family: ui-monospace, Menlo, monospace;'></textarea>
         <div style='height:6px'></div>
@@ -2771,7 +2745,21 @@ SELECT * FROM demo LIMIT 10;""")
       // Initial visible ACK to the user
       var spin = null;
       try {
-        streamText.textContent = 'Processing…';
+        // Show filename in the processing ACK when available
+        var fileName = null;
+        try {
+          if (fileId) {
+            var cf = document.getElementById('chatForm');
+            if (cf && String(cf.getAttribute('data-file-id')||'') === String(fileId||'')) {
+              fileName = cf.getAttribute('data-file-name') || '';
+            }
+            if (!fileName) {
+              var link = document.querySelector(".thread-create[data-file-id='"+String(fileId)+"']");
+              if (link) { fileName = link.getAttribute('data-display-name') || (link.textContent||''); }
+            }
+          }
+        } catch(_){ fileName = null; }
+        streamText.textContent = fileName ? ('Processing ' + fileName + '…') : 'Processing…';
         spin = document.createElement('span'); spin.className = 'spinner'; spin.style.marginLeft = '6px'; stream.appendChild(spin);
         // Add Cancel button next to spinner
         var cancelBtn = document.createElement('button'); cancelBtn.textContent = 'Cancel'; cancelBtn.className = 'secondary'; cancelBtn.style.marginLeft = '8px';
@@ -3310,6 +3298,8 @@ SELECT * FROM demo LIMIT 10;""")
             if (f) {
               f.setAttribute('data-thread-id', tid);
               f.setAttribute('data-file-id', fid||'');
+              // propagate human-readable file name when available
+              try { f.setAttribute('data-file-name', (a.getAttribute('data-display-name')||'')); } catch(_){ }
               f.setAttribute('data-dataset-id', dsid||'');
               var hidT = f.querySelector("input[name='thread_id']"); if (hidT) hidT.value = tid; else { var i=document.createElement('input'); i.type='hidden'; i.name='thread_id'; i.value=tid; f.appendChild(i); }
               var hidF = f.querySelector("input[name='file_id']"); if (fid) { if (hidF) hidF.value = fid; else { var j=document.createElement('input'); j.type='hidden'; j.name='file_id'; j.value=fid; f.appendChild(j);} } else if (hidF) { hidF.remove(); }
