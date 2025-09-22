@@ -1563,8 +1563,10 @@ def layout(title: str, body: str, header_label: Optional[str] = None, header_lin
     @keyframes spin {{ from {{ transform: rotate(0deg);}} to {{ transform: rotate(360deg);}} }}
 
     /* Two-column layout and tabs */
-    .two-col {{ display: grid; grid-template-columns: 1fr 360px; gap: 16px; align-items: start; }}
+    .two-col {{ display: grid; grid-template-columns: 1fr 420px; gap: 16px; align-items: start; }}
     .pane {{ display: flex; flex-direction: column; gap: 8px; }}
+    .pane.right {{ display:flex; flex-direction:column; min-height:0; }}
+    .pane.right .tab-panels {{ display:flex; flex-direction:column; flex:1; min-height:0; overflow:auto; }}
     .tabs {{ display: flex; gap: 6px; border-bottom: 1px solid var(--border); }}
     .tab {{ display:inline-block; padding:6px 10px; border:1px solid var(--border); border-bottom:none; border-radius:6px 6px 0 0; background:#f3f4f6; color:#111; cursor:pointer; user-select:none; }}
     .tab.active {{ background:#fff; font-weight:600; }}
@@ -2094,8 +2096,10 @@ def _is_trivial_math(msg: str) -> bool:
     @keyframes spin {{ from {{ transform: rotate(0deg);}} to {{ transform: rotate(360deg);}} }}
 
     /* Two-column layout and tabs */
-.two-col {{ display: grid; grid-template-columns: 1fr 360px; gap: 16px; align-items: start; }}
+.two-col {{ display: grid; grid-template-columns: 1fr 420px; gap: 16px; align-items: start; }}
     .pane {{ display: flex; flex-direction: column; gap: 8px; }}
+    .pane.right {{ display:flex; flex-direction:column; min-height:0; }}
+    .pane.right .tab-panels {{ display:flex; flex-direction:column; flex:1; min-height:0; overflow:auto; }}
     .tabs {{ display: flex; gap: 6px; border-bottom: 1px solid var(--border); }}
     .tab {{ display:inline-block; padding:6px 10px; border:1px solid var(--border); border-bottom:none; border-radius:6px 6px 0 0; background:#f3f4f6; color:#111; cursor:pointer; user-select:none; }}
     .tab.active {{ background:#fff; font-weight:600; }}
@@ -2895,6 +2899,18 @@ SELECT * FROM demo LIMIT 10;""")
               window.__cedar_last_prompts = window.__cedar_last_prompts || {};
               if (m.thread_id) { window.__cedar_last_prompts[String(m.thread_id)] = m.messages || []; }
             } catch(_){ }
+            // If server provided a thread_id and the form doesn't have one yet, set it now (no pre-create roundtrip)
+            try {
+              if (m.thread_id) {
+                var chatForm2 = document.getElementById('chatForm');
+                if (chatForm2 && !(chatForm2.getAttribute('data-thread-id'))) {
+                  var tidStr = String(m.thread_id);
+                  chatForm2.setAttribute('data-thread-id', tidStr);
+                  var hiddenTid2 = chatForm2.querySelector("input[name='thread_id']");
+                  if (hiddenTid2) hiddenTid2.value = tidStr; else { var hi2 = document.createElement('input'); hi2.type='hidden'; hi2.name='thread_id'; hi2.value=tidStr; chatForm2.appendChild(hi2); }
+                }
+              }
+            } catch(_){}
             var detIdP = 'det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
             var wrapP = document.createElement('div'); wrapP.className = 'msg assistant';
             var metaP = document.createElement('div'); metaP.className = 'meta small'; metaP.innerHTML = "<span class='pill'>assistant</span> <span class='title' style='font-weight:600'>Assistant</span>";
@@ -3334,7 +3350,7 @@ SELECT * FROM demo LIMIT 10;""")
           var tid = chatForm.getAttribute('data-thread-id') || null;
           var fid = chatForm.getAttribute('data-file-id') || null;
           var dsid = chatForm.getAttribute('data-dataset-id') || null;
-          if (!tid) { tid = await ensureThreadId(tid, fid, dsid); }
+          // Start streaming immediately; server will auto-create a thread if needed
           startWS(text, tid, fid, dsid); try { t.value=''; } catch(_){ }
         });
       }
