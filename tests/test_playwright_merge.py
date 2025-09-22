@@ -68,12 +68,17 @@ def test_merge_dashboard_shows_unique_and_merges(page: Page, path: str):
         unique_title = f"Merge Demo {int(time.time()*1000000)}"
         page.fill("input[name=title]", unique_title)
         page.locator("form[action='/projects/create'] button[type=submit]").click()
-        page.wait_for_url("**/project/*")
+        page.wait_for_url("**/project/*?branch_id=*")
         # Create a new branch via the inline form toggle (+ pill)
         page.locator("a.pill[title='New branch']").click()
         page.fill("#branchCreateForm input[name=name]", "feature-x")
         page.locator("#branchCreateForm button[type=submit]").click()
         page.wait_for_url("**/project/*?branch_id=*")
+        # Capture project id from URL for project-scoped Merge page
+        import re as _re
+        _m0 = _re.search(r"/project/(\d+)", page.url)
+        assert _m0, "could not extract project id after branch creation"
+        proj_id = _m0.group(1)
         # Upload a file on the branch to create changelog unique entries
         upload_input = page.get_by_test_id("upload-input")
         tmp_path = Path.cwd() / ".pw_tmp_merge.txt"
@@ -88,9 +93,8 @@ def test_merge_dashboard_shows_unique_and_merges(page: Page, path: str):
             from playwright.sync_api import expect
             expect(page.get_by_role("heading", name="Files")).to_be_visible(timeout=60000)
             expect(page.get_by_text(".pw_tmp_merge.txt").first).to_be_visible(timeout=60000)
-        # Open Merge page
-        page.goto(base + "/merge")
-        page.get_by_role("link", name="Open").first.click()
+        # Open project-scoped Merge page
+        page.goto(f"{base}/merge/{proj_id}")
         page.wait_for_url("**/merge/*")
         # Verify Branch: feature-x card exists and shows unique list or at least the card
         assert page.get_by_role("heading", name="Branch: feature-x").is_visible()

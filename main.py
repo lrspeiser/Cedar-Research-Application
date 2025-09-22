@@ -2228,6 +2228,7 @@ def project_page_html(
     msg: Optional[str] = None,
     sql_result_block: Optional[str] = None,
     last_msgs_map: Optional[Dict[int, List[ThreadMessage]]] = None,
+    notes: Optional[List[Note]] = None,
 ) -> str:
     # See PROJECT_SEPARATION_README.md
     # branch tabs
@@ -2519,6 +2520,64 @@ SELECT * FROM demo LIMIT 10;""")
         "<div class='card' style='padding:12px'>"
         "  <h3 style='margin-bottom:6px'>All Chats</h3>"
         + ("".join(all_chats_items) or "<div class='muted small'>(No threads yet)</div>")
+        + "</div>"
+    )
+
+    # Build Notes list panel (LLM-generated notes)
+    notes_items_html: List[str] = []
+    try:
+        import json as _json
+        for n in (notes or []):
+            try:
+                when = n.created_at.strftime("%Y-%m-%d %H:%M:%S") + " UTC" if getattr(n, 'created_at', None) else ""
+            except Exception:
+                when = ""
+            # Tags
+            try:
+                tags = n.tags or []
+                tags_html = " ".join([f"<span class='pill'>{escape(str(t))}</span>" for t in tags])
+            except Exception:
+                tags_html = ""
+            # Body: attempt to parse JSON for themes/sections; fallback to plain text
+            body_html = ""
+            try:
+                data = _json.loads(n.content)
+                if isinstance(data, dict) and isinstance(data.get('themes'), list):
+                    parts: List[str] = []
+                    for th in (data.get('themes') or [])[:10]:
+                        try:
+                            name = escape(str((th or {}).get('name') or ''))
+                        except Exception:
+                            name = ''
+                        notes_list = (th or {}).get('notes') or []
+                        items = "".join([f"<li class='small'>{escape(str(x))}</li>" for x in notes_list[:10]])
+                        parts.append(
+                            "<div style='margin-bottom:6px'>"
+                            + (f"<div class='small muted' style='font-weight:600'>{name}</div>" if name else "")
+                            + f"<ul class='small' style='margin:4px 0 0 16px'>{items}</ul>"
+                            + "</div>"
+                        )
+                    body_html = "".join(parts) or "<div class='muted small'>(empty)</div>"
+                elif isinstance(data, dict) and isinstance(data.get('sections'), list):
+                    secs = data.get('sections') or []
+                    items = "".join([f"<li class='small'><b>{escape(str((s or {}).get('title') or ''))}</b> – {escape(str((s or {}).get('text') or '')[:200])}</li>" for s in secs[:10]])
+                    body_html = f"<ul class='small'>{items}</ul>" if items else "<div class='muted small'>(empty)</div>"
+                else:
+                    body_html = f"<pre class='small' style='white-space:pre-wrap; background:#f8fafc; padding:8px; border-radius:6px'>{escape(str(n.content)[:1000])}</pre>"
+            except Exception:
+                body_html = f"<pre class='small' style='white-space:pre-wrap; background:#f8fafc; padding:8px; border-radius:6px'>{escape(str(getattr(n, 'content', '') or '')[:1000])}</pre>"
+            notes_items_html.append(
+                "<div class='note-item' style='border-bottom:1px solid var(--border); padding:8px 0'>"
+                + (f"<div class='small muted'>{escape(when)} {tags_html}</div>" if (when or tags_html) else "")
+                + body_html
+                + "</div>"
+            )
+    except Exception:
+        notes_items_html = []
+    notes_panel_html = (
+        "<div class='card' style='padding:12px'>"
+        "  <h3 style='margin-bottom:6px'>Notes</h3>"
+        + ("".join(notes_items_html) or "<div class='muted small'>(No notes yet)</div>")
         + "</div>"
     )
 
@@ -3307,6 +3366,7 @@ SELECT * FROM demo LIMIT 10;""")
             <div class="tabs" data-pane="left">
               <a href="#" class="tab active" data-target="left-chat">Chat</a>
               <a href="#" class="tab" data-target="left-allchats">All Chats</a>
+              <a href="#" class="tab" data-target="left-notes">Notes</a>
             </div>
             <div class="tab-panels" style="flex:1; min-height:0">
               <div id="left-chat" class="panel">
@@ -3334,6 +3394,9 @@ SELECT * FROM demo LIMIT 10;""")
               </div>
               <div id="left-allchats" class="panel hidden">
                 {all_chats_panel_html}
+              </div>
+              <div id="left-notes" class="panel hidden">
+                {notes_panel_html}
               </div>
             </div>
           </div>
@@ -5054,7 +5117,13 @@ def execute_sql(project_id: int, request: Request, sql: str = Form(...), db: Ses
     except Exception:
         pass
 
-    return layout(project.title, project_page_html(project, branches, current, files, threads, datasets, selected_file=None, msg="Per-project database is active", sql_result_block=sql_block))
+    # Fetch recent notes for left-pane Notes tab (roll-up across visible branches)
+    try:
+        notes = db.query(Note).filter(Note.project_id == project.id, Note.branch_id.in_(show_branch_ids)).order_by(Note.created_at.desc()).limit(200).all()
+    except Exception:
+        notes = []
+
+    return layout(project.title, project_page_html(project, branches, current, files, threads, datasets, selected_file=None, msg="Per-project database is active", sql_result_block=sql_block, notes=notes))
 
 def _render_sql_result_html(result: dict) -> str:
     if not result:
@@ -5553,8 +5622,36 @@ def _hash_payload(obj: Any) -> str:
 
 @app.get("/merge", response_class=HTMLResponse)
 def merge_index(request: Request, db: Session = Depends(get_registry_db)):
-    projects = db.query(Project).order_by(Project.created_at.desc()).all()
-    return layout("Merge", merge_index_html(projects))
+    """Merge landing should be project-scoped, not a cross-project dashboard.
+    Behavior:
+    - If ?project_id= is present, redirect to /merge/{project_id}
+    - Else, if exactly one project exists, redirect to that project's merge page
+    - Else, show guidance to open a project first (no global project list)
+    """
+    # 1) Respect explicit context from nav link
+    pid_qs = request.query_params.get("project_id")
+    if pid_qs is not None:
+        try:
+            pid = int(pid_qs)
+            return RedirectResponse(f"/merge/{pid}", status_code=303)
+        except Exception:
+            pass
+    # 2) Single-project convenience redirect
+    try:
+        projects = db.query(Project).order_by(Project.created_at.desc()).all()
+    except Exception:
+        projects = []
+    if len(projects) == 1:
+        return RedirectResponse(f"/merge/{projects[0].id}", status_code=303)
+    # 3) No context: instruct user to open a project first
+    body = (
+        "<h1>Merge</h1>"
+        "<div class='card' style='max-width:720px'>"
+        "  <p>This page is scoped to a single project. Open a project and use the Merge tab to merge a feature branch back into Main.</p>"
+        "  <p><a class='pill' href='/'>Go to Projects</a></p>"
+        "</div>"
+    )
+    return layout("Merge", body)
 
 
 @app.get("/merge/{project_id}", response_class=HTMLResponse)
@@ -5818,6 +5915,12 @@ def view_project(project_id: int, branch_id: Optional[int] = None, msg: Optional
     except Exception:
         last_msgs_map = {}
 
+    # Fetch recent notes for left-pane Notes tab (roll-up across visible branches)
+    try:
+        notes = db.query(Note).filter(Note.project_id == project.id, Note.branch_id.in_(show_branch_ids)).order_by(Note.created_at.desc()).limit(200).all()
+    except Exception:
+        notes = []
+
     return layout(
         project.title,
         project_page_html(
@@ -5833,6 +5936,7 @@ def view_project(project_id: int, branch_id: Optional[int] = None, msg: Optional
             thread_messages=thread_messages,
             msg=msg,
             last_msgs_map=last_msgs_map,
+            notes=notes,
         ),
         header_label=project.title,
         header_link=f"/project/{project.id}?branch_id={current.id}",
