@@ -2621,6 +2621,41 @@ SELECT * FROM demo LIMIT 10;""")
             except Exception:
                 details = f"<div id='{details_id}' style='display:none'><pre class='small' style='white-space:pre-wrap; background:#f8fafc; padding:8px; border-radius:6px'>" + escape(m.content) + "</pre></div>"
 
+            # Render bubble for the message
+            try:
+                role_raw = (getattr(m, 'role', '') or '').strip().lower()
+                role_css = 'user' if role_raw == 'user' else ('assistant' if role_raw == 'assistant' else 'system')
+            except Exception:
+                role_css = 'assistant'
+            bubble_text = ''
+            try:
+                if getattr(m, 'payload_json', None) is not None:
+                    pj = m.payload_json or {}
+                    fn = str((pj.get('function') or '')).strip()
+                    text_val = pj.get('text')
+                    bubble_text = ((fn + ' ') if fn else '') + (str(text_val) if text_val is not None else '')
+                    if not bubble_text:
+                        bubble_text = (m.content or '')
+                else:
+                    bubble_text = (m.content or '')
+            except Exception:
+                try:
+                    bubble_text = m.content or ''
+                except Exception:
+                    bubble_text = ''
+            bubble_html = (
+                f"<div class='msg {role_css}'>"
+                f"  <div class='meta small'><span class='pill'>{role_css}</span> <span class='title' style='font-weight:600'>{title_txt}</span></div>"
+                f"  <div class='bubble {role_css}' data-details-id='{details_id}'>"
+                f"    <div class='content' style='white-space:pre-wrap'>{escape(bubble_text)}</div>"
+                f"  </div>"
+                f"  {details}"
+                f"</div>"
+            )
+            msg_rows.append(bubble_html)
+
+    msgs_html = ("".join(msg_rows)) if msg_rows else "<div class='muted small'>(No messages yet)</div>"
+
     # Chat form (LLM keys required; see README)
     # Only include hidden ids when present to avoid posting empty strings, which cause int parsing errors.
     hidden_thread = f"<input type='hidden' name='thread_id' value='{selected_thread.id}' />" if selected_thread else ""
