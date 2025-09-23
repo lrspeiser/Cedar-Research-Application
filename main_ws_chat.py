@@ -38,13 +38,14 @@ class WSDeps:
         self.project_dirs = kwargs["project_dirs"]
 
 
-def _ws_send_safe(ws: WebSocket, text: str) -> bool:
+async def _ws_send_safe(ws: WebSocket, text: str) -> bool:
     try:
         if getattr(ws, 'client_state', None) != WebSocketState.CONNECTED:
             return False
         try:
             asyncio.get_running_loop()
         except RuntimeError:
+            # Outside of loop; allow send attempt to raise and be caught below
             pass
         try:
             return bool((await ws.send_text(text)) or True)  # type: ignore[misc]

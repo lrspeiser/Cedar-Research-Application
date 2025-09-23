@@ -1226,9 +1226,8 @@ try:
         record_changelog=record_changelog,
         llm_client_config=_llm_client_config,
         tabular_import_via_llm=_tabular_import_via_llm,
-        execute_sql=_execute_sql,  # Add missing dependency
-        exec_img=_exec_img,  # Add missing dependency  
-        llm_summarize_action=_llm_summarize_action,  # Add missing dependency
+        # Optional deps (execute_sql, exec_img, llm_summarize_action) are intentionally omitted here
+        # because they may not be defined at import time. The WS orchestrator handles their absence.
         RegistrySessionLocal=RegistrySessionLocal,
         FileEntry=FileEntry,
         Dataset=Dataset,

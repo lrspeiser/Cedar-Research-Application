@@ -265,3 +265,15 @@ Use this section to log each change with:
 - Note: Missing dependencies (_execute_sql, _exec_img) need to be addressed in M2
 - Note: Full orchestration loop with tools to be migrated in later milestones
 - Next: Commit and proceed to M2
+
+### 2025-09-23 - M1 - Fixes for dev alias and legacy stub
+- What broke: /ws/chat2 alias failed to register at startup (NameError: _exec_img not defined). Legacy stub had await in non-async function (_ws_send_safe), which is unsafe if ever used.
+- Root cause: main.py attempted to pass optional deps (exec_img, llm_summarize_action) before those names were defined; main_ws_chat.py had a signature mismatch (def with await inside).
+- Fix implemented:
+  - main.py: Register /ws/chat2 using WSDeps without optional deps that aren’t defined at import-time; orchestrator tolerates missing optional deps.
+  - main_ws_chat.py: Changed _ws_send_safe to async def to match await usage.
+- Tests run:
+  - Focused: pytest -q tests/test_ws_chat_orchestrator.py → PASS
+  - Baseline: pytest -q → 3 known failures (UI prompt content and tabular import in test mode), unaffected by this change.
+- Logging/observability: Startup now logs "Registered /ws/chat2 from cedar_orchestrator module"; no stack trace on startup.
+- Commit: <pending in this step>
