@@ -79,7 +79,45 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return default
 
 
+def _load_env_files(paths: List[str]) -> None:
+    """Minimal .env loader (no external dependency). Does not print values; never overrides existing env.
+    Accepts KEY=VALUE lines, ignores comments and blanks.
+    """
+    def _parse_line(line: str) -> Optional[Tuple[str, str]]:
+        s = line.strip()
+        if not s or s.startswith('#') or '=' not in s:
+            return None
+        k, v = s.split('=', 1)
+        k = k.strip()
+        v = v.strip().strip('"').strip("'")
+        if not k:
+            return None
+        return (k, v)
+    for p in paths:
+        try:
+            if not p or not os.path.isfile(p):
+                continue
+            with open(p, 'r', encoding='utf-8', errors='ignore') as f:
+                for line in f:
+                    kv = _parse_line(line)
+                    if not kv:
+                        continue
+                    k, v = kv
+                    if os.getenv(k) is None:
+                        os.environ[k] = v
+        except Exception:
+            pass
+
+
 def _ensure_env() -> None:
+    # Load .env from cwd and from ~/CedarPyData/.env (matches app behavior; see README)
+    try:
+        home = os.path.expanduser('~')
+        data_env = os.path.join(home, 'CedarPyData', '.env')
+    except Exception:
+        data_env = None
+    _load_env_files([os.path.join(os.getcwd(), '.env'), data_env or ''])
+
     # Honor team rules: never use placeholders or stubs when testing web services.
     api_key = os.getenv("OPENAI_API_KEY") or os.getenv("CEDARPY_OPENAI_API_KEY")
     if not api_key or not api_key.strip():
