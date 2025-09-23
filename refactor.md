@@ -365,3 +365,21 @@ Use this section to log each change with:
   - tests/test_ws_chat2_sequence.py (dev alias) → PASS
 - Logging/observability: Debug prompts (including aggregator) are emitted; ACKs and SSE publishing preserved.
 - Commit: 2f71439
+
+### 2025-09-23 - M7 - Tests and CI
+- Changes:
+  - Added unit tests for cedar_tools (shell, db stub, web fetch): tests/test_cedar_tools.py → PASS
+  - Confirmed aggregator and component registry tests remain green.
+  - Canonical ws_chat test remains green after route flip.
+- CI: Ensure OPENAI_API_KEY secrets exist for real-key tests; no workflow changes committed in this step.
+- Next: address tabular_import run_import and readonly DB (queued follow-up) to get full suite green.
+- Commit: <this change>
+- Changes:
+  - Flipped canonical /ws/chat route to use the extracted orchestrator; moved legacy handler to /ws/chat_legacy.
+  - Kept /ws/chat2 alias for dev while validating parity.
+  - Added golden sequence test for /ws/chat2 covering submitted → processing → debug → final.
+- Tests run:
+  - tests/test_ws_chat_orchestrator.py (canonical) → PASS
+  - tests/test_ws_chat2_sequence.py (dev alias) → PASS
+- Logging/observability: Debug prompts (including aggregator) are emitted; ACKs and SSE publishing preserved.
+- Commit: 2f71439
