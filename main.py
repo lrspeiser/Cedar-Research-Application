@@ -7264,6 +7264,15 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
             if not thr:
                 thr = Thread(project_id=project_id, branch_id=branch.id, title="Ask")
                 db.add(thr); db.commit(); db.refresh(thr)
+        # Capture branch context as plain values to avoid detached-instance refreshes later in tool closures
+        try:
+            branch_id_int = int(getattr(branch, 'id', 0)) if branch is not None else 0
+        except Exception:
+            branch_id_int = 0
+        try:
+            branch_name_str = str(getattr(branch, 'name', 'Main') or 'Main') if branch is not None else 'Main'
+        except Exception:
+            branch_name_str = 'Main'
         if content:
             db.add(ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="user", content=content))
             db.commit()
@@ -7669,7 +7678,7 @@ Response formatting:
         try:
             # Determine project files dir
             paths = _project_dirs(project_id)
-            branch_dir_name = f"branch_{branch.name}"
+            branch_dir_name = f"branch_{branch_name_str}"
             project_dir = os.path.join(paths["files_root"], branch_dir_name)
             os.makedirs(project_dir, exist_ok=True)
             for u in urls[:10]:
@@ -7685,7 +7694,7 @@ Response formatting:
                         size = len(data)
                         mime, _ = mimetypes.guess_type(parsed)
                         ftype = file_extension_to_type(parsed)
-                        rec = FileEntry(project_id=project_id, branch_id=branch.id, filename=storage_name, display_name=parsed, file_type=ftype, structure=None, mime_type=mime or '', size_bytes=size, storage_path=os.path.abspath(disk_path), metadata_json=None, ai_processing=False)
+                        rec = FileEntry(project_id=project_id, branch_id=branch_id_int, filename=storage_name, display_name=parsed, file_type=ftype, structure=None, mime_type=mime or '', size_bytes=size, storage_path=os.path.abspath(disk_path), metadata_json=None, ai_processing=False)
                         tdb.add(rec); tdb.commit(); tdb.refresh(rec)
                         results.append({"url": u, "file_id": rec.id, "display_name": parsed, "bytes": size})
                 except Exception as e:
