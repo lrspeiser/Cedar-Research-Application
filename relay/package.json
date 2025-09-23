@@ -1,0 +1,13 @@
+{
+  "name": "cedarpy-relay",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "description": "Tiny SSE relay for CedarPy using Redis Pub/Sub",
+  "scripts": {
+    "start": "node relay.js"
+  },
+  "dependencies": {
+    "ioredis": "^5.4.1"
+  }
+}

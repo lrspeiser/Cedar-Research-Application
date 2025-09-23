@@ -331,6 +331,28 @@ What was wrong and how it was fixed (import-time NameError)
 Notes
 - This handshake is best-effort and uses an in-memory registry; if the server restarts, pending acks are cleared. It is intended for UI reliability and observability, not durability.
 
+## Redis + Node relay (SSE) for reliable incremental updates
+
+We now publish each chat/planner bubble to Redis and serve them to the browser via a tiny Node SSE relay.
+
+- Python publishes to Redis Pub/Sub per thread: channel cedar:thread:{thread_id}:pub
+- Node relay subscribes and serves Server-Sent Events at /sse/:threadId
+- Frontend connects with EventSource and renders bubbles as they arrive. We still post /api/chat/ack after rendering.
+
+Local run
+- Start Redis (or Valkey). On macOS with Homebrew: brew install valkey && valkey-server
+- Start the Node relay:
+  - cd relay && npm ci && npm start
+  - Env: CEDARPY_REDIS_URL (default redis://127.0.0.1:6379/0), CEDAR_RELAY_PORT (default 8808)
+- Start CedarPy as usual (Qt app or uvicorn).
+
+CI
+- GitHub Actions runs Redis as a job service and launches the Node relay before Playwright tests.
+
+Notes
+- App still emits WebSocket messages, but the UI prefers the SSE stream for rendering. WS remains for command/control and as a fallback.
+- If Redis or the relay isn’t running, incremental bubbles won’t appear over SSE, but WS may still provide updates.
+
 ## Front-end choice for embedded browser (QtWebEngine)
 
 ### Embedded UI testing via Playwright + CDP

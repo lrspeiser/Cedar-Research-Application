@@ -111,6 +111,41 @@ SHELL_API_TOKEN = os.getenv("CEDARPY_SHELL_API_TOKEN")
 LOGS_DIR = os.path.join(DATA_DIR, "logs", "shell")
 os.makedirs(LOGS_DIR, exist_ok=True)
 
+# Optional Redis (Valkey) for real-time relay (Node SSE). If not available, we silently skip publishing.
+REDIS_URL = os.getenv("CEDARPY_REDIS_URL") or "redis://127.0.0.1:6379/0"
+try:
+    import redis.asyncio as _redis
+except Exception:  # pragma: no cover
+    _redis = None
+
+_redis_client = None
+async def _get_redis():
+    global _redis_client
+    try:
+        if _redis is None:
+            return None
+        if _redis_client is None:
+            _redis_client = _redis.from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
+        return _redis_client
+    except Exception:
+        return None
+
+async def _publish_relay_event(obj: Dict[str, Any]) -> None:
+    try:
+        r = await _get_redis()
+        if r is None:
+            return
+        tid = obj.get("thread_id")
+        if not tid:
+            return
+        chan = f"cedar:thread:{tid}:pub"
+        # Keep the payload small; serialize as-is (frontend expects same shape)
+        import json as _json_pub
+        await r.publish(chan, _json_pub.dumps(obj))
+    except Exception:
+        # Best-effort only
+        pass
+
 # Default working directory for shell jobs (scoped, safe by default)
 SHELL_DEFAULT_WORKDIR = os.getenv("CEDARPY_SHELL_WORKDIR") or DATA_DIR
 try:
@@ -3000,9 +3035,7 @@ SELECT * FROM demo LIMIT 10;""")
           else { var div = document.createElement('div'); div.innerHTML = html; panel.appendChild(div.firstChild); }
         } catch(_){}
       }
-      ws.onmessage = function(ev){
-        refreshTimeout();
-        var m = null; try { m = JSON.parse(ev.data); } catch(_){ return; }
+      function handleEvent(m){
         if (!m) return;
         if (m.type === 'message') { try { if (m.thread_id) { upsertAllChatsItem(m.thread_id, null, String(m.text||'')); } } catch(_){ } ackEvent(m);
           try {
@@ -3464,10 +3497,28 @@ SELECT * FROM demo LIMIT 10;""")
             if (msgs) msgs.appendChild(wrapE);
           } catch(_){}
         }
+      }
+      ws.onmessage = function(ev){
+        refreshTimeout();
+        var m = null; try { m = JSON.parse(ev.data); } catch(_){ return; }
+        handleEvent(m);
       };
       ws.onerror = function(){ try { streamText.textContent = (streamText.textContent||'') + ' [ws-error]'; } catch(_){} };
       ws.onclose = function(){ try { if (window.unsubscribeCedarLogs && logSub) window.unsubscribeCedarLogs(logSub); } catch(_){}; try { if (currentStep && currentStep.node && !timedOut) { annotateTime(currentStep.node, _now() - currentStep.t0); currentStep = null; } if (!finalOrError && !timedOut) { streamText.textContent = (streamText.textContent||'') + ' [closed]'; } } catch(_){} };
     } catch(e) {}
+  }
+
+  function startSSE(threadId){
+    try {
+      if (!threadId) return;
+      try { if (window.__cedar_es) { window.__cedar_es.close(); } } catch(_){ }
+      var base = (window.CEDAR_RELAY_URL || (location.protocol + '//' + location.hostname + ':8808'));
+      var url = base.replace(/\/$/, '') + '/sse/' + encodeURIComponent(String(threadId));
+      var es = new EventSource(url);
+      window.__cedar_es = es;
+      es.onmessage = function(e){ try { var m = JSON.parse(e.data); handleEvent(m); } catch(_){} };
+      es.onerror = function(){ try { console.warn('[sse-error]'); } catch(_){} };
+    } catch(e) { try { console.warn('[sse-init-error]', e); } catch(_){} }
   }
   document.addEventListener('DOMContentLoaded', function(){
     try {
@@ -3506,6 +3557,7 @@ SELECT * FROM demo LIMIT 10;""")
           var dsid0 = sp.get('dataset_id') || (chatForm && chatForm.getAttribute('data-dataset-id')) || null;
           if (msg === 'File uploaded' && (tid0 || fid0)) {
             window.__uploadAutoChatStarted = true;
+            if (tid0) { startSSE(tid0); }
             startWS('The user uploaded this file to the system', tid0, fid0, dsid0);
           }
         }
@@ -3558,7 +3610,8 @@ SELECT * FROM demo LIMIT 10;""")
           var tid = chatForm.getAttribute('data-thread-id') || null;
           var fid = chatForm.getAttribute('data-file-id') || null;
           var dsid = chatForm.getAttribute('data-dataset-id') || null;
-          // Start streaming immediately; server will auto-create a thread if needed
+          // Start streaming immediately; prefer SSE (Node relay) for events; WS remains for control/fallback
+          if (tid) { startSSE(tid); }
           startWS(text, tid, fid, dsid); try { t.value=''; } catch(_){ }
         });
       }
@@ -7398,6 +7451,22 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
                 try:
                     eid = uuid.uuid4().hex
                     obj['eid'] = eid
+                    # Ensure thread_id present when possible
+                    try:
+                        if ('thread_id' not in obj or obj.get('thread_id') is None) and ('thr' in locals() or True):
+                            try:
+                                # thr is defined later; capture from closure if available
+                                _tid_local = None
+                                try:
+                                    _tid_local = thr.id  # type: ignore[name-defined]
+                                except Exception:
+                                    _tid_local = obj.get('thread_id')
+                                if _tid_local is not None:
+                                    obj['thread_id'] = _tid_local
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
                     info = { 'type': obj.get('type'), 'function': obj.get('function'), 'thread_id': obj.get('thread_id') }
                     try:
                         t_ms = int(os.getenv('CEDARPY_ACK_TIMEOUT_MS', '10000'))
@@ -7409,6 +7478,11 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
                         pass
                 except Exception:
                     pass
+            # Publish to Redis (best-effort) for Node SSE relay
+            try:
+                asyncio.get_event_loop().create_task(_publish_relay_event(obj))
+            except Exception:
+                pass
             event_q.put_nowait(json.dumps(obj))
         except Exception:
             pass
