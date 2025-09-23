@@ -3513,14 +3513,23 @@ SELECT * FROM demo LIMIT 10;""")
   function startSSE(threadId){
     try {
       if (!threadId) return;
-      try { if (window.__cedar_es) { window.__cedar_es.close(); } } catch(_){ }
+      try { if (window.__cedar_es) { try { window.__cedar_es.close(); } catch(_){} } } catch(_){ }
       var base = (window.CEDAR_RELAY_URL || (location.protocol + '//' + location.hostname + ':8808'));
       var url = base.replace(/\/$/, '') + '/sse/' + encodeURIComponent(String(threadId));
       var es = new EventSource(url);
       window.__cedar_es = es;
-      es.onmessage = function(e){ try { var m = JSON.parse(e.data); handleEvent(m); } catch(_){} };
-      es.onerror = function(){ try { console.warn('[sse-error]'); } catch(_){} };
-      SSE_ACTIVE = true;
+      var gotMsg = false;
+      es.onmessage = function(e){
+        try { var m = JSON.parse(e.data); gotMsg = true; SSE_ACTIVE = true; handleEvent(m); } catch(_){}
+      };
+      es.onerror = function(){
+        try { console.warn('[sse-error]'); } catch(_){}
+        // If we haven't received any messages yet, disable SSE preference so WS can deliver
+        if (!gotMsg) {
+          try { es.close(); } catch(_){}
+          SSE_ACTIVE = false;
+        }
+      };
     } catch(e) { try { console.warn('[sse-init-error]', e); } catch(_){} }
   }
   document.addEventListener('DOMContentLoaded', function(){
