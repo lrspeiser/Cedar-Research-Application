@@ -685,30 +685,51 @@ Response formatting:
             except Exception:
                 pass
 
-        # Simple aggregator stub: prefer example.summarize summary; else compose basic text
+        # Aggregation (M5): prefer LLM aggregator when available; otherwise use simple summarizer preference
         final_text = None
         final_title = None
-        try:
-            for r in results:
-                if r["name"] == "example.summarize" and isinstance(r.get("content"), dict):
-                    s = r["content"].get("summary") if isinstance(r["content"], dict) else None
-                    if isinstance(s, str) and s.strip():
-                        final_text = s.strip()
-                        final_title = "Summary"
-                        break
-        except Exception:
-            pass
-        if not final_text:
-            # Fallback aggregation (no fabrication: present minimal info)
-            final_text = (content or "").strip()[:200] or "Done."
-            final_title = "Assistant"
+        final_json = None
+        used_aggregator = False
+        if client and model:
+            try:
+                from cedar_orchestrator import aggregate as _agg
+                agg_res = _agg.aggregate(content, results, client=client, model=model)
+                used_aggregator = True
+                # Emit aggregator debug prompt
+                try:
+                    _enqueue({"type": "debug", "prompt": agg_res.get("debug_prompt"), "component": "aggregator", "thread_id": thr.id})
+                except Exception:
+                    pass
+                final_json = agg_res.get("final_json")
+                final_text = agg_res.get("final_text")
+                final_title = (final_json.get("args") or {}).get("title") if isinstance(final_json, dict) else None
+            except Exception as e:
+                # On aggregator error: emit error and close (no fabrication)
+                try:
+                    _enqueue({"type": "error", "error": f"aggregator: {type(e).__name__}: {e}"})
+                except Exception:
+                    pass
+        if not used_aggregator:
+            try:
+                for r in results:
+                    if r["name"] == "example.summarize" and isinstance(r.get("content"), dict):
+                        s = r["content"].get("summary") if isinstance(r["content"], dict) else None
+                        if isinstance(s, str) and s.strip():
+                            final_text = s.strip()
+                            final_title = "Summary"
+                            break
+            except Exception:
+                pass
+            if not final_text:
+                final_text = (content or "").strip()[:200] or "Done."
+                final_title = "Assistant"
+            final_json = {"function": "final", "args": {"text": final_text, "title": final_title, "run_summary": [f"components: {', '.join(cand)}"]}}
 
-        final_json = {"function": "final", "args": {"text": final_text, "title": final_title, "run_summary": [f"components: {', '.join(cand)}"]}}
-
-        try:
-            _enqueue({"type": "final", "text": final_text, "json": final_json, "thread_id": thr.id}, require_ack=True)
-        except Exception:
-            pass
+        if final_json:
+            try:
+                _enqueue({"type": "final", "text": final_text, "json": final_json, "thread_id": thr.id}, require_ack=True)
+            except Exception:
+                pass
 
         try:
             await event_q.put(None)
