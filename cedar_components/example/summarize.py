@@ -17,6 +17,7 @@ async def summarize_run(payload: Dict[str, Any], ctx: OrchestratorCtx) -> Compon
     prompt = [
         {"role": "system", "content": "You are a concise summarizer. Return a short summary (<= 200 chars)."},
         {"role": "user", "content": text or "(empty)"},
+        {"role": "user", "content": "Component: example.summarize"},
     ]
     # Trivial summary logic, deterministic and safe for unit tests
     summary = (text or "").strip().replace("\n", " ")[:200]

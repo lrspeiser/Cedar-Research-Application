@@ -16,6 +16,7 @@ async def retrieve_docs_run(payload: Dict[str, Any], ctx: OrchestratorCtx) -> Co
     prompt = [
         {"role": "system", "content": "Retrieve relevant documents from the project's index (placeholder)."},
         {"role": "user", "content": query or "(empty query)"},
+        {"role": "user", "content": "Component: retrieval.retrieve_docs"},
     ]
     # Placeholder: return empty results; integration with LangExtract/SQLite will follow in M8
     results = []

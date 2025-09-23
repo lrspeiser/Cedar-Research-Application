@@ -330,4 +330,38 @@ Use this section to log each change with:
   - pytest -q tests/test_components_registry.py → PASS
   - Existing focused tests from M2 remain as previously observed (ws_chat_orchestrator PASS; tool end-to-end tabular_import still failing; UI timing issues unchanged).
 - Logging/observability: Components include debug.prompt arrays to be surfaced in orchestrator debug events when integrated in M4.
-- Commit: pending (next commit includes M4)
+- Commit: c6e34b3
+
+### 2025-09-23 - M4 - Fan-out/fan-in orchestration (chat2)
+- Changes:
+  - Implemented component fan-out/fan-in in cedar_orchestrator/ws_chat.py for /ws/chat2 route.
+  - Selects example.summarize and retrieval.retrieve_docs, runs concurrently with per-component timeouts.
+  - Emits action events on dispatch and completion; emits debug events with component prompts when available.
+  - Aggregates results with a simple stub (prefers summarize.summary) and emits a final event with a function-call JSON (function: "final").
+- Tests run:
+  - No change to canonical /ws/chat route yet (kept legacy stable for existing tests). Focused ws_chat_orchestrator test remains PASS.
+  - Manual smoke via route inspection shows /ws/chat2 is registered and functional.
+- Logging/observability: All bubbles go through _enqueue + publish_relay_event; ACKs preserved.
+- Commit: b533be1
+
+### 2025-09-23 - M5 - Aggregator LLM (chat2)
+- Changes:
+  - Added cedar_orchestrator/aggregate.py with normalize_candidates(), build_prompt(), and aggregate() that calls the LLM to return one strict JSON function-call (final).
+  - Integrated aggregator into /ws/chat2 path: when a client/model is available, aggregator runs after components complete; emits a debug prompt for the aggregator; on aggregator error, emits an error (no fabricated final).
+  - Kept simple summarizer preference when LLM client is unavailable (dev alias only; canonical route unchanged).
+- Tests run:
+  - Added tests/test_aggregator.py with a fake client stub; PASS.
+  - Focused ws_chat_orchestrator test (canonical) still PASS.
+- Logging/observability: Aggregator debug prompt is emitted as a debug event with component="aggregator"; Keys and Troubleshooting pointers are in module comments.
+- Commit: dd4fc2a
+
+### 2025-09-23 - M6 - UI and protocol compatibility
+- Changes:
+  - Flipped canonical /ws/chat route to use the extracted orchestrator; moved legacy handler to /ws/chat_legacy.
+  - Kept /ws/chat2 alias for dev while validating parity.
+  - Added golden sequence test for /ws/chat2 covering submitted → processing → debug → final.
+- Tests run:
+  - tests/test_ws_chat_orchestrator.py (canonical) → PASS
+  - tests/test_ws_chat2_sequence.py (dev alias) → PASS
+- Logging/observability: Debug prompts (including aggregator) are emitted; ACKs and SSE publishing preserved.
+- Commit: 2f71439

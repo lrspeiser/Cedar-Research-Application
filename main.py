@@ -1244,9 +1244,10 @@ try:
         register_ack=__ack,
         project_dirs=_project_dirs,
     )
-    # Register temporary dev route /ws/chat2 using extracted orchestrator
+    # Register canonical and dev routes using extracted orchestrator
+    register_ws_chat(app, deps, route_path="/ws/chat/{project_id}")
     register_ws_chat(app, deps, route_path="/ws/chat2/{project_id}")
-    print("[startup] Registered /ws/chat2 from cedar_orchestrator module")
+    print("[startup] Registered /ws/chat and /ws/chat2 from cedar_orchestrator module")
 except Exception as e:
     print(f"[startup] Could not register /ws/chat2: {type(e).__name__}: {e}")
     pass
@@ -7142,7 +7143,7 @@ async def _ws_send_safe(ws: WebSocket, text: str) -> bool:
     except Exception:
         return False
 
-@app.websocket("/ws/chat/{project_id}")
+@app.websocket("/ws/chat_legacy/{project_id}")
 async def ws_chat_stream(websocket: WebSocket, project_id: int):
     await websocket.accept()
     # Queue-based event streaming to the client
