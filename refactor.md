@@ -247,3 +247,10 @@ Use this section to log each change with:
 - Fix implemented
 - Tests added/updated
 - Logging/observability added
+
+### 2025-09-23 - M0 - Initial setup
+- Created/verified this refactor.md file
+- Set up todo list with milestones M0-M10
+- Verified environment: Python 3.13.5, venv active, ~/CedarPyData/.env present
+- Baseline test shows import issues (need PYTHONPATH for tests)
+- Next: Commit and proceed to M1
