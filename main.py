@@ -552,6 +552,58 @@ def _llm_client_config():
                     joined = ""
                 out = None
                 try:
+                    # Tabular import codegen stub: return valid Python code with run_import()
+                    if ("Generate the code now." in joined) or ("run_import(" in joined) or ("ONLY Python source code" in joined and "sqlite" in joined.lower()):
+                        code = '''\
+import csv, sqlite3, re, io
+
+def _snake(s):
+    s = re.sub(r'[^0-9a-zA-Z]+', '_', str(s or '').strip()).strip('_').lower()
+    if not s:
+        s = 'col'
+    if s[0].isdigit():
+        s = 'c_' + s
+    return s
+
+def run_import(src_path, sqlite_path, table_name, project_id, branch_id):
+    conn = sqlite3.connect(sqlite_path)
+    cur = conn.cursor()
+    # Drop/recreate table
+    cur.execute('DROP TABLE IF EXISTS ' + table_name)
+    # Inspect header
+    with open(src_path, newline='', encoding='utf-8') as f:
+        r = csv.reader(f)
+        header = next(r, None)
+        if header and len(header) > 0:
+            cols = [_snake(h) for h in header]
+        else:
+            # Peek first data row to decide width
+            row = next(r, None)
+            if row is None:
+                cols = ['col_1']
+                rows = []
+            else:
+                n = max(1, len(row))
+                cols = ['col_' + str(i+1) for i in range(n)]
+                rows = [row]
+        col_defs = ', '.join([c + ' TEXT' for c in cols])
+        cur.execute('CREATE TABLE IF NOT EXISTS ' + table_name + ' (id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER NOT NULL, branch_id INTEGER NOT NULL, ' + col_defs + ')')
+        placeholders = ','.join(['?'] * (2 + len(cols)))
+        insert_sql = 'INSERT INTO ' + table_name + ' (project_id, branch_id, ' + ','.join(cols) + ') VALUES (' + placeholders + ')'
+        ins = 0
+        if 'rows' in locals():
+            for row in rows:
+                vals = [project_id, branch_id] + [ (row[i] if i < len(row) else None) for i in range(len(cols)) ]
+                cur.execute(insert_sql, vals)
+                ins += 1
+        for row in r:
+            vals = [project_id, branch_id] + [ (row[i] if i < len(row) else None) for i in range(len(cols)) ]
+            cur.execute(insert_sql, vals)
+            ins += 1
+    conn.commit(); conn.close()
+    return {"ok": True, "table": table_name, "rows_inserted": ins, "columns": cols, "warnings": []}
+'''
+                        return _StubResp(code)
                     if "Classify incoming files" in joined or "Classify this file" in joined:
                         # File classification stub
                         out = {
