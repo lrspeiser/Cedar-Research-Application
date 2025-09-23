@@ -136,6 +136,9 @@ def _ensure_env() -> None:
     os.environ["CEDARPY_TABULAR_MODEL"] = os.getenv("CEDARPY_TABULAR_MODEL", "gpt-5")
     # Ensure WS fast model does not pick a non-gpt-5 default
     os.environ["CEDARPY_FAST_MODEL"] = os.getenv("CEDARPY_FAST_MODEL", "gpt-5")
+    # Enable WS thinking/planner by default for this audit run; uses gpt-5-mini
+    os.environ["CEDARPY_WS_THINKING"] = os.getenv("CEDARPY_WS_THINKING", "1")
+    os.environ["CEDARPY_THINKING_MODEL"] = os.getenv("CEDARPY_THINKING_MODEL", "gpt-5-mini")
 
 
 class App:
@@ -370,8 +373,13 @@ def main() -> int:
                 elif t == "action":
                     fn = msg.get("function")
                     _print_block(f"WS ACTION: {fn}", msg.get("call"))
+                elif t == "thinking":
+                    print("[ws thinking]", (msg.get("text") or "").strip(), f"(elapsed_ms={msg.get('elapsed_ms')}, model={msg.get('model')})")
                 elif t == "info":
-                    print(f"[ws info] {msg.get('stage')}")
+                    if msg.get('elapsed_ms') is not None:
+                        print(f"[ws info] {msg.get('stage')} (elapsed_ms={msg.get('elapsed_ms')}, model={msg.get('model')})")
+                    else:
+                        print(f"[ws info] {msg.get('stage')}")
                 elif t == "final":
                     _print_block("WS FINAL text", msg.get("text"))
                     _print_block("WS FINAL json", msg.get("json"))
@@ -401,6 +409,50 @@ def main() -> int:
             print(f"[ws] got_final={got_final}")
     except Exception as e:
         _print_block("WS EXCEPTION", {"error": f"{type(e).__name__}: {e}"})
+
+    # Second WS demo: simple math prompt; with planner thinking enabled we expect it to prefer a code step over memory
+    _print_header("WebSocket Orchestrator Demo #2 (what is 2+2)")
+    try:
+        with app.client.websocket_connect(f"/ws/chat/{pid}") as ws:
+            payload2 = {
+                "action": "chat",
+                "content": "what is 2+2",
+                "branch_id": main_bid,
+                "debug": True,
+            }
+            _print_block("REQUEST (WS)", {"url": f"/ws/chat/{pid}", "payload": payload2})
+            ws.send_text(json.dumps(payload2))
+            got_final2 = False
+            for _ in range(200):
+                raw = ws.receive_text()
+                try:
+                    msg = json.loads(raw)
+                except Exception:
+                    print("recv (text):", raw)
+                    continue
+                t = msg.get("type")
+                if t == "thinking":
+                    print("[ws thinking]", (msg.get("text") or "").strip(), f"(elapsed_ms={msg.get('elapsed_ms')}, model={msg.get('model')})")
+                elif t == "action":
+                    _print_block(f"WS ACTION: {msg.get('function')}", msg.get("call"))
+                elif t == "info":
+                    if msg.get('elapsed_ms') is not None:
+                        print(f"[ws info] {msg.get('stage')} (elapsed_ms={msg.get('elapsed_ms')}, model={msg.get('model')})")
+                    else:
+                        print(f"[ws info] {msg.get('stage')}")
+                elif t == "final":
+                    _print_block("WS FINAL text", msg.get("text"))
+                    _print_block("WS FINAL json", msg.get("json"))
+                    got_final2 = True
+                    break
+                elif t == "error":
+                    _print_block("WS ERROR", msg)
+                    break
+                else:
+                    _print_block("WS EVENT", msg)
+            print(f"[ws-2] got_final={got_final2}")
+    except Exception as e:
+        _print_block("WS EXCEPTION (2)", {"error": f"{type(e).__name__}: {e}"})
 
     print("\nAll done. If any step failed, scroll up for the REQUEST/RESPONSE/TO LLM blocks and error messages.")
     return 0
