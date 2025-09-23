@@ -436,6 +436,56 @@ def ensure_project_initialized(project_id: int) -> None:
 # Models
 # ----------------------------------------------------------------------------------
 
+# Step-level ack registry (best-effort, in-memory). Used to verify the UI rendered a bubble.
+_ack_store: Dict[str, Dict[str, Any]] = {}
+
+async def _register_ack(eid: str, info: Dict[str, Any], timeout_ms: int = 10000) -> None:
+    try:
+        _ack_store[eid] = {
+            'eid': eid,
+            'info': info,
+            'created_at': datetime.utcnow().isoformat()+"Z",
+            'acked': False,
+            'ack_at': None,
+        }
+        async def _timeout():
+            try:
+                await asyncio.sleep(max(0.5, timeout_ms/1000.0))
+                rec = _ack_store.get(eid)
+                if rec and not rec.get('acked'):
+                    try:
+                        print(f"[ack-timeout] eid={eid} info={rec.get('info')}")
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        try:
+            asyncio.get_event_loop().create_task(_timeout())
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+@app.post("/api/chat/ack")
+def api_chat_ack(payload: Dict[str, Any]):
+    eid = str((payload or {}).get('eid') or '').strip()
+    if not eid:
+        return JSONResponse({"ok": False, "error": "missing eid"}, status_code=400)
+    rec = _ack_store.get(eid)
+    if rec:
+        rec['acked'] = True
+        rec['ack_at'] = datetime.utcnow().isoformat()+"Z"
+        try:
+            print(f"[ack] eid={eid} type={rec.get('info',{}).get('type')} thread={rec.get('info',{}).get('thread_id')}")
+        except Exception:
+            pass
+        return JSONResponse({"ok": True})
+    try:
+        print(f"[ack-miss] unknown eid={eid} payload={payload}")
+    except Exception:
+        pass
+    return JSONResponse({"ok": False, "error": "unknown eid"}, status_code=404)
+
 class Project(Base):
     __tablename__ = "projects"  # Central registry only
     id = Column(Integer, primary_key=True)
@@ -2615,9 +2665,9 @@ SELECT * FROM demo LIMIT 10;""")
     except Exception:
         pass
     all_chats_panel_html = (
-        "<div class='card' style='padding:12px'>"
+        "<div id='allchats-panel' class='card' style='padding:12px'>"
         "  <h3 style='margin-bottom:6px'>All Chats</h3>"
-        + ("".join(all_chats_items) or "<div class='muted small'>(No threads yet)</div>")
+        + ("".join(all_chats_items) or "<div class='muted small' id='allchats-empty'>(No threads yet)</div>")
         + "</div>"
     )
 
@@ -2922,11 +2972,36 @@ SELECT * FROM demo LIMIT 10;""")
           }
         } catch(e){}
       };
+      function ackEvent(m){
+        try {
+          if (!m || !m.eid) return;
+          fetch('/api/chat/ack', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project_id: PROJECT_ID, branch_id: BRANCH_ID, thread_id: (m.thread_id||threadId||null), eid: m.eid, type: m.type, fn: m.function||null }) }).catch(function(_){})
+        } catch(_){}
+      }
+      function upsertAllChatsItem(tid, title, preview){
+        try {
+          var panel = document.getElementById('allchats-panel'); if (!panel) return;
+          var empty = document.getElementById('allchats-empty'); if (empty) { try { empty.remove(); } catch(_){} }
+          var link = `/project/${PROJECT_ID}?branch_id=${BRANCH_ID}&thread_id=${encodeURIComponent(String(tid))}`;
+          var items = panel.querySelectorAll('.thread-item');
+          var found = null;
+          items.forEach(function(it){ var a=it.querySelector('a'); if (a && a.getAttribute('href')===link) { found = it; } });
+          var html = "<div class='thread-item' style='border-bottom:1px solid var(--border); padding:10px 0'>"
+                   + "  <div style='display:flex; align-items:center; gap:8px; justify-content:space-between'>"
+                   + "    <div style='font-weight:600'><a href='"+link+"' style='text-decoration:none; color:inherit'>"+(title||'New Thread')+"</a></div>"
+                   + "    <div class='small muted'></div>"
+                   + "  </div>"
+                   + "  <div class='bubbles' style='display:flex; gap:6px; flex-wrap:wrap; margin-top:6px'>" + (preview? ("<div class='bubble user' style='font-size:12px; padding:6px 8px; border-radius:12px; max-width:360px;'><div class='content' style='white-space:pre-wrap'>"+ (preview||'') +"</div></div>") : "") + "</div>"
+                   + "</div>";
+          if (found) { found.outerHTML = html; }
+          else { var div = document.createElement('div'); div.innerHTML = html; panel.appendChild(div.firstChild); }
+        } catch(_){}
+      }
       ws.onmessage = function(ev){
         refreshTimeout();
         var m = null; try { m = JSON.parse(ev.data); } catch(_){ return; }
         if (!m) return;
-        if (m.type === 'message') {
+        if (m.type === 'message') { try { if (m.thread_id) { upsertAllChatsItem(m.thread_id, null, String(m.text||'')); } } catch(_){ } ackEvent(m);
           try {
             var r = String(m.role||'assistant');
             if (r === 'user') {
@@ -2998,6 +3073,7 @@ SELECT * FROM demo LIMIT 10;""")
             } catch(_) {}
             if (msgs) msgs.appendChild(wrapP);
             stepAdvance('assistant:prompt', wrapP);
+            ackEvent(m);
           } catch(_) { }
         } else if (m.type === 'action') {
           try {
@@ -3102,6 +3178,8 @@ SELECT * FROM demo LIMIT 10;""")
             wrap.appendChild(meta); wrap.appendChild(bub); wrap.appendChild(details);
             if (msgs) msgs.appendChild(wrap);
             stepAdvance('system:'+fn, wrap);
+            ackEvent(m);
+            try { if (fn === 'thread_update' && m.call && m.call.thread_id) { upsertAllChatsItem(m.call.thread_id, String(m.call.title||''), null); } } catch(_){ }
 
             // If this is a plan function, also update the right-side Plan panel live
             if (fn === 'plan') {
@@ -3141,7 +3219,7 @@ SELECT * FROM demo LIMIT 10;""")
               } catch(_){}
             }
           } catch(_){ }
-        } else if (m.type === 'thinking_start') {
+        } else if (m.type === 'thinking_start') { ackEvent(m);
           try {
             // Create a live planning bubble if not already present
             if (!thinkWrap) {
@@ -3170,7 +3248,7 @@ SELECT * FROM demo LIMIT 10;""")
               thinkText.textContent = (thinkText.textContent ? thinkText.textContent : '') + String(m.delta);
             }
           } catch(_) {}
-        } else if (m.type === 'thinking') {
+        } else if (m.type === 'thinking') { ackEvent(m);
           try {
             // Ensure bubble exists
             if (!thinkWrap) {
@@ -3367,10 +3445,11 @@ SELECT * FROM demo LIMIT 10;""")
             setTimeout(function(){ try { if (stream && stream.parentNode) stream.parentNode.removeChild(stream); } catch(_){} }, 400);
           } catch(_) { try { if (stream && stream.parentNode) stream.parentNode.removeChild(stream); } catch(_){} }
           stepAdvance('assistant:final', null);
+          ackEvent(m);
         } else if (m.type === 'error') {
           finalOrError = true;
           try { if (timeoutId) clearTimeout(timeoutId); } catch(_){}
-          streamText.textContent = '[error] ' + (m.error || 'unknown');
+          streamText.textContent = '[error] ' + (m.error || 'unknown'); ackEvent(m);
           clearSpinner();
           try {
             // Also append a system bubble with error details for visibility in the thread
@@ -3459,6 +3538,16 @@ SELECT * FROM demo LIMIT 10;""")
 
       if (chatForm) {
         chatForm.addEventListener('submit', async function(ev){
+          // Ensure a thread id exists so All Chats can render immediately
+          try {
+            var tid0 = chatForm.getAttribute('data-thread-id');
+            if (!tid0) {
+              var fid0 = chatForm.getAttribute('data-file-id') || null;
+              var dsid0 = chatForm.getAttribute('data-dataset-id') || null;
+              var newTid0 = await ensureThreadId(null, fid0, dsid0);
+              if (newTid0) { tid0 = newTid0; }
+            }
+          } catch(_){}
           // Do not force-switch tabs; keep the UI interactive while streaming
           try { ev.preventDefault(); } catch(_){ }
           var t = document.getElementById('chatInput');
@@ -7300,8 +7389,23 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
         except Exception:
             pass
     sender_task = _aio.create_task(_sender())
-    def _enqueue(obj: dict):
+    def _enqueue(obj: dict, require_ack: bool = False):
         try:
+            if require_ack:
+                try:
+                    eid = uuid.uuid4().hex
+                    obj['eid'] = eid
+                    info = { 'type': obj.get('type'), 'function': obj.get('function'), 'thread_id': obj.get('thread_id') }
+                    try:
+                        t_ms = int(os.getenv('CEDARPY_ACK_TIMEOUT_MS', '10000'))
+                    except Exception:
+                        t_ms = 10000
+                    try:
+                        asyncio.get_event_loop().create_task(_register_ack(eid, info, timeout_ms=t_ms))
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
             event_q.put_nowait(json.dumps(obj))
         except Exception:
             pass
@@ -7378,12 +7482,16 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
                     new_title = (content.strip().splitlines()[0])[:10] or "(untitled)"
                     thr.title = new_title
                     db.commit()
+                    try:
+                        _enqueue({"type": "action", "function": "thread_update", "text": "Thread updated", "call": {"thread_id": thr.id, "title": new_title}, "thread_id": thr.id}, require_ack=True)
+                    except Exception:
+                        pass
             except Exception:
                 try: db.rollback()
                 except Exception: pass
             # Emit backend-driven user message and processing ACK (frontend only renders backend events)
             try:
-                _enqueue({"type": "message", "role": "user", "text": content})
+                _enqueue({"type": "message", "role": "user", "text": content, "thread_id": thr.id}, require_ack=True)
             except Exception:
                 pass
             try:
@@ -7396,7 +7504,7 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
                             ack_text = f"Processing {f_ack.display_name}…"
                 except Exception:
                     pass
-                _enqueue({"type": "action", "function": "processing", "text": ack_text})
+                _enqueue({"type": "action", "function": "processing", "text": ack_text, "thread_id": thr.id}, require_ack=True)
             except Exception:
                 pass
     except Exception:
@@ -7679,7 +7787,7 @@ Response formatting:
             messages.append({"role": "user", "content": content})
         # Emit the prepared prompt so the UI can show an "assistant prompt" bubble with full JSON
         try:
-            _enqueue({"type": "prompt", "messages": messages, "thread_id": thr.id})
+            _enqueue({"type": "prompt", "messages": messages, "thread_id": thr.id}, require_ack=True)
         except Exception:
             pass
         # Persist the prepared prompt for replay across app restarts
@@ -8151,7 +8259,7 @@ Response formatting:
                     thinking_text = ""
                     try:
                         try:
-                            _enqueue({"type": "thinking_start", "model": thinking_model})
+                            _enqueue({"type": "thinking_start", "model": thinking_model, "thread_id": thr.id}, require_ack=True)
                         except Exception:
                             pass
                         stream_th = client.chat.completions.create(
@@ -8175,7 +8283,7 @@ Response formatting:
                         resp_th = client.chat.completions.create(model=thinking_model, messages=think_messages)
                         thinking_text = (resp_th.choices[0].message.content or "").strip()
                     t_th1 = _time.time()
-                    _enqueue({"type": "thinking", "text": thinking_text, "elapsed_ms": int((t_th1 - t_th0)*1000), "model": thinking_model})
+                    _enqueue({"type": "thinking", "text": thinking_text, "elapsed_ms": int((t_th1 - t_th0)*1000), "model": thinking_model, "thread_id": thr.id}, require_ack=True)
                     # Pass thinking + context into the strict-JSON call
                     messages.append({"role": "user", "content": "Thinking (planner):"})
                     messages.append({"role": "user", "content": thinking_text})
@@ -8237,7 +8345,7 @@ Response formatting:
                         t_pth0 = _time.time()
                         thinking_post = ""
                         try:
-                            _enqueue({"type": "thinking_start", "model": thinking_model, "phase": "post"})
+                            _enqueue({"type": "thinking_start", "model": thinking_model, "phase": "post", "thread_id": thr.id}, require_ack=True)
                             stream_th2 = client.chat.completions.create(model=thinking_model, messages=think_messages_post, stream=True)
                             for chunk2 in stream_th2:
                                 try:
@@ -8254,7 +8362,7 @@ Response formatting:
                             resp_th2 = client.chat.completions.create(model=thinking_model, messages=think_messages_post)
                             thinking_post = (resp_th2.choices[0].message.content or "").strip()
                         t_pth1 = _time.time()
-                        _enqueue({"type": "thinking", "text": thinking_post, "elapsed_ms": int((t_pth1 - t_pth0)*1000), "model": thinking_model, "phase": "post"})
+                        _enqueue({"type": "thinking", "text": thinking_post, "elapsed_ms": int((t_pth1 - t_pth0)*1000), "model": thinking_model, "phase": "post", "thread_id": thr.id}, require_ack=True)
                         messages.append({"role": "user", "content": "Post-LLM reflection:"})
                         messages.append({"role": "user", "content": thinking_post})
                         # Reinforce plan policy explicitly on the next turn
@@ -8397,7 +8505,7 @@ Response formatting:
                         except Exception:
                             pass
                         try:
-                            _enqueue({"type": "action", "function": "plan", "text": "Plan created", "call": call})
+                            _enqueue({"type": "action", "function": "plan", "text": "Plan created", "call": call, "thread_id": thr.id}, require_ack=True)
                         except Exception:
                             pass
                     except Exception:
@@ -8443,7 +8551,8 @@ Response formatting:
                             "function": "plan_update",
                             "text": "Plan started",
                             "call": {"steps": plan_ctx["steps"]},
-                        })
+                            "thread_id": thr.id,
+                        }, require_ack=True)
                     except Exception:
                         pass
 
@@ -8460,8 +8569,9 @@ Response formatting:
                                     "type": "action",
                                     "function": "submit_step",
                                     "text": f"Submitting Step 1: {step.get('title') or fn}",
-                                    "call": {"step": step, "template": {"function": tmpl.get("function"), "args": tmpl.get("args") or {}}}
-                                })
+                                    "call": {"step": step, "template": {"function": tmpl.get("function"), "args": tmpl.get("args") or {}}},
+                                    "thread_id": thr.id,
+                                }, require_ack=True)
                             except Exception:
                                 pass
                             if _args_complete_for(fn, args0) and (fn in tools_map):
@@ -8571,7 +8681,7 @@ Response formatting:
                             if idxf is not None and 0 <= idxf < len(plan_ctx['steps']):
                                 plan_ctx['steps'][idxf]['status'] = 'done'
                                 plan_ctx['steps'][idxf]['finished_at'] = datetime.utcnow().isoformat()+"Z"
-                                _enqueue({"type": "action", "function": "plan_update", "text": "Plan updated", "call": {"steps": plan_ctx['steps']}})
+                                _enqueue({"type": "action", "function": "plan_update", "text": "Plan updated", "call": {"steps": plan_ctx['steps']}, "thread_id": thr.id}, require_ack=True)
                     except Exception:
                         pass
                 else:
@@ -8599,8 +8709,9 @@ Response formatting:
                     "type": "action",
                     "function": name,
                     "text": str((call_obj or {}).get("output_to_user") or f"About to run {name}"),
-                    "call": call_obj or {"function": name, "args": (args or {})}
-                })
+                    "call": call_obj or {"function": name, "args": (args or {})},
+                    "thread_id": thr.id,
+                }, require_ack=True)
             except Exception:
                 pass
             fn = tools_map.get(name)
@@ -8636,7 +8747,8 @@ Response formatting:
                     "function": "tool_result",
                     "text": summ,
                     "call": {"function": name, "args": args, "result": {k: result.get(k) for k in list(result.keys())[:6]}},
-                })
+                    "thread_id": thr.id,
+                }, require_ack=True)
             except Exception:
                 pass
 
@@ -8657,7 +8769,8 @@ Response formatting:
                                 "function": "plan_update",
                                 "text": "Plan updated",
                                 "call": {"steps": plan_ctx["steps"]},
-                            })
+                                "thread_id": thr.id,
+                            }, require_ack=True)
                         except Exception:
                             pass
                         # If done and more steps remain, advance to next step and nudge with template
@@ -8675,7 +8788,8 @@ Response formatting:
                                     "function": "plan_update",
                                     "text": "Proceeding to next step",
                                     "call": {"steps": plan_ctx["steps"]},
-                                })
+                                    "thread_id": thr.id,
+                                }, require_ack=True)
                             except Exception:
                                 pass
                             # Announce next step
@@ -8703,8 +8817,9 @@ Response formatting:
                                     "type": "action",
                                     "function": "submit_step",
                                     "text": f"Re-attempting Step {idx+1}: {cur_step.get('title') or cfn}",
-                                    "call": {"step": cur_step, "template": {"function": tmpl.get("function"), "args": tmpl.get("args") or {}}}
-                                })
+                                    "call": {"step": cur_step, "template": {"function": tmpl.get("function"), "args": tmpl.get("args") or {}}},
+                                    "thread_id": thr.id,
+                                }, require_ack=True)
                                 messages.append({"role": "user", "content": f"Re-attempt plan step {idx+1}. Respond with ONE function call ONLY matching this template (STRICT JSON):"})
                                 messages.append({"role": "user", "content": json.dumps({"function": tmpl.get("function"), "args": tmpl.get("args") or {}}, ensure_ascii=False)})
                                 forced_submit_once = False  # reset nudge/synthesize counter for this step
@@ -8755,7 +8870,7 @@ Response formatting:
                         {"role": "user", "content": _json_ff.dumps({"steps": plan_ctx.get("steps") or [], "ptr": plan_ctx.get("ptr")}, ensure_ascii=False)},
                         {"role": "user", "content": "Policy: Return only the final function now."},
                     ]
-                    _enqueue({"type": "thinking_start", "model": thinking_model, "phase": "pre_final"})
+                    _enqueue({"type": "thinking_start", "model": thinking_model, "phase": "pre_final", "thread_id": thr.id}, require_ack=True)
                     t_prf0 = _time.time(); _txt_pf = ""
                     try:
                         stream_ff = client.chat.completions.create(model=thinking_model, messages=think_msgs_pre_final, stream=True)
@@ -8770,7 +8885,7 @@ Response formatting:
                         resp_pf = client.chat.completions.create(model=thinking_model, messages=think_msgs_pre_final)
                         _txt_pf = (resp_pf.choices[0].message.content or "").strip()
                     t_prf1 = _time.time()
-                    _enqueue({"type": "thinking", "text": _txt_pf, "elapsed_ms": int((t_prf1 - t_prf0)*1000), "model": thinking_model, "phase": "pre_final"})
+                    _enqueue({"type": "thinking", "text": _txt_pf, "elapsed_ms": int((t_prf1 - t_prf0)*1000), "model": thinking_model, "phase": "pre_final", "thread_id": thr.id}, require_ack=True)
                     messages.append({"role": "user", "content": "Pre-final reflection:"})
                     messages.append({"role": "user", "content": _txt_pf})
             except Exception:
@@ -8794,7 +8909,7 @@ Response formatting:
                         {"role": "user", "content": "Final call (raw JSON):"},
                         {"role": "user", "content": raw2},
                     ]
-                    _enqueue({"type": "thinking_start", "model": thinking_model, "phase": "post_final"})
+                    _enqueue({"type": "thinking_start", "model": thinking_model, "phase": "post_final", "thread_id": thr.id}, require_ack=True)
                     t_pff0 = _time.time(); _txt_pff = ""
                     try:
                         stream_pff = client.chat.completions.create(model=thinking_model, messages=think_msgs_post_final, stream=True)
@@ -8809,7 +8924,7 @@ Response formatting:
                         resp_pff = client.chat.completions.create(model=thinking_model, messages=think_msgs_post_final)
                         _txt_pff = (resp_pff.choices[0].message.content or "").strip()
                     t_pff1 = _time.time()
-                    _enqueue({"type": "thinking", "text": _txt_pff, "elapsed_ms": int((t_pff1 - t_pff0)*1000), "model": thinking_model, "phase": "post_final"})
+                    _enqueue({"type": "thinking", "text": _txt_pff, "elapsed_ms": int((t_pff1 - t_pff0)*1000), "model": thinking_model, "phase": "post_final", "thread_id": thr.id}, require_ack=True)
             except Exception:
                 pass
             try:
@@ -8873,12 +8988,12 @@ Response formatting:
     if final_text:
         # Emit the final message along with the final function-call JSON for UI details
         try:
-            _enqueue({"type": "final", "text": final_text, "json": final_call_obj, "prompt": messages})
+            _enqueue({"type": "final", "text": final_text, "json": final_call_obj, "prompt": messages, "thread_id": thr.id}, require_ack=True)
         except Exception:
-            _enqueue({"type": "final", "text": final_text, "json": final_call_obj})
+            _enqueue({"type": "final", "text": final_text, "json": final_call_obj, "thread_id": thr.id}, require_ack=True)
     elif question_text:
         # For questions, continue to use 'final' type for compatibility with existing tests/clients
-        _enqueue({"type": "final", "text": question_text, "json": final_call_obj})
+        _enqueue({"type": "final", "text": question_text, "json": final_call_obj, "thread_id": thr.id}, require_ack=True)
     # Stop sender and close socket
     try:
         await event_q.put(None)
