@@ -111,40 +111,7 @@ SHELL_API_TOKEN = os.getenv("CEDARPY_SHELL_API_TOKEN")
 LOGS_DIR = os.path.join(DATA_DIR, "logs", "shell")
 os.makedirs(LOGS_DIR, exist_ok=True)
 
-# Optional Redis (Valkey) for real-time relay (Node SSE). If not available, we silently skip publishing.
-REDIS_URL = os.getenv("CEDARPY_REDIS_URL") or "redis://127.0.0.1:6379/0"
-try:
-    import redis.asyncio as _redis
-except Exception:  # pragma: no cover
-    _redis = None
-
-_redis_client = None
-async def _get_redis():
-    global _redis_client
-    try:
-        if _redis is None:
-            return None
-        if _redis_client is None:
-            _redis_client = _redis.from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
-        return _redis_client
-    except Exception:
-        return None
-
-async def _publish_relay_event(obj: Dict[str, Any]) -> None:
-    try:
-        r = await _get_redis()
-        if r is None:
-            return
-        tid = obj.get("thread_id")
-        if not tid:
-            return
-        chan = f"cedar:thread:{tid}:pub"
-        # Keep the payload small; serialize as-is (frontend expects same shape)
-        import json as _json_pub
-        await r.publish(chan, _json_pub.dumps(obj))
-    except Exception:
-        # Best-effort only
-        pass
+from main_helpers import _get_redis, _publish_relay_event
 
 # Default working directory for shell jobs (scoped, safe by default)
 SHELL_DEFAULT_WORKDIR = os.getenv("CEDARPY_SHELL_WORKDIR") or DATA_DIR
@@ -471,35 +438,7 @@ def ensure_project_initialized(project_id: int) -> None:
 # Models
 # ----------------------------------------------------------------------------------
 
-# Step-level ack registry (best-effort, in-memory). Used to verify the UI rendered a bubble.
-_ack_store: Dict[str, Dict[str, Any]] = {}
-
-async def _register_ack(eid: str, info: Dict[str, Any], timeout_ms: int = 10000) -> None:
-    try:
-        _ack_store[eid] = {
-            'eid': eid,
-            'info': info,
-            'created_at': datetime.utcnow().isoformat()+"Z",
-            'acked': False,
-            'ack_at': None,
-        }
-        async def _timeout():
-            try:
-                await asyncio.sleep(max(0.5, timeout_ms/1000.0))
-                rec = _ack_store.get(eid)
-                if rec and not rec.get('acked'):
-                    try:
-                        print(f"[ack-timeout] eid={eid} info={rec.get('info')}")
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-        try:
-            asyncio.get_event_loop().create_task(_timeout())
-        except Exception:
-            pass
-    except Exception:
-        pass
+from main_helpers import _ack_store, _register_ack
 
 
 
