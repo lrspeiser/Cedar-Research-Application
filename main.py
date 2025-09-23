@@ -1215,11 +1215,47 @@ def record_changelog(db: Session, project_id: int, branch_id: int, action: str, 
 
 app = FastAPI(title="Cedar")
 
-# Register development WS route from external module (non-conflicting path)
+# Register WebSocket routes from extracted orchestrator module
 try:
-    from main_ws_chat import register_ws_chat, WSDeps
+    # Use the extracted orchestrator for main route
+    from cedar_orchestrator.ws_chat import register_ws_chat, WSDeps
     from main_helpers import _publish_relay_event as __pub, _register_ack as __ack
     deps = WSDeps(
+        get_project_engine=_get_project_engine,
+        ensure_project_initialized=ensure_project_initialized,
+        record_changelog=record_changelog,
+        llm_client_config=_llm_client_config,
+        tabular_import_via_llm=_tabular_import_via_llm,
+        execute_sql=_execute_sql,  # Add missing dependency
+        exec_img=_exec_img,  # Add missing dependency  
+        llm_summarize_action=_llm_summarize_action,  # Add missing dependency
+        RegistrySessionLocal=RegistrySessionLocal,
+        FileEntry=FileEntry,
+        Dataset=Dataset,
+        Thread=Thread,
+        ThreadMessage=ThreadMessage,
+        Note=Note,
+        Branch=Branch,
+        ChangelogEntry=ChangelogEntry,
+        branch_filter_ids=branch_filter_ids,
+        current_branch=current_branch,
+        file_extension_to_type=file_extension_to_type,
+        publish_relay_event=__pub,
+        register_ack=__ack,
+        project_dirs=_project_dirs,
+    )
+    # Register temporary dev route /ws/chat2 using extracted orchestrator
+    register_ws_chat(app, deps, route_path="/ws/chat2/{project_id}")
+    print("[startup] Registered /ws/chat2 from cedar_orchestrator module")
+except Exception as e:
+    print(f"[startup] Could not register /ws/chat2: {type(e).__name__}: {e}")
+    pass
+
+# Also try to register legacy stub from main_ws_chat if it exists
+try:
+    from main_ws_chat import register_ws_chat as register_ws_chat_stub, WSDeps as WSDeps_stub
+    from main_helpers import _publish_relay_event as __pub2, _register_ack as __ack2
+    deps_stub = WSDeps_stub(
         get_project_engine=_get_project_engine,
         ensure_project_initialized=ensure_project_initialized,
         record_changelog=record_changelog,
@@ -1236,12 +1272,12 @@ try:
         branch_filter_ids=branch_filter_ids,
         current_branch=current_branch,
         file_extension_to_type=file_extension_to_type,
-        publish_relay_event=__pub,
-        register_ack=__ack,
+        publish_relay_event=__pub2,
+        register_ack=__ack2,
         project_dirs=_project_dirs,
     )
-    # Temporary dev route to validate modular registration without conflict
-    register_ws_chat(app, deps, route_path="/ws/chat2/{project_id}")
+    # Keep stub at a different path for compatibility testing
+    # register_ws_chat_stub(app, deps_stub, route_path="/ws/chat_stub/{project_id}")
 except Exception:
     pass
 

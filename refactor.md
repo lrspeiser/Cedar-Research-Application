@@ -253,4 +253,15 @@ Use this section to log each change with:
 - Set up todo list with milestones M0-M10
 - Verified environment: Python 3.13.5, venv active, ~/CedarPyData/.env present
 - Baseline test shows import issues (need PYTHONPATH for tests)
-- Next: Commit and proceed to M1
+- Committed: 9a38468
+
+### 2025-09-23 - M1 - Extract WebSocket chat orchestrator
+- Created cedar_orchestrator/ module structure with __init__.py
+- Extracted ws_chat.py with WSDeps class and register_ws_chat function
+- Preserved all existing event types and WebSocket protocol
+- Added verbose logging and code comments pointing to README sections
+- Updated main.py to import from cedar_orchestrator for /ws/chat2 route
+- Tests: test_ws_chat_orchestrator.py passes with extracted module
+- Note: Missing dependencies (_execute_sql, _exec_img) need to be addressed in M2
+- Note: Full orchestration loop with tools to be migrated in later milestones
+- Next: Commit and proceed to M2
