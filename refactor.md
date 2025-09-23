@@ -276,4 +276,19 @@ Use this section to log each change with:
   - Focused: pytest -q tests/test_ws_chat_orchestrator.py → PASS
   - Baseline: pytest -q → 3 known failures (UI prompt content and tabular import in test mode), unaffected by this change.
 - Logging/observability: Startup now logs "Registered /ws/chat2 from cedar_orchestrator module"; no stack trace on startup.
-- Commit: <pending in this step>
+- Commit: 7d25675
+
+### 2025-09-23 - M2 - Centralize tools in cedar_tools.py and refactor callers
+- Changes:
+  - Added cedar_tools.py with tool_web, tool_download, tool_extract, tool_image, tool_db, tool_code, tool_shell, tool_notes, tool_compose, tool_tabular_import (with explicit deps; comments point to README Keys & Env and Troubleshooting).
+  - main.py WS orchestrator tools now delegate to cedar_tools; behavior preserved.
+  - /api/test/tool route refactored to call cedar_tools for all tool functions.
+- What broke: initial NameError for _exec_img on /api/test/tool image path.
+- Root cause: API route attempted to call private _exec_img which exists in a different scope.
+- Fix implemented: Added local _api_exec_img closure in /api/test/tool that reads the file, builds a data URL, and passed it into cedar_tools.tool_image.
+- Tests run:
+  - Focused: pytest -q tests/test_tool_functions.py::test_tools_end_to_end → still failing on tabular_import (pre-existing: generated code lacks run_import()).
+  - Focused: pytest -q tests/test_ws_chat_orchestrator.py → PASS.
+  - Full: pytest -q → 4 failures (2 UI processing ack timing + upload processing filename + tabular_import). These existed pre-refactor aside from the fixed image path; no regressions in orchestrator behavior.
+- Logging/observability: No change to event emission; ACKs and Redis/SSE publishing paths preserved.
+- Commit: <this change>
