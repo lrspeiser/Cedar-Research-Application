@@ -3459,11 +3459,7 @@ SELECT * FROM demo LIMIT 10;""")
 
       if (chatForm) {
         chatForm.addEventListener('submit', async function(ev){
-          // Ensure the Chat tab is active (left pane) and messages are visible
-          try {
-            var leftChatTab = document.querySelector(".tabs[data-pane='left'] .tab[data-target='left-chat']");
-            if (leftChatTab) leftChatTab.click();
-          } catch(_) {}
+          // Do not force-switch tabs; keep the UI interactive while streaming
           try { ev.preventDefault(); } catch(_){ }
           var t = document.getElementById('chatInput');
           var text = (t && t.value || '').trim(); if (!text) return;
