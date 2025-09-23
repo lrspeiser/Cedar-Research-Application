@@ -3,7 +3,12 @@
 > Important: This README includes a postmortem of recent startup issues, how they were fixed, and how the app is now set up. It also links to tests we added to prevent regressions.
 
 Minimal FastAPI + MySQL prototype to manage **Projects**, **Branches**, **Threads**, and **Files** with
-simple roll-up behavior between Main and branches. Everything is in `main.py` as requested.
+simple roll-up behavior between Main and branches.
+
+Refactor note: The codebase is modularized for maintainability:
+- main_models.py: SQLAlchemy Base and all ORM models
+- main_helpers.py: shared helpers (Redis/SSE relay publish, ACK registry, escape/add_version/branch helpers)
+- main.py: FastAPI app, routes, and the WebSocket Chat orchestrator (planned to be extracted next)
 
 ## What this does (today)
 - Lists projects and lets you create a new project (auto-creates a `Main` branch).
@@ -380,7 +385,7 @@ Notes
 - We also keep cross-browser tests (Chromium/WebKit) to catch Safari/WebKit differences.
 - Our upload tests assert the submit button is visible and enabled to prevent false passes where UI is not interactive.
 
-- We standardize on vanilla ES modules and minimal inline JS for the built-in browser (QtWebEngine, Chromium-based). No SSE is used; all live streams use WebSockets.
+- We standardize on vanilla ES modules and minimal inline JS for the built-in browser (QtWebEngine, Chromium-based). Live updates prefer SSE via the Node relay (EventSource), with WebSockets used for control and fallback.
 - Rationale:
   - Keeps the bundle small and avoids additional frameworks.
   - Works reliably in the embedded runtime and regular browsers.
