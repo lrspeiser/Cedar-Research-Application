@@ -2781,6 +2781,7 @@ SELECT * FROM demo LIMIT 10;""")
       function startWS(text, threadId, fileId, datasetId, replay){
     try {
       var msgs = document.getElementById('msgs');
+      var optimisticUser = null;
 
       // Simple step timing helpers (annotate previous bubble/line with elapsed time)
       var currentStep = null;
@@ -2865,6 +2866,23 @@ SELECT * FROM demo LIMIT 10;""")
 
       var lastW = null;
       var stagesSeen = {};
+
+      // Optimistic local echo of the user's message so the UI shows instant feedback
+      try {
+        if (msgs && text && !replay) {
+          var wrapU = document.createElement('div'); wrapU.className = 'msg user';
+          wrapU.setAttribute('data-temp', '1');
+          var metaU = document.createElement('div'); metaU.className = 'meta small'; metaU.innerHTML = "<span class='pill'>user</span> <span class='title' style='font-weight:600'>USER</span>";
+          var bubU = document.createElement('div'); bubU.className = 'bubble user';
+          var contU = document.createElement('div'); contU.className='content'; contU.style.whiteSpace='pre-wrap';
+          contU.textContent = String(text||'');
+          bubU.appendChild(contU); wrapU.appendChild(metaU); wrapU.appendChild(bubU);
+          msgs.appendChild(wrapU);
+          optimisticUser = wrapU;
+          stepAdvance('user:local', wrapU);
+        }
+      } catch(_){ }
+
       var wsScheme = (location.protocol === 'https:') ? 'wss' : 'ws';
       var ws = new WebSocket(wsScheme + '://' + location.host + '/ws/chat/' + PROJECT_ID);
       var wsStartMs = _now();
@@ -2911,6 +2929,18 @@ SELECT * FROM demo LIMIT 10;""")
         if (m.type === 'message') {
           try {
             var r = String(m.role||'assistant');
+            if (r === 'user') {
+              // If we optimistically echoed a user bubble, reconcile it with the backend event
+              try {
+                var tempU = document.querySelector('#msgs .msg.user[data-temp="1"]');
+                if (tempU) {
+                  tempU.removeAttribute('data-temp');
+                  var c = tempU.querySelector('.content'); if (c) c.textContent = String(m.text||'');
+                  stepAdvance('user', tempU);
+                  return;
+                }
+              } catch(_){ }
+            }
             var wrapM = document.createElement('div'); wrapM.className = 'msg ' + (r==='user'?'user':(r==='system'?'system':'assistant'));
             var metaM = document.createElement('div'); metaM.className = 'meta small'; metaM.innerHTML = "<span class='pill'>" + (r||'assistant') + "</span> <span class='title' style='font-weight:600'>" + (r.toUpperCase()) + "</span>";
             var bubM = document.createElement('div'); bubM.className = 'bubble ' + (r==='user'?'user':(r==='system'?'system':'assistant'));
@@ -3173,7 +3203,9 @@ SELECT * FROM demo LIMIT 10;""")
           } catch(_) {}
         } else if (m.type === 'token' && m.word) {
           if (lastW !== m.word) {
-            streamText.textContent = (streamText && streamText.textContent ? (streamText.textContent + ' ') : '') + String(m.word);
+            if (streamText) {
+              streamText.textContent = (streamText.textContent ? (streamText.textContent + ' ') : '') + String(m.word);
+            }
             lastW = m.word;
           }
         } else if (m.type === 'info') {
