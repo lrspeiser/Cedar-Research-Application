@@ -7375,6 +7375,16 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
         if content:
             db.add(ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="user", content=content))
             db.commit()
+            # Set thread title from the first 10 characters of the first prompt when thread has a default/placeholder title
+            try:
+                title_now = (thr.title or '').strip()
+                if not title_now or title_now in {"Ask", "New Thread"} or title_now.startswith("File:") or title_now.startswith("DB:"):
+                    new_title = (content.strip().splitlines()[0])[:10] or "(untitled)"
+                    thr.title = new_title
+                    db.commit()
+            except Exception:
+                try: db.rollback()
+                except Exception: pass
             # Emit backend-driven user message and processing ACK (frontend only renders backend events)
             try:
                 _enqueue({"type": "message", "role": "user", "text": content})
@@ -7676,6 +7686,17 @@ Response formatting:
             _enqueue({"type": "prompt", "messages": messages, "thread_id": thr.id})
         except Exception:
             pass
+        # Persist the prepared prompt for replay across app restarts
+        try:
+            dbpmsg = SessionLocal()
+            dbpmsg.add(ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="assistant", display_title="Assistant", content="Prepared LLM prompt", payload_json=messages))
+            dbpmsg.commit()
+        except Exception:
+            try: dbpmsg.rollback()
+            except Exception: pass
+        finally:
+            try: dbpmsg.close()
+            except Exception: pass
     except Exception as e:
         import traceback as _tb
         try:
