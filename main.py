@@ -2834,6 +2834,7 @@ SELECT * FROM demo LIMIT 10;""")
   var PROJECT_ID = __PID__;
   var BRANCH_ID = __BID__;
   var UPLOAD_AUTOCHAT = __UPLOAD_AUTOCHAT__;
+  var SSE_ACTIVE = false;
   async function ensureThreadId(tid, fid, dsid) {
     if (tid) return tid;
     try {
@@ -3499,6 +3500,7 @@ SELECT * FROM demo LIMIT 10;""")
         }
       }
       ws.onmessage = function(ev){
+        if (SSE_ACTIVE) return; // prefer SSE delivery to avoid duplicate bubbles
         refreshTimeout();
         var m = null; try { m = JSON.parse(ev.data); } catch(_){ return; }
         handleEvent(m);
@@ -3518,6 +3520,7 @@ SELECT * FROM demo LIMIT 10;""")
       window.__cedar_es = es;
       es.onmessage = function(e){ try { var m = JSON.parse(e.data); handleEvent(m); } catch(_){} };
       es.onerror = function(){ try { console.warn('[sse-error]'); } catch(_){} };
+      SSE_ACTIVE = true;
     } catch(e) { try { console.warn('[sse-init-error]', e); } catch(_){} }
   }
   document.addEventListener('DOMContentLoaded', function(){
