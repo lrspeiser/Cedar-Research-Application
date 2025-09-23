@@ -250,6 +250,17 @@ Target directories to introduce:
   - No change to canonical /ws/chat route yet (kept legacy stable for existing tests). Focused ws_chat_orchestrator test remains PASS.
   - Manual smoke via route inspection shows /ws/chat2 is registered and functional.
 - Logging/observability: All bubbles go through _enqueue + publish_relay_event; ACKs preserved.
+- Commit: b533be1
+
+### 2025-09-23 - M5 - Aggregator LLM (chat2)
+- Changes:
+  - Added cedar_orchestrator/aggregate.py with normalize_candidates(), build_prompt(), and aggregate() that calls the LLM to return one strict JSON function-call (final).
+  - Integrated aggregator into /ws/chat2 path: when a client/model is available, aggregator runs after components complete; emits a debug prompt for the aggregator; on aggregator error, emits an error (no fabricated final).
+  - Kept simple summarizer preference when LLM client is unavailable (dev alias only; canonical route unchanged).
+- Tests run:
+  - Added tests/test_aggregator.py with a fake client stub; PASS.
+  - Focused ws_chat_orchestrator test (canonical) still PASS.
+- Logging/observability: Aggregator debug prompt is emitted as a debug event with component="aggregator"; Keys and Troubleshooting pointers are in module comments.
 - Commit: <this change>
 
 ## Progress & Fix Log (append during execution)
