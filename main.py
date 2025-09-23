@@ -1215,6 +1215,36 @@ def record_changelog(db: Session, project_id: int, branch_id: int, action: str, 
 
 app = FastAPI(title="Cedar")
 
+# Register development WS route from external module (non-conflicting path)
+try:
+    from main_ws_chat import register_ws_chat, WSDeps
+    from main_helpers import _publish_relay_event as __pub, _register_ack as __ack
+    deps = WSDeps(
+        get_project_engine=_get_project_engine,
+        ensure_project_initialized=ensure_project_initialized,
+        record_changelog=record_changelog,
+        llm_client_config=_llm_client_config,
+        tabular_import_via_llm=_tabular_import_via_llm,
+        RegistrySessionLocal=RegistrySessionLocal,
+        FileEntry=FileEntry,
+        Dataset=Dataset,
+        Thread=Thread,
+        ThreadMessage=ThreadMessage,
+        Note=Note,
+        Branch=Branch,
+        ChangelogEntry=ChangelogEntry,
+        branch_filter_ids=branch_filter_ids,
+        current_branch=current_branch,
+        file_extension_to_type=file_extension_to_type,
+        publish_relay_event=__pub,
+        register_ack=__ack,
+        project_dirs=_project_dirs,
+    )
+    # Temporary dev route to validate modular registration without conflict
+    register_ws_chat(app, deps, route_path="/ws/chat2/{project_id}")
+except Exception:
+    pass
+
 # WS ack handshake endpoint (must be defined after `app` is created)
 # See README: "WebSocket handshake and client acks"
 @app.post("/api/chat/ack")
