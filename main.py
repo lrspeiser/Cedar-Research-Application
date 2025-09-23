@@ -7966,13 +7966,13 @@ Response formatting:
             if use_thinking:
                 try:
                     thinking_model = os.getenv("CEDARPY_THINKING_MODEL", os.getenv("CEDARPY_FAST_MODEL", "gpt-5-mini"))
+                    # Planner instructions and glossary
                     think_sys = (
-                        "You are Cedar's planner. In 2-5 short sentences, talk out loud about the best tool steps to answer the user's request. "
-                        "Consider these tools: web, download, extract, image, db, code, notes, compose, shell, tabular_import. "
-                        "Prefer using code/db or downloads over answering from memory when computation or verification is trivial (e.g., arithmetic). "
-                        "Output plain text only (no JSON)."
+                        "You are Cedar's planner. In 2-5 short sentences, think out loud about the best tool steps to answer the user's request. "
+                        "Available tools: web (fetch), download (save files), extract (read/parse files), image (inline data URL), db (SQL over per-project DB), code (Python with cedar helpers), notes, compose, shell, tabular_import. "
+                        "Prefer code/db or downloads over answering from memory when computation/verifications are trivial. Output plain text only (no JSON)."
                     )
-                    # Summarize current state minimally
+                    # Summarize current step
                     try:
                         step_hint = None
                         if isinstance(plan_ctx.get('ptr'), int) and plan_ctx.get('steps'):
@@ -7981,18 +7981,52 @@ Response formatting:
                                 step_hint = plan_ctx['steps'][idxh].get('function')
                     except Exception:
                         step_hint = None
-                    think_user = (
-                        f"The user asked: {content}\n"
-                        f"Current step: {step_hint or 'n/a'}; loop_count={loop_count}.\n"
-                        "We can take multiple steps. What is the quickest high-quality path using tools?"
-                    )
-                    t_th0 = _time.time()
+                    # Build functions glossary (name -> description)
+                    planner_functions = [
+                        {"name": "web", "desc": "Fetch HTML from a URL (no file saved)."},
+                        {"name": "download", "desc": "Download URL(s) to project files; returns file_id(s)."},
+                        {"name": "extract", "desc": "Extract/parse a saved file by file_id; returns text/claims."},
+                        {"name": "image", "desc": "Return inline data URL for an uploaded image by file_id."},
+                        {"name": "db", "desc": "Run SQLite SQL over per-project database (tables from imports)."},
+                        {"name": "code", "desc": "Run Python with cedar helpers (cedar.query, cedar.list_files, cedar.read)."},
+                        {"name": "notes", "desc": "Save structured notes (themes)."},
+                        {"name": "compose", "desc": "Draft sections of text for output."},
+                        {"name": "shell", "desc": "Run a local shell command; for trusted local usage only."},
+                        {"name": "tabular_import", "desc": "LLM codegen to import CSV/NDJSON into SQLite (per-project)."}
+                    ]
+                    # Planner context: files/dbs/notes/changelog/history
+                    import json as _json_pl
+                    planner_context = {
+                        "functions": planner_functions,
+                        "resources": resources,
+                        "notes": notes,
+                        "changelog": changelog,
+                        "history": history,
+                    }
+                    # Build planner message array with context and examples
+                    think_messages = [
+                        {"role": "system", "content": think_sys},
+                        {"role": "user", "content": "User request:"},
+                        {"role": "user", "content": content},
+                        {"role": "user", "content": "Planner context (JSON):"},
+                        {"role": "user", "content": _json_pl.dumps(planner_context, ensure_ascii=False)},
+                    ]
+                    try:
+                        think_messages.append({"role": "user", "content": "Functions and examples:"})
+                        think_messages.append({"role": "user", "content": _json_pl.dumps(examples_json, ensure_ascii=False)})
+                    except Exception:
+                        pass
                     # Stream thinking token-by-token to the client; fall back to non-streaming on error
+                    t_th0 = _time.time()
                     thinking_text = ""
                     try:
+                        try:
+                            _enqueue({"type": "thinking_start", "model": thinking_model})
+                        except Exception:
+                            pass
                         stream_th = client.chat.completions.create(
                             model=thinking_model,
-                            messages=[{"role":"system","content":think_sys},{"role":"user","content":think_user}],
+                            messages=think_messages,
                             stream=True,
                         )
                         for chunk in stream_th:
@@ -8008,13 +8042,18 @@ Response formatting:
                                     pass
                     except Exception:
                         # Non-streaming fallback
-                        resp_th = client.chat.completions.create(model=thinking_model, messages=[{"role":"system","content":think_sys},{"role":"user","content":think_user}])
+                        resp_th = client.chat.completions.create(model=thinking_model, messages=think_messages)
                         thinking_text = (resp_th.choices[0].message.content or "").strip()
                     t_th1 = _time.time()
                     _enqueue({"type": "thinking", "text": thinking_text, "elapsed_ms": int((t_th1 - t_th0)*1000), "model": thinking_model})
-                    # Pass thinking into the strict-JSON call
+                    # Pass thinking + context into the strict-JSON call
                     messages.append({"role": "user", "content": "Thinking (planner):"})
                     messages.append({"role": "user", "content": thinking_text})
+                    try:
+                        messages.append({"role": "user", "content": "Planner context used (JSON):"})
+                        messages.append({"role": "user", "content": _json_pl.dumps(planner_context, ensure_ascii=False)})
+                    except Exception:
+                        pass
                 except Exception as _e_th:
                     try:
                         _enqueue({"type": "thinking", "text": f"(thinking failed: {type(_e_th).__name__})"})
