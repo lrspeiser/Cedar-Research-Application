@@ -7511,6 +7511,11 @@ Execution rules:
 - When a step completes, set its status to 'done'. If a step needs more work, set status 'currently running' (or 'in process') and we will re-issue that step with the updated thread context. If the step fails, set 'failed' and either repair or rewrite the plan.
 - Strongly prefer using 'web'+'download'+'extract' to gather sources, 'db' for queries/aggregation, and 'code' for local processing when it improves quality or precision. Do not fabricate results—ground answers via these functions when relevant.
 
+PLANNING POLICY (strict):
+- After the FIRST plan is accepted, do NOT emit a new 'plan' unless following the CURRENT plan would likely fail given the latest tool results/context.
+- If the current plan is still valid, return ONE function call for the next step (not a new plan).
+- If you conclude the plan would fail, you may return a single {"function":"plan"} with the revised steps; otherwise return the next function.
+
 Response formatting:
 - Respond with STRICT JSON only (no prose), one function object per turn.
 - For 'code', include: language, packages (list), and source. For 'db', include: sql.
@@ -7621,6 +7626,13 @@ Response formatting:
                     messages.append({"role": "user", "content": json.dumps(ctx, ensure_ascii=False)})
                 except Exception:
                     pass
+            # Include plan state so the model can judge whether replanning is necessary
+            try:
+                messages.append({"role": "user", "content": "Plan state (JSON):"})
+                messages.append({"role": "user", "content": json.dumps({"steps": plan_ctx.get("steps") or [], "ptr": plan_ctx.get("ptr")}, ensure_ascii=False)})
+                messages.append({"role": "user", "content": "Plan policy (strict): Do NOT emit a new 'plan' unless following the current plan would likely fail. If plan remains valid, return ONE function call for the next step."})
+            except Exception:
+                pass
             messages.append({"role": "user", "content": "Functions and examples:"})
             try:
                 messages.append({"role": "user", "content": json.dumps(examples_json, ensure_ascii=False)})
@@ -8027,9 +8039,10 @@ Response formatting:
             loop_count += 1
             # Optional "thinking" phase (planner) before strict JSON tool call
             try:
-                use_thinking = str(os.getenv("CEDARPY_WS_THINKING", "0")).strip().lower() not in {"", "0", "false", "no", "off"}
+                # Default: ON. The planner streams thinking before and after every LLM call unless explicitly disabled.
+                use_thinking = str(os.getenv("CEDARPY_WS_THINKING", "1")).strip().lower() not in {"", "0", "false", "no", "off"}
             except Exception:
-                use_thinking = False
+                use_thinking = True
             if use_thinking:
                 try:
                     thinking_model = os.getenv("CEDARPY_THINKING_MODEL", os.getenv("CEDARPY_FAST_MODEL", "gpt-5-mini"))
@@ -8069,6 +8082,7 @@ Response formatting:
                         "notes": notes,
                         "changelog": changelog,
                         "history": history,
+                        "plan_state": {"steps": plan_ctx.get("steps") or [], "ptr": plan_ctx.get("ptr")}
                     }
                     # Build planner message array with context and examples
                     think_messages = [
@@ -8150,6 +8164,54 @@ Response formatting:
                     _enqueue({"type": "info", "stage": "llm_call", "model": use_model, "elapsed_ms": int((t_llm1 - t_llm0)*1000)})
                 except Exception:
                     pass
+                # Post-LLM thinking (reflection): run after every LLM decision and feed back into the next messages
+                if use_thinking:
+                    try:
+                        import json as _json_post
+                        think_sys_post = (
+                            "You are Cedar's planner (post-decision reflection). In 1-4 short sentences, verify the chosen function aligns with the current plan and the planning policy. "
+                            "If the current plan is still valid, do NOT propose a new plan. Only suggest replanning if following the current plan would likely fail. Output plain text."
+                        )
+                        planner_context_post = {
+                            "plan_state": {"steps": plan_ctx.get("steps") or [], "ptr": plan_ctx.get("ptr")},
+                            "policy": "Do NOT emit a new 'plan' unless following the current plan would likely fail.",
+                        }
+                        think_messages_post = [
+                            {"role": "system", "content": think_sys_post},
+                            {"role": "user", "content": "User request:"},
+                            {"role": "user", "content": content},
+                            {"role": "user", "content": "Plan state (JSON):"},
+                            {"role": "user", "content": _json_post.dumps(planner_context_post, ensure_ascii=False)},
+                            {"role": "user", "content": "Chosen call (raw JSON):"},
+                            {"role": "user", "content": raw},
+                        ]
+                        t_pth0 = _time.time()
+                        thinking_post = ""
+                        try:
+                            _enqueue({"type": "thinking_start", "model": thinking_model, "phase": "post"})
+                            stream_th2 = client.chat.completions.create(model=thinking_model, messages=think_messages_post, stream=True)
+                            for chunk2 in stream_th2:
+                                try:
+                                    delta2 = getattr(chunk2.choices[0].delta, 'content', None)
+                                except Exception:
+                                    delta2 = None
+                                if delta2:
+                                    thinking_post += delta2
+                                    try:
+                                        _enqueue({"type": "thinking_token", "delta": delta2, "phase": "post"})
+                                    except Exception:
+                                        pass
+                        except Exception:
+                            resp_th2 = client.chat.completions.create(model=thinking_model, messages=think_messages_post)
+                            thinking_post = (resp_th2.choices[0].message.content or "").strip()
+                        t_pth1 = _time.time()
+                        _enqueue({"type": "thinking", "text": thinking_post, "elapsed_ms": int((t_pth1 - t_pth0)*1000), "model": thinking_model, "phase": "post"})
+                        messages.append({"role": "user", "content": "Post-LLM reflection:"})
+                        messages.append({"role": "user", "content": thinking_post})
+                        # Reinforce plan policy explicitly on the next turn
+                        messages.append({"role": "user", "content": "Plan policy (strict): Do NOT emit a new 'plan' unless following the current plan would likely fail."})
+                    except Exception:
+                        pass
             except Exception as e:
                 try:
                     print(f"[ws-chat-llm-error] {type(e).__name__}: {e}")
@@ -8233,6 +8295,36 @@ Response formatting:
                     except Exception:
                         pass
                     messages.append({"role": "user", "content": "FIRST TURN POLICY: Respond NOW with exactly one JSON object: {\"function\":\"plan\", ...}. Do NOT return final/question directly. Use the required schema (title, description, goal_outcome, status, state, steps[]. Each step: function, title, description, goal_outcome, status, state, args). STRICT JSON only."})
+                    name = None; args = {}; call_obj = {}
+                    continue
+                # Guardrail: once we have a plan, do NOT accept a new plan unless current plan would likely fail
+                if plan_seen and name == 'plan':
+                    try:
+                        _send_info('plan-reject')
+                    except Exception:
+                        pass
+                    try:
+                        cur_idx = 0
+                        try:
+                            cur_idx = int(plan_ctx.get('ptr') or 0)
+                        except Exception:
+                            cur_idx = 0
+                        # Choose a template for the next expected step; fallback to final
+                        tmpl = {"function": "final", "args": {"text": ""}}
+                        try:
+                            next_fn = None
+                            if isinstance(plan_ctx.get('steps'), list) and len(plan_ctx['steps'])>cur_idx:
+                                next_fn = str(plan_ctx['steps'][cur_idx].get('function') or '').strip().lower()
+                            if next_fn and isinstance(examples_json, dict) and examples_json.get(next_fn):
+                                e = examples_json.get(next_fn)
+                                tmpl = {"function": e.get('function') or next_fn, "args": (e.get('args') or {})}
+                        except Exception:
+                            pass
+                        messages.append({"role": "user", "content": "Plan remains in effect. Respond NOW with ONE function call ONLY (STRICT JSON) matching this template:"})
+                        messages.append({"role": "user", "content": json.dumps(tmpl, ensure_ascii=False)})
+                        messages.append({"role": "user", "content": "Do NOT emit a new 'plan' unless following the current plan would likely fail."})
+                    except Exception:
+                        pass
                     name = None; args = {}; call_obj = {}
                     continue
                 if name == 'plan':
@@ -8423,18 +8515,28 @@ Response formatting:
                         session_title = str((args or {}).get('title') or '').strip() or None
                     except Exception:
                         session_title = session_title or None
+                    # NEW: Mark current step as done and update the plan panel
+                    try:
+                        if isinstance(plan_ctx.get("ptr"), int) and plan_ctx.get("steps"):
+                            idxf = int(plan_ctx['ptr']) if plan_ctx['ptr'] is not None else None
+                            if idxf is not None and 0 <= idxf < len(plan_ctx['steps']):
+                                plan_ctx['steps'][idxf]['status'] = 'done'
+                                plan_ctx['steps'][idxf]['finished_at'] = datetime.utcnow().isoformat()+"Z"
+                                _enqueue({"type": "action", "function": "plan_update", "text": "Plan updated", "call": {"steps": plan_ctx['steps']}})
+                    except Exception:
+                        pass
                 else:
                     question_text = str((args or {}).get('text') or call_obj.get('output_to_user') or '').strip() or 'I have a question for you.'
-                # Mark current plan step done when it was a 'question' step
-                try:
-                    if name == 'question' and isinstance(plan_ctx.get("ptr"), int) and plan_ctx.get("steps"):
-                        idxq = int(plan_ctx["ptr"]) if plan_ctx["ptr"] is not None else None
-                        if idxq is not None and 0 <= idxq < len(plan_ctx["steps"]):
-                            plan_ctx["steps"][idxq]["status"] = "done"
-                            plan_ctx["steps"][idxq]["finished_at"] = datetime.utcnow().isoformat()+"Z"
-                            _enqueue({"type": "action", "function": "plan_update", "text": "Plan updated", "call": {"steps": plan_ctx["steps"]}})
-                except Exception:
-                    pass
+                    # Mark current step done when it was a 'question' step
+                    try:
+                        if isinstance(plan_ctx.get("ptr"), int) and plan_ctx.get("steps"):
+                            idxq = int(plan_ctx['ptr']) if plan_ctx['ptr'] is not None else None
+                            if idxq is not None and 0 <= idxq < len(plan_ctx['steps']):
+                                plan_ctx['steps'][idxq]['status'] = 'done'
+                                plan_ctx['steps'][idxq]['finished_at'] = datetime.utcnow().isoformat()+"Z"
+                                _enqueue({"type": "action", "function": "plan_update", "text": "Plan updated", "call": {"steps": plan_ctx['steps']}})
+                    except Exception:
+                        pass
                 break
             # Execute tool (only if not final/question)
             # Validate function name and args; skip invalid/missing
@@ -8591,12 +8693,74 @@ Response formatting:
     if not final_text and not question_text:
         try:
             messages.append({"role": "user", "content": "Respond NOW with one function call ONLY: {\"function\":\"final\",\"args\":{\"text\":\"<answer>\"}}. STRICT JSON. No prose."})
+            # Pre-final thinking (optional): reinforce that only 'final' should be returned
+            try:
+                if use_thinking:
+                    import json as _json_ff
+                    think_sys_pre_final = (
+                        "You are Cedar's planner. In 1-3 sentences, confirm that the next response must be a single {\"function\":\"final\"} call and summarize what it should contain. Output plain text."
+                    )
+                    think_msgs_pre_final = [
+                        {"role": "system", "content": think_sys_pre_final},
+                        {"role": "user", "content": "Plan state (JSON):"},
+                        {"role": "user", "content": _json_ff.dumps({"steps": plan_ctx.get("steps") or [], "ptr": plan_ctx.get("ptr")}, ensure_ascii=False)},
+                        {"role": "user", "content": "Policy: Return only the final function now."},
+                    ]
+                    _enqueue({"type": "thinking_start", "model": thinking_model, "phase": "pre_final"})
+                    t_prf0 = _time.time(); _txt_pf = ""
+                    try:
+                        stream_ff = client.chat.completions.create(model=thinking_model, messages=think_msgs_pre_final, stream=True)
+                        for ch in stream_ff:
+                            try:
+                                d = getattr(ch.choices[0].delta, 'content', None)
+                            except Exception:
+                                d = None
+                            if d:
+                                _txt_pf += d; _enqueue({"type": "thinking_token", "delta": d, "phase": "pre_final"})
+                    except Exception:
+                        resp_pf = client.chat.completions.create(model=thinking_model, messages=think_msgs_pre_final)
+                        _txt_pf = (resp_pf.choices[0].message.content or "").strip()
+                    t_prf1 = _time.time()
+                    _enqueue({"type": "thinking", "text": _txt_pf, "elapsed_ms": int((t_prf1 - t_prf0)*1000), "model": thinking_model, "phase": "pre_final"})
+                    messages.append({"role": "user", "content": "Pre-final reflection:"})
+                    messages.append({"role": "user", "content": _txt_pf})
+            except Exception:
+                pass
             t_ff0 = _time.time()
             resp = client.chat.completions.create(model=model, messages=messages)
             raw2 = (resp.choices[0].message.content or "").strip()
             t_ff1 = _time.time()
             try:
                 _enqueue({"type": "info", "stage": "llm_call_final", "model": model, "elapsed_ms": int((t_ff1 - t_ff0)*1000)})
+            except Exception:
+                pass
+            # Post-final thinking (optional): reflect on the final call
+            try:
+                if use_thinking:
+                    think_sys_post_final = (
+                        "You are Cedar's planner (post-final reflection). In 1-2 sentences, confirm the final answer is consistent with plan and policy. Output plain text."
+                    )
+                    think_msgs_post_final = [
+                        {"role": "system", "content": think_sys_post_final},
+                        {"role": "user", "content": "Final call (raw JSON):"},
+                        {"role": "user", "content": raw2},
+                    ]
+                    _enqueue({"type": "thinking_start", "model": thinking_model, "phase": "post_final"})
+                    t_pff0 = _time.time(); _txt_pff = ""
+                    try:
+                        stream_pff = client.chat.completions.create(model=thinking_model, messages=think_msgs_post_final, stream=True)
+                        for ch2 in stream_pff:
+                            try:
+                                d2 = getattr(ch2.choices[0].delta, 'content', None)
+                            except Exception:
+                                d2 = None
+                            if d2:
+                                _txt_pff += d2; _enqueue({"type": "thinking_token", "delta": d2, "phase": "post_final"})
+                    except Exception:
+                        resp_pff = client.chat.completions.create(model=thinking_model, messages=think_msgs_post_final)
+                        _txt_pff = (resp_pff.choices[0].message.content or "").strip()
+                    t_pff1 = _time.time()
+                    _enqueue({"type": "thinking", "text": _txt_pff, "elapsed_ms": int((t_pff1 - t_pff0)*1000), "model": thinking_model, "phase": "post_final"})
             except Exception:
                 pass
             try:
