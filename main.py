@@ -466,25 +466,6 @@ async def _register_ack(eid: str, info: Dict[str, Any], timeout_ms: int = 10000)
     except Exception:
         pass
 
-@app.post("/api/chat/ack")
-def api_chat_ack(payload: Dict[str, Any]):
-    eid = str((payload or {}).get('eid') or '').strip()
-    if not eid:
-        return JSONResponse({"ok": False, "error": "missing eid"}, status_code=400)
-    rec = _ack_store.get(eid)
-    if rec:
-        rec['acked'] = True
-        rec['ack_at'] = datetime.utcnow().isoformat()+"Z"
-        try:
-            print(f"[ack] eid={eid} type={rec.get('info',{}).get('type')} thread={rec.get('info',{}).get('thread_id')}")
-        except Exception:
-            pass
-        return JSONResponse({"ok": True})
-    try:
-        print(f"[ack-miss] unknown eid={eid} payload={payload}")
-    except Exception:
-        pass
-    return JSONResponse({"ok": False, "error": "unknown eid"}, status_code=404)
 
 class Project(Base):
     __tablename__ = "projects"  # Central registry only
@@ -1490,6 +1471,28 @@ def current_branch(db: Session, project_id: int, branch_id: Optional[int]) -> Br
 # ----------------------------------------------------------------------------------
 
 app = FastAPI(title="Cedar")
+
+# WS ack handshake endpoint (must be defined after `app` is created)
+# See README: "WebSocket handshake and client acks"
+@app.post("/api/chat/ack")
+def api_chat_ack(payload: Dict[str, Any]):
+    eid = str((payload or {}).get('eid') or '').strip()
+    if not eid:
+        return JSONResponse({"ok": False, "error": "missing eid"}, status_code=400)
+    rec = _ack_store.get(eid)
+    if rec:
+        rec['acked'] = True
+        rec['ack_at'] = datetime.utcnow().isoformat()+"Z"
+        try:
+            print(f"[ack] eid={eid} type={rec.get('info',{}).get('type')} thread={rec.get('info',{}).get('thread_id')}")
+        except Exception:
+            pass
+        return JSONResponse({"ok": True})
+    try:
+        print(f"[ack-miss] unknown eid={eid} payload={payload}")
+    except Exception:
+        pass
+    return JSONResponse({"ok": False, "error": "unknown eid"}, status_code=404)
 
 @app.on_event("startup")
 def _cedarpy_startup_llm_probe():

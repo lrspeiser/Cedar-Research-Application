@@ -308,6 +308,29 @@ curl -sS -H "Content-Type: application/json" \
 
 Note on API keys: This feature uses environment variables for configuration. See above for how to set them securely. Code comments reference this README for usage and pitfalls.
 
+## WebSocket handshake and client acks
+
+The chat and other live streams are delivered over WebSockets. Each UI bubble (submitted, planning, action, final, errors, etc.) is acknowledged by the client after it renders to ensure the backend knows the message was displayed.
+
+- Endpoint: POST /api/chat/ack
+- Payload: { "eid": "<event-id>", ... }
+- Behavior: The backend records the ack in an in-memory store and prints a log line like:
+  - [ack] eid=<id> type=<event-type> thread=<thread-id>
+- If an ack is not received within the timeout (default 10s), the backend prints:
+  - [ack-timeout] eid=<id> info={...}
+
+Frontend behavior
+- After the page renders a bubble, it immediately posts an ack with the event id.
+- This handshake runs for every major LLM call, including the final call, and before/after thinking phases when those are streamed.
+
+What was wrong and how it was fixed (import-time NameError)
+- Mistake: The FastAPI route decorator for /api/chat/ack was placed above the declaration of app = FastAPI(...). During module import, app wasn’t defined yet, raising NameError when tests imported main.
+- Fix: Move the route definition to immediately after app is created (see main.py: “WS ack handshake endpoint”). Tests that import main now succeed.
+- How verified: Imported main in a REPL and confirmed HAS_ACK True via scanning app.routes; ran pytest -q tests/test_html_rendering.py which previously failed on NameError.
+
+Notes
+- This handshake is best-effort and uses an in-memory registry; if the server restarts, pending acks are cleared. It is intended for UI reliability and observability, not durability.
+
 ## Front-end choice for embedded browser (QtWebEngine)
 
 ### Embedded UI testing via Playwright + CDP
