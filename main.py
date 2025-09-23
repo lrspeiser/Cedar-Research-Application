@@ -7958,7 +7958,69 @@ Response formatting:
             except Exception:
                 pass
             loop_count += 1
-            # Call LLM for next action
+            # Optional "thinking" phase (planner) before strict JSON tool call
+            try:
+                use_thinking = str(os.getenv("CEDARPY_WS_THINKING", "0")).strip().lower() not in {"", "0", "false", "no", "off"}
+            except Exception:
+                use_thinking = False
+            if use_thinking:
+                try:
+                    thinking_model = os.getenv("CEDARPY_THINKING_MODEL", os.getenv("CEDARPY_FAST_MODEL", "gpt-5-mini"))
+                    think_sys = (
+                        "You are Cedar's planner. In 2-5 short sentences, talk out loud about the best tool steps to answer the user's request. "
+                        "Consider these tools: web, download, extract, image, db, code, notes, compose, shell, tabular_import. "
+                        "Prefer using code/db or downloads over answering from memory when computation or verification is trivial (e.g., arithmetic). "
+                        "Output plain text only (no JSON)."
+                    )
+                    # Summarize current state minimally
+                    try:
+                        step_hint = None
+                        if isinstance(plan_ctx.get('ptr'), int) and plan_ctx.get('steps'):
+                            idxh = int(plan_ctx['ptr'])
+                            if 0 <= idxh < len(plan_ctx['steps']):
+                                step_hint = plan_ctx['steps'][idxh].get('function')
+                    except Exception:
+                        step_hint = None
+                    think_user = (
+                        f"The user asked: {content}\n"
+                        f"Current step: {step_hint or 'n/a'}; loop_count={loop_count}.\n"
+                        "We can take multiple steps. What is the quickest high-quality path using tools?"
+                    )
+                    t_th0 = _time.time()
+                    # Stream thinking token-by-token to the client; fall back to non-streaming on error
+                    thinking_text = ""
+                    try:
+                        stream_th = client.chat.completions.create(
+                            model=thinking_model,
+                            messages=[{"role":"system","content":think_sys},{"role":"user","content":think_user}],
+                            stream=True,
+                        )
+                        for chunk in stream_th:
+                            try:
+                                delta = getattr(chunk.choices[0].delta, 'content', None)  # type: ignore[attr-defined]
+                            except Exception:
+                                delta = None
+                            if delta:
+                                thinking_text += delta
+                                try:
+                                    _enqueue({"type": "thinking_token", "delta": delta})
+                                except Exception:
+                                    pass
+                    except Exception:
+                        # Non-streaming fallback
+                        resp_th = client.chat.completions.create(model=thinking_model, messages=[{"role":"system","content":think_sys},{"role":"user","content":think_user}])
+                        thinking_text = (resp_th.choices[0].message.content or "").strip()
+                    t_th1 = _time.time()
+                    _enqueue({"type": "thinking", "text": thinking_text, "elapsed_ms": int((t_th1 - t_th0)*1000), "model": thinking_model})
+                    # Pass thinking into the strict-JSON call
+                    messages.append({"role": "user", "content": "Thinking (planner):"})
+                    messages.append({"role": "user", "content": thinking_text})
+                except Exception as _e_th:
+                    try:
+                        _enqueue({"type": "thinking", "text": f"(thinking failed: {type(_e_th).__name__})"})
+                    except Exception:
+                        pass
+            # Call LLM for next action (strict JSON)
             try:
                 try:
                     print("[ws-chat] llm-call")
@@ -7974,8 +8036,14 @@ Response formatting:
                     print(f"[ws-chat] using-model={use_model}")
                 except Exception:
                     pass
+                t_llm0 = _time.time()
                 resp = client.chat.completions.create(model=use_model, messages=messages)
                 raw = (resp.choices[0].message.content or "").strip()
+                t_llm1 = _time.time()
+                try:
+                    _enqueue({"type": "info", "stage": "llm_call", "model": use_model, "elapsed_ms": int((t_llm1 - t_llm0)*1000)})
+                except Exception:
+                    pass
             except Exception as e:
                 try:
                     print(f"[ws-chat-llm-error] {type(e).__name__}: {e}")
@@ -8417,8 +8485,14 @@ Response formatting:
     if not final_text and not question_text:
         try:
             messages.append({"role": "user", "content": "Respond NOW with one function call ONLY: {\"function\":\"final\",\"args\":{\"text\":\"<answer>\"}}. STRICT JSON. No prose."})
+            t_ff0 = _time.time()
             resp = client.chat.completions.create(model=model, messages=messages)
             raw2 = (resp.choices[0].message.content or "").strip()
+            t_ff1 = _time.time()
+            try:
+                _enqueue({"type": "info", "stage": "llm_call_final", "model": model, "elapsed_ms": int((t_ff1 - t_ff0)*1000)})
+            except Exception:
+                pass
             try:
                 obj2 = json.loads(raw2)
             except Exception:

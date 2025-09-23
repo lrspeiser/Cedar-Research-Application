@@ -373,8 +373,12 @@ def main() -> int:
                 elif t == "action":
                     fn = msg.get("function")
                     _print_block(f"WS ACTION: {fn}", msg.get("call"))
+                elif t == "thinking_token":
+                    tok = msg.get("delta") or ""
+                    if tok:
+                        print(tok, end="")
                 elif t == "thinking":
-                    print("[ws thinking]", (msg.get("text") or "").strip(), f"(elapsed_ms={msg.get('elapsed_ms')}, model={msg.get('model')})")
+                    print("\n[ws thinking]", (msg.get("text") or "").strip(), f"(elapsed_ms={msg.get('elapsed_ms')}, model={msg.get('model')})")
                 elif t == "info":
                     if msg.get('elapsed_ms') is not None:
                         print(f"[ws info] {msg.get('stage')} (elapsed_ms={msg.get('elapsed_ms')}, model={msg.get('model')})")
@@ -431,8 +435,12 @@ def main() -> int:
                     print("recv (text):", raw)
                     continue
                 t = msg.get("type")
-                if t == "thinking":
-                    print("[ws thinking]", (msg.get("text") or "").strip(), f"(elapsed_ms={msg.get('elapsed_ms')}, model={msg.get('model')})")
+                if t == "thinking_token":
+                    tok = msg.get("delta") or ""
+                    if tok:
+                        print(tok, end="")
+                elif t == "thinking":
+                    print("\n[ws thinking]", (msg.get("text") or "").strip(), f"(elapsed_ms={msg.get('elapsed_ms')}, model={msg.get('model')})")
                 elif t == "action":
                     _print_block(f"WS ACTION: {msg.get('function')}", msg.get("call"))
                 elif t == "info":
