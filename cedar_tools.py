@@ -1,5 +1,32 @@
-# cedar_tools.py
+# cedar_tools.py facade
 #
+# Backward-compatible facade that re-exports tool functions from cedar_tools_modules.
+# This keeps import cedar_tools working while enabling per-tool files under cedar_tools_modules/.
+from __future__ import annotations
+
+from cedar_tools_modules.web import tool_web  # type: ignore
+from cedar_tools_modules.download import tool_download  # type: ignore
+from cedar_tools_modules.extract import tool_extract  # type: ignore
+from cedar_tools_modules.image import tool_image  # type: ignore
+from cedar_tools_modules.db import tool_db  # type: ignore
+from cedar_tools_modules.code import tool_code  # type: ignore
+from cedar_tools_modules.shell import tool_shell  # type: ignore
+from cedar_tools_modules.notes import tool_notes  # type: ignore
+from cedar_tools_modules.compose import tool_compose  # type: ignore
+from cedar_tools_modules.tabular_import import tool_tabular_import  # type: ignore
+
+__all__ = [
+    "tool_web",
+    "tool_download",
+    "tool_extract",
+    "tool_image",
+    "tool_db",
+    "tool_code",
+    "tool_shell",
+    "tool_notes",
+    "tool_compose",
+    "tool_tabular_import",
+]
 # Centralized tool implementations for CedarPy.
 # These functions are used by both the WebSocket orchestrator and the /api/test/tool route.
 #

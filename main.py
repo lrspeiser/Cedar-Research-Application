@@ -574,6 +574,7 @@ def run_import(src_path, sqlite_path, table_name, project_id, branch_id):
     with open(src_path, newline='', encoding='utf-8') as f:
         r = csv.reader(f)
         header = next(r, None)
+        rows_buf = None
         if header and len(header) > 0:
             cols = [_snake(h) for h in header]
         else:
@@ -581,18 +582,18 @@ def run_import(src_path, sqlite_path, table_name, project_id, branch_id):
             row = next(r, None)
             if row is None:
                 cols = ['col_1']
-                rows = []
+                rows_buf = []
             else:
                 n = max(1, len(row))
                 cols = ['col_' + str(i+1) for i in range(n)]
-                rows = [row]
+                rows_buf = [row]
         col_defs = ', '.join([c + ' TEXT' for c in cols])
         cur.execute('CREATE TABLE IF NOT EXISTS ' + table_name + ' (id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER NOT NULL, branch_id INTEGER NOT NULL, ' + col_defs + ')')
         placeholders = ','.join(['?'] * (2 + len(cols)))
         insert_sql = 'INSERT INTO ' + table_name + ' (project_id, branch_id, ' + ','.join(cols) + ') VALUES (' + placeholders + ')'
         ins = 0
-        if 'rows' in locals():
-            for row in rows:
+        if rows_buf is not None:
+            for row in rows_buf:
                 vals = [project_id, branch_id] + [ (row[i] if i < len(row) else None) for i in range(len(cols)) ]
                 cur.execute(insert_sql, vals)
                 ins += 1
