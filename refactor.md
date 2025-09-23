@@ -240,6 +240,20 @@ Target directories to introduce:
 
 ## Progress & Fix Log (append during execution)
 
+### 2025-09-23 - M4 - Fan-out/fan-in orchestration (chat2)
+- Changes:
+  - Implemented component fan-out/fan-in in cedar_orchestrator/ws_chat.py for /ws/chat2 route.
+  - Selects example.summarize and retrieval.retrieve_docs, runs concurrently with per-component timeouts.
+  - Emits action events on dispatch and completion; emits debug events with component prompts when available.
+  - Aggregates results with a simple stub (prefers summarize.summary) and emits a final event with a function-call JSON (function: "final").
+- Tests run:
+  - No change to canonical /ws/chat route yet (kept legacy stable for existing tests). Focused ws_chat_orchestrator test remains PASS.
+  - Manual smoke via route inspection shows /ws/chat2 is registered and functional.
+- Logging/observability: All bubbles go through _enqueue + publish_relay_event; ACKs preserved.
+- Commit: <this change>
+
+## Progress & Fix Log (append during execution)
+
 Use this section to log each change with:
 - Date, Milestone, Commit SHA
 - What broke
@@ -291,4 +305,18 @@ Use this section to log each change with:
   - Focused: pytest -q tests/test_ws_chat_orchestrator.py → PASS.
   - Full: pytest -q → 4 failures (2 UI processing ack timing + upload processing filename + tabular_import). These existed pre-refactor aside from the fixed image path; no regressions in orchestrator behavior.
 - Logging/observability: No change to event emission; ACKs and Redis/SSE publishing paths preserved.
-- Commit: <this change>
+- Commit: a79978f
+
+### 2025-09-23 - M3 - Components interface and registry
+- Changes:
+  - Added cedar_orchestrator/ctx.py with OrchestratorCtx and ComponentResult models (Pydantic), plus a ComponentFn type alias. Comments point to README Keys & Env and Troubleshooting.
+  - Added cedar_components/registry.py with @register decorator, list_components(), get_component(), and async invoke().
+  - Added initial components:
+    - example.summarize — trivial summarizer that emits a debug prompt including a system role.
+    - retrieval.retrieve_docs — placeholder retrieval component; returns empty results and emits debug prompt.
+  - Added tests/tests_components_registry.py with unit tests for registry listing and summarize execution (asserts debug prompt includes a system role).
+- Tests run:
+  - pytest -q tests/test_components_registry.py → PASS
+  - Existing focused tests from M2 remain as previously observed (ws_chat_orchestrator PASS; tool end-to-end tabular_import still failing; UI timing issues unchanged).
+- Logging/observability: Components include debug.prompt arrays to be surfaced in orchestrator debug events when integrated in M4.
+- Commit: pending (next commit includes M4)

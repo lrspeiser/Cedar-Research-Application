@@ -612,16 +612,104 @@ Response formatting:
                 print(f"[ws-chat-debug-error] {type(e).__name__}: {e}")
             except Exception:
                 pass
-        
-        # The orchestration loop with tools would go here
-        # For now, emit a completion message to ensure basic functionality works
-        
-        # Emit final message for this milestone (temporary)
+
+        # -----------------------------
+        # M4: Fan-out/fan-in over components
+        # -----------------------------
+        import time as _time
+        from cedar_components import registry as _reg
+        # Ensure components are imported to register themselves
         try:
-            _enqueue({"type": "final", "text": "WebSocket orchestrator extracted successfully.", "thread_id": thr.id}, require_ack=True)
+            import cedar_components.example.summarize  # noqa: F401
+            import cedar_components.retrieval.retrieve_docs  # noqa: F401
         except Exception:
             pass
-        
+
+        # Select candidate components (simple heuristic for now)
+        candidates = []
+        try:
+            # Always try summarize; retrieval based on content length
+            candidates.append("example.summarize")
+            if len(content or "") > 0:
+                candidates.append("retrieval.retrieve_docs")
+        except Exception:
+            candidates = ["example.summarize"]
+        # De-dup and keep order
+        seen = set(); cand = []
+        for n in candidates:
+            if n not in seen:
+                seen.add(n); cand.append(n)
+
+        # Dispatch concurrently with per-component timeouts
+        try:
+            timeout_s = int(os.getenv("CEDARPY_COMPONENT_TIMEOUT_SECONDS", "15"))
+        except Exception:
+            timeout_s = 15
+
+        async def _run_component(name: str):
+            t0 = _time.time()
+            try:
+                _enqueue({"type": "action", "function": "component", "text": f"Dispatch {name}", "call": {"component": name}, "thread_id": thr.id}, require_ack=True)
+            except Exception:
+                pass
+            try:
+                res = await asyncio.wait_for(_reg.invoke(name, {"text": content, "query": content}, ctx={"project_id": project_id} and None or None), timeout=timeout_s)  # type: ignore[arg-type]
+            except asyncio.TimeoutError:
+                dt = int((_time.time() - t0) * 1000)
+                return {"name": name, "ok": False, "status": "timeout", "duration_ms": dt, "debug": None, "content": None, "error": f"timeout after {timeout_s}s"}
+            except Exception as e:
+                dt = int((_time.time() - t0) * 1000)
+                return {"name": name, "ok": False, "status": "error", "duration_ms": dt, "debug": None, "content": None, "error": f"{type(e).__name__}: {e}"}
+            # Normalize ComponentResult -> dict
+            try:
+                dt = res.duration_ms or int((_time.time() - t0) * 1000)
+                dbg = res.debug if hasattr(res, 'debug') else None
+                return {"name": name, "ok": bool(res.ok), "status": res.status, "duration_ms": dt, "debug": dbg, "content": res.content, "error": res.error}
+            except Exception:
+                dt = int((_time.time() - t0) * 1000)
+                return {"name": name, "ok": False, "status": "error", "duration_ms": dt, "debug": None, "content": None, "error": "invalid component result"}
+
+        tasks = [asyncio.create_task(_run_component(n)) for n in cand]
+        results = await asyncio.gather(*tasks, return_exceptions=False)
+
+        # Emit per-component debug and completion events
+        for r in results:
+            try:
+                if r.get("debug") and isinstance(r["debug"], dict) and r["debug"].get("prompt"):
+                    _enqueue({"type": "debug", "prompt": r["debug"]["prompt"], "component": r["name"], "thread_id": thr.id})
+            except Exception:
+                pass
+            try:
+                txt = f"{r['name']} {'ok' if r.get('ok') else r.get('status')}"
+                _enqueue({"type": "action", "function": "component_result", "text": txt, "call": {"component": r['name'], "status": r.get('status'), "error": r.get('error')}, "thread_id": thr.id}, require_ack=True)
+            except Exception:
+                pass
+
+        # Simple aggregator stub: prefer example.summarize summary; else compose basic text
+        final_text = None
+        final_title = None
+        try:
+            for r in results:
+                if r["name"] == "example.summarize" and isinstance(r.get("content"), dict):
+                    s = r["content"].get("summary") if isinstance(r["content"], dict) else None
+                    if isinstance(s, str) and s.strip():
+                        final_text = s.strip()
+                        final_title = "Summary"
+                        break
+        except Exception:
+            pass
+        if not final_text:
+            # Fallback aggregation (no fabrication: present minimal info)
+            final_text = (content or "").strip()[:200] or "Done."
+            final_title = "Assistant"
+
+        final_json = {"function": "final", "args": {"text": final_text, "title": final_title, "run_summary": [f"components: {', '.join(cand)}"]}}
+
+        try:
+            _enqueue({"type": "final", "text": final_text, "json": final_json, "thread_id": thr.id}, require_ack=True)
+        except Exception:
+            pass
+
         try:
             await event_q.put(None)
             await sender_task
