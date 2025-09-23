@@ -614,6 +614,37 @@ Response formatting:
                 pass
 
         # -----------------------------
+        # Plan (optional): call tool_plan to propose a plan; adopt or ignore based on diff
+        # -----------------------------
+        try:
+            from cedar_tools_modules.plan import tool_plan as _tool_plan
+            plan_obj = _tool_plan(user_text=content, resources=resources, history=history, notes=notes, changelog=changelog, ctx=ctx)
+            # Emit plan for observability
+            try:
+                _enqueue({"type": "plan", "json": plan_obj, "thread_id": thr.id}, require_ack=True)
+            except Exception:
+                pass
+            # Decide adoption: if we have no steps yet, adopt; otherwise compare rough signature
+            def _sig(steps):
+                try:
+                    return [(str(s.get('function')), str(s.get('title'))) for s in (steps or [])]
+                except Exception:
+                    return []
+            old_sig = _sig(plan_ctx.get("steps") or [])
+            new_sig = _sig(plan_obj.get("steps") or [])
+            if not old_sig:
+                plan_ctx["steps"] = plan_obj.get("steps") or []
+                plan_ctx["ptr"] = 0
+            else:
+                # If identical or nearly identical, ignore; else adopt
+                same = old_sig == new_sig
+                if not same:
+                    plan_ctx["steps"] = plan_obj.get("steps") or []
+                    plan_ctx["ptr"] = 0
+        except Exception:
+            pass
+
+        # -----------------------------
         # M4: Fan-out/fan-in over components
         # -----------------------------
         import time as _time

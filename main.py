@@ -4822,7 +4822,9 @@ def api_test_tool_exec(body: ToolExecRequest, request: Request):
             options=options if isinstance(options, dict) else None,
             SessionLocal=SessionLocal2,
             FileEntry=FileEntry,
-            tabular_import_via_llm=_tabular_import_via_llm,
+            project_dirs=_project_dirs,
+            get_project_engine=_get_project_engine,
+            Dataset=Dataset,
         )
 
     raise HTTPException(status_code=400, detail="unsupported function")

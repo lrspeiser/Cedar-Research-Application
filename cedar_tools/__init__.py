@@ -1,7 +1,9 @@
-# cedar_tools.py facade
-#
-# Backward-compatible facade that re-exports tool functions from cedar_tools_modules.
-# This keeps import cedar_tools working while enabling per-tool files under cedar_tools_modules/.
+"""
+Cedar tools package: one module per tool function.
+
+Keys: see README "Keys & Env" for how model/API keys are loaded from env or ~/CedarPyData/.env
+Troubleshooting: see README "Troubleshooting LLM failures" for guidance.
+"""
 from __future__ import annotations
 
 from cedar_tools_modules.web import tool_web  # type: ignore
