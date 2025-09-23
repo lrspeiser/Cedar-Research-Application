@@ -2842,6 +2842,11 @@ SELECT * FROM demo LIMIT 10;""")
       var stream = null; // processing bubble node, created on backend 'processing' action
       var spin = null;   // spinner element inside processing bubble
       var procPre = null; // processing log area (details) created on 'processing' action
+      var streamText = null; // text node to stream main answer tokens into (assigned on 'processing')
+      // Live planning (thinking) bubble state
+      var thinkWrap = null; // planning bubble wrapper
+      var thinkText = null; // planning text node to stream tokens into
+      var thinkSpin = null; // spinner inside planning bubble
 
       // Subscribe to client console logs while this WS session is active (appended to procPre when available)
       var logSub = function(pl){
@@ -2979,6 +2984,8 @@ SELECT * FROM demo LIMIT 10;""")
                 var meta0 = document.createElement('div'); meta0.className = 'meta small'; meta0.innerHTML = "<span class='pill'>assistant</span> <span class='title' style='font-weight:600'>processing</span>";
                 var bub0 = document.createElement('div'); bub0.className = 'bubble assistant';
                 var cont0 = document.createElement('div'); cont0.className = 'content'; cont0.style.whiteSpace='pre-wrap'; cont0.textContent = text || 'Processing…';
+                // Use this content node as the streaming target for main assistant tokens
+                streamText = cont0;
                 // Spinner
                 spin = document.createElement('span'); spin.className = 'spinner'; spin.style.marginLeft = '6px'; cont0.appendChild(spin);
                 bub0.appendChild(cont0);
@@ -3104,9 +3111,69 @@ SELECT * FROM demo LIMIT 10;""")
               } catch(_){}
             }
           } catch(_){ }
+        } else if (m.type === 'thinking_start') {
+          try {
+            // Create a live planning bubble if not already present
+            if (!thinkWrap) {
+              var detIdTh = 'det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
+              thinkWrap = document.createElement('div'); thinkWrap.className = 'msg assistant';
+              var metaTh = document.createElement('div'); metaTh.className = 'meta small'; metaTh.innerHTML = "<span class='pill'>assistant</span> <span class='title' style='font-weight:600'>planning</span>";
+              var bubTh = document.createElement('div'); bubTh.className = 'bubble assistant'; bubTh.setAttribute('data-details-id', detIdTh);
+              var contTh = document.createElement('div'); contTh.className = 'content'; contTh.style.whiteSpace='pre-wrap'; contTh.textContent = 'Planning…';
+              // Spinner during planning
+              thinkSpin = document.createElement('span'); thinkSpin.className = 'spinner'; thinkSpin.style.marginLeft = '6px'; contTh.appendChild(thinkSpin);
+              thinkText = contTh;
+              // Details area for planner metadata
+              var detailsTh = document.createElement('div'); detailsTh.id = detIdTh; detailsTh.style.display='none';
+              var preTh = document.createElement('pre'); preTh.className='small'; preTh.style.whiteSpace='pre-wrap'; preTh.style.background='#f8fafc'; preTh.style.padding='8px'; preTh.style.borderRadius='6px';
+              try { preTh.textContent = JSON.stringify({ model: m.model || '' }, null, 2); } catch(_) { preTh.textContent = String(m.model||''); }
+              detailsTh.appendChild(preTh);
+              bubTh.appendChild(contTh);
+              thinkWrap.appendChild(metaTh); thinkWrap.appendChild(bubTh); thinkWrap.appendChild(detailsTh);
+              if (msgs) msgs.appendChild(thinkWrap);
+              stepAdvance('assistant:thinking', thinkWrap);
+            }
+          } catch(_) {}
+        } else if (m.type === 'thinking_token' && m.delta) {
+          try {
+            if (thinkText) {
+              thinkText.textContent = (thinkText.textContent ? thinkText.textContent : '') + String(m.delta);
+            }
+          } catch(_) {}
+        } else if (m.type === 'thinking') {
+          try {
+            // Ensure bubble exists
+            if (!thinkWrap) {
+              var detIdTh2 = 'det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
+              thinkWrap = document.createElement('div'); thinkWrap.className = 'msg assistant';
+              var metaTh2 = document.createElement('div'); metaTh2.className = 'meta small'; metaTh2.innerHTML = "<span class='pill'>assistant</span> <span class='title' style='font-weight:600'>planning</span>";
+              var bubTh2 = document.createElement('div'); bubTh2.className = 'bubble assistant'; bubTh2.setAttribute('data-details-id', detIdTh2);
+              var contTh2 = document.createElement('div'); contTh2.className = 'content'; contTh2.style.whiteSpace='pre-wrap';
+              thinkText = contTh2;
+              bubTh2.appendChild(contTh2);
+              var detailsTh2 = document.createElement('div'); detailsTh2.id = detIdTh2; detailsTh2.style.display='none';
+              var preTh2 = document.createElement('pre'); preTh2.className='small'; preTh2.style.whiteSpace='pre-wrap'; preTh2.style.background='#f8fafc'; preTh2.style.padding='8px'; preTh2.style.borderRadius='6px';
+              detailsTh2.appendChild(preTh2);
+              thinkWrap.appendChild(metaTh2); thinkWrap.appendChild(bubTh2); thinkWrap.appendChild(detailsTh2);
+              if (msgs) msgs.appendChild(thinkWrap);
+              stepAdvance('assistant:thinking', thinkWrap);
+            }
+            if (thinkText) { thinkText.textContent = String(m.text || ''); }
+            try { if (thinkSpin && thinkSpin.parentNode) thinkSpin.remove(); } catch(_) {}
+            // Update details with final planner output and metadata
+            try {
+              var detEl = thinkWrap ? thinkWrap.querySelector('.bubble[data-details-id]') : null;
+              var did = detEl ? detEl.getAttribute('data-details-id') : null;
+              var preEl = did ? document.querySelector('#'+did+' pre') : null;
+              if (preEl) {
+                var obj = { model: m.model || '', elapsed_ms: m.elapsed_ms || null, text: String(m.text||'') };
+                preEl.textContent = JSON.stringify(obj, null, 2);
+              }
+            } catch(_) {}
+          } catch(_) {}
         } else if (m.type === 'token' && m.word) {
           if (lastW !== m.word) {
-            streamText.textContent = (streamText.textContent ? (streamText.textContent + ' ') : '') + String(m.word);
+            streamText.textContent = (streamText && streamText.textContent ? (streamText.textContent + ' ') : '') + String(m.word);
             lastW = m.word;
           }
         } else if (m.type === 'info') {
