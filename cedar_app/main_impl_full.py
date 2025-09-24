@@ -2984,7 +2984,13 @@ SELECT * FROM demo LIMIT 10;""")
       }
       function handleEvent(m){
         if (!m) return;
-        if (m.type === 'message') { try { if (m.thread_id) { upsertAllChatsItem(m.thread_id, null, String(m.text||'')); } } catch(_){ } ackEvent(m);
+        if (m.type === 'stream') {
+          // Handle streaming text updates
+          if (streamText) {
+            streamText.textContent = m.text || '';
+          }
+          refreshTimeout();
+        } else if (m.type === 'message') { try { if (m.thread_id) { upsertAllChatsItem(m.thread_id, null, String(m.text||'')); } } catch(_){ } ackEvent(m);
           try {
             var r = String(m.role||'assistant');
             if (r === 'user') {
