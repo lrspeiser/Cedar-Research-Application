@@ -1,0 +1,24 @@
+# File Processing Requirements
+# Install with: pip install -r requirements-file-processing.txt
+
+# PDF Processing
+PyMuPDF>=1.23.0  # For digital PDF extraction
+pdf2image>=1.16.0  # For converting PDFs to images
+Pillow>=10.0.0  # Image processing
+
+# OCR
+pytesseract>=0.3.10  # Python wrapper for Tesseract OCR
+# Note: Also requires Tesseract to be installed:
+# macOS: brew install tesseract
+# Ubuntu: sudo apt-get install tesseract-ocr
+# Windows: Download from https://github.com/UB-Mannheim/tesseract/wiki
+
+# Language Detection  
+langdetect>=1.0.9  # Language detection library
+
+# For better PDF handling
+pypdf2>=3.0.0  # Alternative PDF reader
+pdfplumber>=0.9.0  # For extracting tables from PDFs
+
+# Image analysis helpers
+opencv-python>=4.8.0  # Computer vision library (optional)

@@ -19,6 +19,13 @@ from dataclasses import dataclass
 from openai import AsyncOpenAI
 from fastapi import WebSocket
 
+# Import file processing agents
+try:
+    from .file_processing_agents import FileProcessingOrchestrator
+    FILE_PROCESSING_AVAILABLE = True
+except ImportError:
+    FILE_PROCESSING_AVAILABLE = False
+
 # Configure detailed logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -405,6 +412,24 @@ class ThinkerOrchestrator:
         self.general_agent = GeneralAgent(self.llm_client)
         self.sql_agent = SQLAgent(self.llm_client)
         
+        # Initialize file processing orchestrator if available
+        if FILE_PROCESSING_AVAILABLE:
+            self.file_processor = FileProcessingOrchestrator(self.llm_client)
+        else:
+            self.file_processor = None
+        
+    async def process_file(self, file_path: str, file_type: str, websocket: WebSocket) -> Dict[str, Any]:
+        """Process uploaded file using file processing agents"""
+        if not self.file_processor:
+            await websocket.send_json({
+                "type": "message",
+                "role": "assistant",
+                "text": "File processing agents not available. Please install required libraries."
+            })
+            return {"error": "File processing not available"}
+        
+        return await self.file_processor.process_file(file_path, file_type, websocket)
+    
     async def think(self, message: str) -> Dict[str, Any]:
         """Thinker phase: Analyze the request and plan the approach"""
         thinking_process = {

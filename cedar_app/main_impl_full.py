@@ -1330,6 +1330,14 @@ def record_changelog(db: Session, project_id: int, branch_id: int, action: str, 
 
 app = FastAPI(title="Cedar")
 
+# Register file upload routes
+try:
+    from cedar_app.file_upload_handler import register_file_upload_routes
+    register_file_upload_routes(app)
+    print("[startup] File upload routes registered")
+except Exception as e:
+    print(f"[startup] Could not register file upload routes: {e}")
+
 # Register WebSocket routes using new thinker-orchestrator flow
 try:
     from cedar_orchestrator.ws_chat import register_ws_chat, WSDeps
