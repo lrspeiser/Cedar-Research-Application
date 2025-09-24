@@ -1408,11 +1408,43 @@ def _cedarpy_startup_llm_probe():
 from fastapi.responses import HTMLResponse as _HTMLResponse
 
 def layout(title: str, body: str, header_label: Optional[str] = None, header_link: Optional[str] = None, nav_query: Optional[str] = None) -> HTMLResponse:  # type: ignore[override]
-    # LLM status for header (best-effort; cached)
+    # LLM status and model selector for header
     try:
-        ready, reason, model = _llm_reachability()
+        ready, reason, current_model = _llm_reachability()
+        available_models = ["gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-4.1", "gpt-4o"]
+        
         if ready:
-            llm_status = f" <a href='/settings' class='pill' title='LLM connected — click to manage key'>LLM: {escape(model)}</a>"
+            # Build model selector dropdown
+            model_options = ""
+            for m in available_models:
+                selected = "selected" if m == current_model else ""
+                model_options += f"<option value='{escape(m)}' {selected}>{escape(m)}</option>"
+            
+            llm_status = f"""
+            <select id="modelSelector" onchange="changeModel(this.value)" 
+                    style="padding: 3px 8px; border-radius: 999px; background: #eef2ff; color: #3730a3; 
+                           font-size: 12px; border: 1px solid #c7d2fe; cursor: pointer;"
+                    title="Select LLM model">
+                {model_options}
+            </select>
+            <script>
+            function changeModel(model) {{
+                fetch('/api/model/change', {{
+                    method: 'POST',
+                    headers: {{'Content-Type': 'application/json'}},
+                    body: JSON.stringify({{model: model}})
+                }}).then(function(r) {{
+                    if (r.ok) {{
+                        console.log('Model changed to ' + model);
+                        // Optionally reload to reflect changes
+                        setTimeout(function() {{ location.reload(); }}, 500);
+                    }}
+                }}).catch(function(e) {{
+                    console.error('Failed to change model:', e);
+                }});
+            }}
+            </script>
+            """
         else:
             llm_status = f" <a href='/settings' class='pill' style='background:#fef2f2; color:#991b1b' title='LLM unavailable — click to paste your key'>LLM unavailable ({escape(reason)})</a>"
     except Exception:
@@ -1655,6 +1687,33 @@ def settings_save(openai_key: str = Form("") , model: str = Form("")):
         return RedirectResponse("/settings?msg=Saved", status_code=303)
     else:
         return RedirectResponse("/settings?msg=No+changes", status_code=303)
+
+@app.post("/api/model/change")
+def api_model_change(payload: Dict[str, Any]):
+    """API endpoint to change the LLM model from the dropdown"""
+    try:
+        model = str(payload.get("model", "")).strip()
+        if not model:
+            return JSONResponse({"ok": False, "error": "No model specified"}, status_code=400)
+        
+        # Validate model is one of the allowed ones
+        allowed_models = {"gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-4.1", "gpt-4o"}
+        if model not in allowed_models:
+            return JSONResponse({"ok": False, "error": f"Invalid model: {model}"}, status_code=400)
+        
+        # Update the model in environment and settings file
+        updates = {"CEDARPY_OPENAI_MODEL": model}
+        _env_set_many(updates)
+        
+        # Log the change
+        try:
+            print(f"[model-change] Changed LLM model to {model}")
+        except Exception:
+            pass
+        
+        return JSONResponse({"ok": True, "model": model})
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
 # Serve uploaded files for convenience
 # Serve uploaded files (legacy path no longer used). We mount a dynamic per-project files app below.

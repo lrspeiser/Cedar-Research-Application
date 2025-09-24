@@ -66,10 +66,13 @@ class CodeAgent:
             )
         
         try:
+            # Get model from environment, defaulting to gpt-5
+            model = os.getenv("CEDARPY_OPENAI_MODEL") or os.getenv("OPENAI_API_KEY_MODEL") or "gpt-5"
+            
             # Ask LLM to write Python code to solve the problem
-            logger.info("[CodeAgent] Requesting code generation from LLM")
+            logger.info(f"[CodeAgent] Requesting code generation from LLM using model: {model}")
             response = await self.llm_client.chat.completions.create(
-                model="gpt-4o",  # Use GPT-4o for better performance
+                model=model,
                 messages=[
                     {
                         "role": "system", 
@@ -173,9 +176,11 @@ class ReasoningAgent:
             )
         
         try:
-            logger.info("[ReasoningAgent] Using LLM for step-by-step reasoning")
+            # Get model from environment
+            model = os.getenv("CEDARPY_OPENAI_MODEL") or os.getenv("OPENAI_API_KEY_MODEL") or "gpt-5"
+            logger.info(f"[ReasoningAgent] Using LLM for step-by-step reasoning with model: {model}")
             response = await self.llm_client.chat.completions.create(
-                model="gpt-4o",  # Use GPT-4o for better reasoning
+                model=model,
                 messages=[
                     {
                         "role": "system",
@@ -245,10 +250,12 @@ class SQLAgent:
             )
         
         try:
+            # Get model from environment
+            model = os.getenv("CEDARPY_OPENAI_MODEL") or os.getenv("OPENAI_API_KEY_MODEL") or "gpt-5"
             # Ask LLM to write SQL query
-            logger.info("[SQLAgent] Requesting SQL generation from LLM")
+            logger.info(f"[SQLAgent] Requesting SQL generation from LLM using model: {model}")
             response = await self.llm_client.chat.completions.create(
-                model="gpt-4o",
+                model=model,
                 messages=[
                     {
                         "role": "system",
@@ -313,9 +320,11 @@ class GeneralAgent:
             )
         
         try:
-            logger.info("[GeneralAgent] Using LLM for direct response")
+            # Get model from environment
+            model = os.getenv("CEDARPY_OPENAI_MODEL") or os.getenv("OPENAI_API_KEY_MODEL") or "gpt-5"
+            logger.info(f"[GeneralAgent] Using LLM for direct response with model: {model}")
             response = await self.llm_client.chat.completions.create(
-                model="gpt-4o",  # Use GPT-4o
+                model=model,
                 messages=[
                     {
                         "role": "system",
