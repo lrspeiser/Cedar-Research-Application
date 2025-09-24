@@ -76,7 +76,7 @@ _backend_hidden = [
     'fastapi', 'starlette', 'pydantic', 'pydantic_core', 'typing_extensions',
     'anyio', 'sqlalchemy', 'uvicorn', 'websockets', 'httpx', 'certifi', 'sniffio', 'h11', 'click'
 ]
-hiddenimports = list(set(hiddenimports + ['main', 'main_mini'] + _backend_hidden))
+hiddenimports = list(set(hiddenimports + ['main', 'main_mini', 'cedar_app.main_impl_full'] + _backend_hidden))
 
 # Exclude unused Qt3D modules to avoid macOS framework symlink collisions (FileExistsError)
 # See: known PyInstaller + Qt frameworks dedup issues on macOS
@@ -92,9 +92,22 @@ excludes = [
 repo_root = os.path.abspath(os.getcwd())
 
 # Ensure main.py and main_mini.py are present as data files for cedarqt fallback
-for fname in ['main.py', 'main_mini.py']:
+for fname in ['main.py', 'main_mini.py', 'page.html']:
     try:
         datas.append((os.path.join(repo_root, fname), '.'))
+    except Exception:
+        pass
+
+# Include UI asset directories if present (assets/ and static/ at repo root)
+for _ui_dir_name in ['assets', 'static']:
+    try:
+        _dir = os.path.join(repo_root, _ui_dir_name)
+        if os.path.isdir(_dir):
+            for root, _dirs, _files in os.walk(_dir):
+                for _f in _files:
+                    _src = os.path.join(root, _f)
+                    _rel = os.path.relpath(root, repo_root)
+                    datas.append((_src, _rel))
     except Exception:
         pass
 

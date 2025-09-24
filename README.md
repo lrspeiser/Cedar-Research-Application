@@ -66,6 +66,25 @@ This starts the FastAPI server and opens the UI inside a QtWebEngine window. Jav
 
 5. Open http://127.0.0.1:8000 in your browser.
 
+## Frontend (page.html) and UI selection
+
+The app now prefers a standalone frontend file at the repo root: `page.html`.
+
+- In packaged builds (DMG/Qt app) and in development, if `page.html` exists it is served by default at `/`.
+- Optional static asset directories `assets/` or `static/` next to `page.html` are automatically mounted at `/assets` and `/static` when present and are bundled into the DMG.
+- Verbose logs indicate which UI path was chosen, e.g., `[ui] serving new UI page.html from ...` or `[ui] serving legacy inline UI (...)`.
+
+Overrides
+- Force legacy inline UI: set `CEDARPY_LEGACY_UI=1` or open `http://127.0.0.1:8000/?legacy=1`.
+- Back-compat: `CEDARPY_NEW_UI=1` remains supported but is no longer needed when `page.html` is present.
+
+Packaging
+- The DMG includes `page.html` by default. If `assets/` or `static/` directories exist, they are recursively bundled and mounted inside the app at `/assets` and `/static`.
+- See packaging files: `packaging/cedarpy.spec` and `packaging/cedarpy_macos.spec`.
+
+Notes
+- No keys are needed for the frontend itself. For LLM-backed features, see "LLM classification on file upload" and "Where to put your OpenAI key (.env) when packaged" below. Relevant code paths include comments pointing back to those sections.
+
 ## Data model (MySQL)
 
 - `projects` – top-level projects

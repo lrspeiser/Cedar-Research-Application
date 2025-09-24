@@ -1625,6 +1625,26 @@ try:
 except Exception as e:
     print(f"[cedarpy] Skipping /uploads-legacy mount due to error: {e}")
 
+# Optional: mount packaged/static UI assets when present (assets or static directories next to page.html)
+try:
+    import sys as _sys
+    if getattr(_sys, 'frozen', False):
+        _app_dir = os.path.dirname(_sys.executable)
+        _base = os.path.abspath(os.path.join(_app_dir, '..', 'Resources'))
+    else:
+        _base = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+    for _name in ("assets", "static"):
+        _dir = os.path.join(_base, _name)
+        if os.path.isdir(_dir):
+            mount_path = f"/{_name}"
+            try:
+                app.mount(mount_path, StaticFiles(directory=_dir), name=f"ui_{_name}")
+                print(f"[cedarpy] Mounted {mount_path} from {_dir}")
+            except Exception as _e:
+                print(f"[cedarpy] Failed to mount {mount_path} from {_dir}: {_e}")
+except Exception as _e2:
+    print(f"[cedarpy] Skipping UI assets mount due to error: {_e2}")
+
 @app.get("/uploads/{project_id}/{path:path}")
 def serve_project_upload(project_id: int, path: str):
     # See PROJECT_SEPARATION_README.md
@@ -5729,8 +5749,56 @@ def _execute_sql_with_undo(db: Session, sql_text: str, project_id: int, branch_i
 
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request, db: Session = Depends(get_registry_db)):
-    # Central registry for list of projects
+    # New UI default: serve page.html when present (packaged or dev). Legacy UI can be forced via CEDARPY_LEGACY_UI=1
+    # See README.md section "Frontend (page.html) and UI selection" for details.
+    try:
+        import sys as _sys
+        _force_legacy = str(os.getenv('CEDARPY_LEGACY_UI', '')).strip().lower() in {'1','true','yes'}
+        # Backward-compat: CEDARPY_NEW_UI still enables new UI even if not packaged
+        _prefer_new_flag = str(os.getenv('CEDARPY_NEW_UI', '')).strip().lower() in {'1','true','yes'}
+        # Query param override: /?legacy=1 forces legacy
+        try:
+            from urllib.parse import parse_qs
+            _qs = parse_qs((request.url.query or '')) if getattr(request, 'url', None) else {}
+            if str((_qs.get('legacy') or [''])[0]).strip().lower() in {'1','true','yes'}:
+                _force_legacy = True
+        except Exception:
+            pass
+        if not _force_legacy:
+            # Locate page.html in dev (repo root) or packaged Resources
+            base = None
+            try:
+                if getattr(_sys, 'frozen', False):
+                    app_dir = os.path.dirname(_sys.executable)
+                    base = os.path.abspath(os.path.join(app_dir, '..', 'Resources'))
+                else:
+                    base = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+                page_path = os.path.join(base, 'page.html')
+            except Exception:
+                page_path = None
+            if page_path and os.path.isfile(page_path):
+                try:
+                    print(f"[ui] serving new UI page.html from {page_path}")
+                except Exception:
+                    pass
+                return FileResponse(page_path)
+            elif _prefer_new_flag:
+                try:
+                    print("[ui] CEDARPY_NEW_UI=1 set but page.html not found; falling back to legacy")
+                except Exception:
+                    pass
+    except Exception as e:
+        try:
+            print(f"[ui] error probing new UI: {type(e).__name__}: {e}")
+        except Exception:
+            pass
+
+    # Fallback to legacy inline UI (projects list)
     projects = db.query(Project).order_by(Project.created_at.desc()).all()
+    try:
+        print(f"[ui] serving legacy inline UI (projects={len(projects)})")
+    except Exception:
+        pass
     return layout("Cedar", projects_list_html(projects), header_label="All Projects")
 
 
