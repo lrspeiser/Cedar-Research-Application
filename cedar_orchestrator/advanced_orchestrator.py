@@ -41,6 +41,7 @@ class AgentResult:
     result: Any
     confidence: float
     method: str
+    explanation: str = ""  # User-facing explanation of what the agent did
     
 class CodeAgent:
     """Agent that writes and executes code to solve problems"""
@@ -82,7 +83,8 @@ print(f"The square root of {number} is {{result}}")
                         agent_name="CodeAgent",
                         result=str(result),
                         confidence=1.0,  # Mathematical calculation is certain
-                        method=f"Executed Python: math.sqrt({number})"
+                        method=f"Executed Python: math.sqrt({number})",
+                        explanation=f"I wrote and executed Python code to calculate the square root of {number}. The code used Python's math.sqrt() function which computed the result as {result:.10f}."
                     )
                     
             # Fallback to LLM for code generation
@@ -99,7 +101,8 @@ print(f"The square root of {number} is {{result}}")
                     agent_name="CodeAgent",
                     result=response.choices[0].message.content,
                     confidence=0.8,
-                    method="LLM-generated code"
+                    method="LLM-generated code",
+                    explanation="I used an LLM to generate Python code to solve this problem."
                 )
                 
         except Exception as e:
@@ -109,7 +112,8 @@ print(f"The square root of {number} is {{result}}")
             agent_name="CodeAgent",
             result=f"Could not compute: {task}",
             confidence=0.1,
-            method="Error in processing"
+            method="Error in processing",
+            explanation="I encountered an error while trying to process this task."
         )
 
 class MathAgent:
@@ -141,7 +145,8 @@ class MathAgent:
                         agent_name="MathAgent",
                         result=f"{result:.10f}",  # High precision
                         confidence=1.0,
-                        method="Direct mathematical computation"
+                        method="Direct mathematical computation",
+                        explanation=f"I performed a direct mathematical computation using Python's math library. The square root of {number} is {result:.10f} (shown with 10 decimal places for precision)."
                     )
                     
             # Use LLM for complex math
@@ -164,7 +169,8 @@ class MathAgent:
                         agent_name="MathAgent",
                         result=llm_result,
                         confidence=0.9,
-                        method="LLM mathematical reasoning"
+                        method="LLM mathematical reasoning",
+                        explanation=f"I used advanced AI reasoning to solve this mathematical problem: {llm_result[:100]}..."
                     )
                 except Exception as llm_error:
                     logger.error(f"[MathAgent] LLM call failed: {llm_error}")
@@ -176,7 +182,8 @@ class MathAgent:
             agent_name="MathAgent",
             result="Unable to compute",
             confidence=0.0,
-            method="Error"
+            method="Error",
+            explanation="I was unable to compute the answer due to an error."
         )
 
 class GeneralAgent:
@@ -207,7 +214,8 @@ class GeneralAgent:
                         agent_name="GeneralAgent",
                         result=llm_result,
                         confidence=0.7,
-                        method="General LLM response"
+                        method="General LLM response",
+                        explanation=f"I used general AI reasoning to process your request and generated this response."
                     )
                 except Exception as llm_error:
                     logger.error(f"[GeneralAgent] LLM call failed: {llm_error}")
@@ -225,14 +233,16 @@ class GeneralAgent:
                     agent_name="GeneralAgent",
                     result=str(result),
                     confidence=0.6,
-                    method="Fallback calculation"
+                    method="Fallback calculation",
+                    explanation=f"I used a fallback calculation method to compute the square root of {number} as {result}."
                 )
                 
         return AgentResult(
             agent_name="GeneralAgent",
             result="I need more context to answer that.",
             confidence=0.1,
-            method="Insufficient information"
+            method="Insufficient information",
+            explanation="I don't have enough information to provide a meaningful answer to this request."
         )
 
 class ThinkerOrchestrator:
@@ -281,9 +291,11 @@ class ThinkerOrchestrator:
         thinking = await self.think(message)
         logger.info(f"[ORCHESTRATOR] Thinking result: Type={thinking['identified_type']}, Agents={thinking['agents_to_use']}")
         
+        # Send processing action that UI expects
         await websocket.send_json({
-            "type": "thinker_reasoning",
-            "content": f"Analyzing: {message}\nType: {thinking['identified_type']}\nPlan: Using {', '.join(thinking['agents_to_use'])} agents"
+            "type": "action",
+            "function": "processing",
+            "text": f"🧠 Analyzing request...\nIdentified as: {thinking['identified_type']}\nEngaging agents: {', '.join(thinking['agents_to_use'])}"
         })
         await asyncio.sleep(0.5)  # Simulate thinking time
         
@@ -315,10 +327,21 @@ class ThinkerOrchestrator:
                 logger.info(f"[ORCHESTRATOR] Result {i+1}: {result.agent_name} - Confidence: {result.confidence:.2f}, Method: {result.method}")
                 logger.info(f"[ORCHESTRATOR] Result {i+1} content: {result.result[:200]}...")
                 
+                # Send detailed agent result with explanation
+                status_text = f"✅ {result.agent_name}: Completed (confidence: {result.confidence:.2f})\n\n"
+                status_text += f"📋 Method: {result.method}\n\n"
+                status_text += f"💡 {result.explanation}\n\n"
+                status_text += f"📊 Result: {result.result[:200]}{'...' if len(result.result) > 200 else ''}"
+                
                 await websocket.send_json({
-                    "type": "agent_result",
-                    "agent_name": result.agent_name,
-                    "content": f"{result.agent_name}: {result.result[:100]}... (confidence: {result.confidence:.2f}, method: {result.method})"
+                    "type": "action",
+                    "function": "status",
+                    "text": status_text,
+                    "metadata": {
+                        "agent": result.agent_name,
+                        "confidence": result.confidence,
+                        "method": result.method
+                    }
                 })
                 valid_results.append(result)
                 await asyncio.sleep(0.2)
@@ -332,18 +355,58 @@ class ThinkerOrchestrator:
         logger.info(f"[ORCHESTRATOR] Selected best result: {best_result.agent_name} with confidence {best_result.confidence}")
         logger.info(f"[ORCHESTRATOR] Selection reasoning: Method={best_result.method}")
         
-        # Send final response
+        # Calculate total time before using it
+        total_time = time.time() - orchestration_start
+        
+        # Create comprehensive final response with explanation
+        final_text = f"**TLDR: {best_result.result}**\n\n"
+        final_text += "---\n\n"
+        final_text += f"## 🎯 Final Answer Selection Process:\n\n"
+        final_text += f"I analyzed your request and identified it as a **{thinking['identified_type']}**. "
+        final_text += f"I engaged {len(valid_results)} specialized agents to work on this problem in parallel:\n\n"
+        
+        # Add summary of all agent results
+        for idx, result in enumerate(valid_results, 1):
+            final_text += f"**{idx}. {result.agent_name}** (Confidence: {result.confidence:.0%}):\n"
+            final_text += f"   - Method: {result.method}\n"
+            final_text += f"   - Result: {result.result[:100]}{'...' if len(result.result) > 100 else ''}\n"
+            final_text += f"   - Explanation: {result.explanation[:150]}{'...' if len(result.explanation) > 150 else ''}\n\n"
+        
+        # Add selection reasoning
+        final_text += f"## 🏆 Why I chose {best_result.agent_name}'s answer:\n\n"
+        if best_result.confidence == 1.0:
+            final_text += f"This agent provided a mathematically certain answer with 100% confidence using {best_result.method}. "
+            final_text += "When dealing with mathematical computations, I always prefer exact calculations over approximations.\n\n"
+        elif best_result.confidence >= 0.9:
+            final_text += f"This agent had the highest confidence ({best_result.confidence:.0%}) and used {best_result.method}, "
+            final_text += "which is the most reliable approach for this type of problem.\n\n"
+        else:
+            final_text += f"Among all agents, {best_result.agent_name} provided the most reliable answer "
+            final_text += f"with {best_result.confidence:.0%} confidence using {best_result.method}.\n\n"
+        
+        final_text += f"⏱️ Total orchestration time: {total_time:.2f} seconds"
+        
+        # Send final response in format expected by UI
         await websocket.send_json({
-            "type": "final_response",
-            "content": best_result.result,
+            "type": "message",
+            "role": "assistant",
+            "text": final_text,
             "metadata": {
                 "selected_agent": best_result.agent_name,
                 "confidence": best_result.confidence,
-                "method": best_result.method
+                "method": best_result.method,
+                "orchestration_time": total_time,
+                "all_results": [
+                    {
+                        "agent": r.agent_name,
+                        "result": r.result,
+                        "confidence": r.confidence,
+                        "method": r.method,
+                        "explanation": r.explanation
+                    } for r in valid_results
+                ]
             }
         })
-        
-        total_time = time.time() - orchestration_start
         logger.info("="*80)
         logger.info(f"[ORCHESTRATOR] Orchestration completed in {total_time:.3f}s")
         logger.info(f"[ORCHESTRATOR] Final answer: {best_result.result[:100]}...")

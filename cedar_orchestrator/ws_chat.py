@@ -83,19 +83,8 @@ async def handle_ws_chat(
     try:
         await websocket.accept()
         
-        # Send connection confirmation
-        await websocket.send_json({
-            "type": "connected",
-            "message": f"Connected to Cedar Advanced Orchestrator" + 
-                      (f" (Project {project_id})" if project_id else ""),
-            "features": {
-                "thinker": True,
-                "code_agent": True,
-                "math_agent": True,
-                "general_agent": True,
-                "parallel_processing": True
-            }
-        })
+        # Don't send initial connection message - UI doesn't expect it
+        # The UI will send the first message
         
         logger.info(f"WebSocket connected: project_id={project_id}")
         
@@ -105,7 +94,11 @@ async def handle_ws_chat(
                 # Receive message from client
                 data = await websocket.receive_json()
                 
-                if data.get("type") == "message":
+                # Support both formats: {"type": "message"} and {"action": "chat"}
+                message_type = data.get("type")
+                action = data.get("action")
+                
+                if message_type == "message" or action == "chat":
                     content = data.get("content", "").strip()
                     
                     logger.info("*"*80)
@@ -165,9 +158,11 @@ async def handle_ws_chat(
                     
                 else:
                     # Unknown message type
+                    msg_info = f"type={data.get('type')}, action={data.get('action')}"
+                    logger.warning(f"Unknown message format: {msg_info}")
                     await websocket.send_json({
                         "type": "error",
-                        "content": f"Unknown message type: {data.get('type')}"
+                        "content": f"Unknown message format: {msg_info}"
                     })
                     
             except Exception as e:
