@@ -3062,20 +3062,78 @@ SELECT * FROM demo LIMIT 10;""")
           // Handle agent results from orchestrator
           try {
             var agentName = m.agent_name || 'Agent';
+            var fullText = m.text || '';
+            
+            // Extract just the Answer part for collapsed view
+            var answerMatch = fullText.match(/Answer:\s*([^\n]+(?:\n(?!\n|Why:|Potential Issues:|Suggested Next Steps:)[^\n]+)*)/);
+            var collapsedText = answerMatch ? answerMatch[1].trim() : fullText.split('\n')[0];
+            
+            // Create unique ID for collapsible details
+            var detailId = 'agent_det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
+            
             var wrapA = document.createElement('div');
             wrapA.className = 'msg assistant';
             var metaA = document.createElement('div');
             metaA.className = 'meta small';
-            metaA.innerHTML = "<span class='pill'>agent</span> <span class='title' style='font-weight:600'>" + agentName + "</span>";
+            metaA.innerHTML = "<span class='pill'>agent</span> <span class='title' style='font-weight:600; cursor:pointer' role='button' tabindex='0'>" + agentName + "</span>";
+            
             var bubA = document.createElement('div');
             bubA.className = 'bubble assistant';
+            bubA.style.cursor = 'pointer';
+            bubA.setAttribute('data-details-id', detailId);
+            
+            // Collapsed content - just the answer
             var contA = document.createElement('div');
             contA.className = 'content';
             contA.style.whiteSpace = 'pre-wrap';
-            contA.textContent = m.text || '';
+            contA.textContent = collapsedText;
+            
+            // Add click hint
+            var hintA = document.createElement('span');
+            hintA.className = 'small muted';
+            hintA.style.marginLeft = '8px';
+            hintA.textContent = '(click for details)';
+            contA.appendChild(hintA);
+            
             bubA.appendChild(contA);
+            
+            // Full details (hidden by default)
+            var detailsA = document.createElement('div');
+            detailsA.id = detailId;
+            detailsA.style.display = 'none';
+            detailsA.style.padding = '12px';
+            detailsA.style.background = '#f8fafc';
+            detailsA.style.borderRadius = '6px';
+            detailsA.style.marginTop = '8px';
+            
+            var preA = document.createElement('pre');
+            preA.className = 'small';
+            preA.style.whiteSpace = 'pre-wrap';
+            preA.style.margin = '0';
+            preA.textContent = fullText;
+            detailsA.appendChild(preA);
+            
             wrapA.appendChild(metaA);
             wrapA.appendChild(bubA);
+            wrapA.appendChild(detailsA);
+            
+            // Make bubble and title clickable to toggle details
+            var toggleDetails = function() {
+              var d = document.getElementById(detailId);
+              if (d) {
+                var isHidden = d.style.display === 'none';
+                d.style.display = isHidden ? 'block' : 'none';
+                // Update hint text
+                hintA.textContent = isHidden ? '(click to collapse)' : '(click for details)';
+              }
+            };
+            
+            bubA.addEventListener('click', toggleDetails);
+            metaA.querySelector('.title').addEventListener('click', function(e) {
+              e.stopPropagation();
+              toggleDetails();
+            });
+            
             if (msgs) msgs.appendChild(wrapA);
             stepAdvance('agent:' + agentName.toLowerCase(), wrapA);
             ackEvent(m);

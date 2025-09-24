@@ -14,6 +14,7 @@ import math
 import time
 import subprocess
 import sqlite3
+import re
 from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass
 from openai import AsyncOpenAI
@@ -54,6 +55,8 @@ class AgentResult:
     explanation: str = ""  # User-facing explanation of what the agent did
     needs_rerun: bool = False  # Whether this agent needs to be rerun
     rerun_reason: str = ""  # Why a rerun is needed
+    needs_clarification: bool = False  # Whether the agent needs user clarification
+    clarification_question: str = ""  # Question to ask the user
     
 class CodeAgent:
     """Agent that uses LLM to write code, then executes it"""
@@ -105,6 +108,19 @@ class CodeAgent:
             else:
                 completion_params["max_tokens"] = 500
                 completion_params["temperature"] = 0.1
+            
+            # Add check for ambiguous queries that might need clarification
+            if "unclear" in task.lower() or "ambiguous" in task.lower() or task.count('?') > 2:
+                return AgentResult(
+                    agent_name="CodeAgent",
+                    display_name="Code Executor",
+                    result="Results So Far: Unable to generate code due to unclear requirements\n\nNext Steps: Clarify the specific calculation or operation needed",
+                    confidence=0.2,
+                    method="Needs clarification",
+                    explanation="Query is ambiguous",
+                    needs_clarification=True,
+                    clarification_question="Could you please specify exactly what calculation or operation you'd like me to perform?"
+                )
                 
             response = await self.llm_client.chat.completions.create(**completion_params)
             
@@ -146,13 +162,15 @@ class CodeAgent:
                 logger.info(f"[CodeAgent] Execution output: {output}")
                 logger.info(f"[CodeAgent] Completed in {time.time() - start_time:.3f}s")
                 
-                # Format output for user
-                formatted_output = f"""Answer: {output.strip() if output else 'Code executed successfully'}
+                # Format output for user with structured sections
+                answer = output.strip() if output else 'Code executed successfully'
+                formatted_output = f"""Answer: {answer}
 
-Code:
-{generated_code}
-
-Potential issues: {"None" if not errors else errors}"""
+Why: Generated and executed Python code to compute the exact result"""
+                
+                if errors:
+                    formatted_output += f"\n\nPotential Issues: {errors}"
+                    formatted_output += f"\n\nSuggested Next Steps: Review the error messages and adjust the query if needed"
                 
                 return AgentResult(
                     agent_name="CodeAgent",
@@ -165,12 +183,13 @@ Potential issues: {"None" if not errors else errors}"""
                 
             except Exception as exec_error:
                 logger.error(f"[CodeAgent] Code execution error: {exec_error}")
-                formatted_output = f"""Answer: Error during execution
+                formatted_output = f"""Answer: Unable to complete the calculation due to an error
 
-Code:
-{generated_code}
+Why: The generated code encountered an execution error
 
-Potential issues: {str(exec_error)}"""
+Potential Issues: {str(exec_error)}
+
+Suggested Next Steps: Please rephrase your query or provide more context"""
                 
                 return AgentResult(
                     agent_name="CodeAgent",
@@ -248,12 +267,14 @@ class ReasoningAgent:
             logger.info(f"[ReasoningAgent] LLM response: {llm_result[:200]}...")
             logger.info(f"[ReasoningAgent] Completed in {time.time() - start_time:.3f}s")
             
-            # Format reasoning output
-            formatted_output = f"""Answer: {llm_result}
+            # Format reasoning output with structured sections
+            # Extract just the key answer if it's verbose
+            lines = llm_result.split('\n')
+            answer = llm_result if len(llm_result) < 200 else lines[0] if lines else llm_result
+            
+            formatted_output = f"""Answer: {answer}
 
-Reasoning method: Step-by-step logical analysis
-
-Potential issues: None"""
+Why: Applied step-by-step logical reasoning to analyze the problem"""
             
             return AgentResult(
                 agent_name="ReasoningAgent",
@@ -345,12 +366,13 @@ class SQLAgent:
             
             # For demo purposes, return the SQL query
             # In production, you'd execute against a real database
-            formatted_output = f"""Answer: SQL query generated
+            formatted_output = f"""Answer: Generated SQL query for your request
 
-SQL Query:
-{generated_sql}
+Why: Translated your request into SQL syntax
 
-Potential issues: Query not executed (no database connection)"""
+Potential Issues: Query not executed (no database connection)
+
+Suggested Next Steps: Connect to a database to execute this query"""
             
             return AgentResult(
                 agent_name="SQLAgent",
@@ -424,12 +446,14 @@ class GeneralAgent:
             logger.info(f"[GeneralAgent] LLM response: {llm_result[:200]}...")
             logger.info(f"[GeneralAgent] Completed in {time.time() - start_time:.3f}s")
             
-            # Format general response
-            formatted_output = f"""Answer: {llm_result}
+            # Format general response with structured sections
+            # Keep answer concise
+            lines = llm_result.split('\n')
+            answer = llm_result if len(llm_result) < 200 else lines[0] if lines else llm_result
+            
+            formatted_output = f"""Answer: {answer}
 
-Method: Direct AI response
-
-Potential issues: None"""
+Why: Provided a direct response based on the query context"""
             
             return AgentResult(
                 agent_name="GeneralAgent",
@@ -595,6 +619,25 @@ class ThinkerOrchestrator:
         logger.info("[ORCHESTRATOR] PHASE 3: Result Selection and Rerun Check")
         logger.info(f"[ORCHESTRATOR] Comparing {len(valid_results)} valid results")
         
+        # Check if any agent needs clarification
+        needs_clarification = any(r.needs_clarification for r in valid_results)
+        
+        if needs_clarification:
+            # Find the agent needing clarification and format the question
+            for result in valid_results:
+                if result.needs_clarification:
+                    clarification_text = f"**Clarification Needed**\n\n"
+                    clarification_text += f"**Question:** {result.clarification_question}\n\n"
+                    clarification_text += f"**Results So Far:** {result.result.split('Answer: ')[1].split('\n')[0] if 'Answer: ' in result.result else 'Processing incomplete'}\n\n"
+                    clarification_text += f"**Next Steps:** Please provide more details to continue processing\n\n"
+                    
+                    await websocket.send_json({
+                        "type": "message",
+                        "role": "Assistant",
+                        "text": clarification_text
+                    })
+                    return
+        
         # Check if any agent needs rerun
         needs_rerun = any(r.needs_rerun for r in valid_results if r.confidence < 0.5)
         
@@ -622,26 +665,35 @@ class ThinkerOrchestrator:
         # Calculate total time before using it
         total_time = time.time() - orchestration_start
         
-        # Create final response - result is already formatted by agent
-        final_text = f"**FINAL ANSWER**\n\n{best_result.result}\n\n"
+        # Extract the structured parts from the best result
+        result_text = best_result.result
         
-        # Add execution metadata
-        final_text += f"---\n\n"
-        final_text += f"Processed by: {best_result.display_name}\n"
+        # Parse out the structured sections
+        answer_match = re.search(r'Answer:\s*(.+?)(?=\n\n|\n(?:Why:|Potential Issues:|Suggested Next Steps:)|$)', result_text, re.DOTALL)
+        why_match = re.search(r'Why:\s*(.+?)(?=\n\n|\n(?:Potential Issues:|Suggested Next Steps:)|$)', result_text, re.DOTALL)
+        issues_match = re.search(r'Potential Issues:\s*(.+?)(?=\n\n|\nSuggested Next Steps:|$)', result_text, re.DOTALL)
+        next_steps_match = re.search(r'Suggested Next Steps:\s*(.+?)(?=\n\n|$)', result_text, re.DOTALL)
+        
+        answer = answer_match.group(1).strip() if answer_match else result_text.split('\n')[0]
+        why = why_match.group(1).strip() if why_match else f"Processed using {best_result.display_name}"
+        issues = issues_match.group(1).strip() if issues_match else None
+        next_steps = next_steps_match.group(1).strip() if next_steps_match else None
+        
+        # Build final structured response
+        final_text = f"**Answer:** {answer}\n\n"
+        final_text += f"**Why:** {why}\n\n"
+        
+        if issues and issues.lower() != 'none':
+            final_text += f"**Potential Issues:** {issues}\n\n"
+            
+        if next_steps:
+            final_text += f"**Suggested Next Steps:** {next_steps}\n\n"
+        
+        # Add minimal metadata
         if rerun_count > 0:
-            final_text += f"Attempts: {rerun_count + 1}\n"
-        
-        # Add minimal context about what happened
-        final_text += "---\n\n"
-        final_text += f"**Process:** Analyzed as {thinking['identified_type']}, ran {len(valid_results)} agents\n\n"
-        
-        # Brief summary of agent results (no percentages)
-        final_text += "**Agent Results:**\n"
-        for result in valid_results:
-            final_text += f"- {result.agent_name}: {result.result[:60]}{'...' if len(result.result) > 60 else ''}\n"
-        
-        final_text += f"\n**Selected:** {best_result.agent_name} using {best_result.method}\n"
-        final_text += f"**Time:** {total_time:.2f}s"
+            final_text += f"\n_Resolved after {rerun_count + 1} attempts in {total_time:.1f}s_"
+        else:
+            final_text += f"\n_Processed in {total_time:.1f}s_"
         
         # Send final response with proper agent attribution
         await websocket.send_json({
