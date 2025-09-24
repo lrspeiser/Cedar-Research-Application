@@ -71,9 +71,10 @@ class CodeAgent:
             
             # Ask LLM to write Python code to solve the problem
             logger.info(f"[CodeAgent] Requesting code generation from LLM using model: {model}")
-            response = await self.llm_client.chat.completions.create(
-                model=model,
-                messages=[
+            # Use correct parameter name based on model
+            completion_params = {
+                "model": model,
+                "messages": [
                     {
                         "role": "system", 
                         "content": """You are a Python code generator. Generate ONLY executable Python code to solve the given problem.
@@ -84,10 +85,18 @@ class CodeAgent:
                         - The code must be complete and runnable as-is"""
                     },
                     {"role": "user", "content": task}
-                ],
-                max_tokens=500,
-                temperature=0.1  # Low temperature for more deterministic code
-            )
+                ]
+            }
+            
+            # GPT-5 models have different parameters
+            if "gpt-5" in model or "gpt-4.1" in model:
+                completion_params["max_completion_tokens"] = 500
+                # GPT-5 doesn't support custom temperature
+            else:
+                completion_params["max_tokens"] = 500
+                completion_params["temperature"] = 0.1
+                
+            response = await self.llm_client.chat.completions.create(**completion_params)
             
             generated_code = response.choices[0].message.content.strip()
             # Remove markdown code blocks if present
@@ -179,9 +188,10 @@ class ReasoningAgent:
             # Get model from environment
             model = os.getenv("CEDARPY_OPENAI_MODEL") or os.getenv("OPENAI_API_KEY_MODEL") or "gpt-5"
             logger.info(f"[ReasoningAgent] Using LLM for step-by-step reasoning with model: {model}")
-            response = await self.llm_client.chat.completions.create(
-                model=model,
-                messages=[
+            # Use correct parameter name based on model
+            completion_params = {
+                "model": model,
+                "messages": [
                     {
                         "role": "system",
                         "content": """You are an expert reasoning agent. Solve problems step-by-step.
@@ -192,10 +202,17 @@ class ReasoningAgent:
                         - Be precise and accurate"""
                     },
                     {"role": "user", "content": task}
-                ],
-                max_tokens=500,
-                temperature=0.3  # Balanced for reasoning
-            )
+                ]
+            }
+            
+            # GPT-5 models have different parameters  
+            if "gpt-5" in model or "gpt-4.1" in model:
+                completion_params["max_completion_tokens"] = 500
+            else:
+                completion_params["max_tokens"] = 500
+                completion_params["temperature"] = 0.3
+                
+            response = await self.llm_client.chat.completions.create(**completion_params)
             
             llm_result = response.choices[0].message.content
             logger.info(f"[ReasoningAgent] LLM response: {llm_result[:200]}...")
@@ -254,9 +271,10 @@ class SQLAgent:
             model = os.getenv("CEDARPY_OPENAI_MODEL") or os.getenv("OPENAI_API_KEY_MODEL") or "gpt-5"
             # Ask LLM to write SQL query
             logger.info(f"[SQLAgent] Requesting SQL generation from LLM using model: {model}")
-            response = await self.llm_client.chat.completions.create(
-                model=model,
-                messages=[
+            # Use correct parameter name based on model
+            completion_params = {
+                "model": model,
+                "messages": [
                     {
                         "role": "system",
                         "content": """You are a SQL expert. Generate ONLY the SQL query to solve the given problem.
@@ -265,10 +283,17 @@ class SQLAgent:
                         - The query should be complete and runnable"""
                     },
                     {"role": "user", "content": task}
-                ],
-                max_tokens=300,
-                temperature=0.1
-            )
+                ]
+            }
+            
+            # GPT-5 models have different parameters
+            if "gpt-5" in model or "gpt-4.1" in model:
+                completion_params["max_completion_tokens"] = 300
+            else:
+                completion_params["max_tokens"] = 300
+                completion_params["temperature"] = 0.1
+                
+            response = await self.llm_client.chat.completions.create(**completion_params)
             
             generated_sql = response.choices[0].message.content.strip()
             # Remove markdown if present
@@ -323,9 +348,10 @@ class GeneralAgent:
             # Get model from environment
             model = os.getenv("CEDARPY_OPENAI_MODEL") or os.getenv("OPENAI_API_KEY_MODEL") or "gpt-5"
             logger.info(f"[GeneralAgent] Using LLM for direct response with model: {model}")
-            response = await self.llm_client.chat.completions.create(
-                model=model,
-                messages=[
+            # Use correct parameter name based on model
+            completion_params = {
+                "model": model,
+                "messages": [
                     {
                         "role": "system",
                         "content": """You are a helpful assistant. Answer questions directly and concisely.
@@ -335,10 +361,17 @@ class GeneralAgent:
                         - Give just the answer when appropriate"""
                     },
                     {"role": "user", "content": task}
-                ],
-                max_tokens=300,
-                temperature=0.5
-            )
+                ]
+            }
+            
+            # GPT-5 models have different parameters
+            if "gpt-5" in model or "gpt-4.1" in model:
+                completion_params["max_completion_tokens"] = 300
+            else:
+                completion_params["max_tokens"] = 300
+                completion_params["temperature"] = 0.5
+                
+            response = await self.llm_client.chat.completions.create(**completion_params)
             
             llm_result = response.choices[0].message.content
             logger.info(f"[GeneralAgent] LLM response: {llm_result[:200]}...")
@@ -421,7 +454,7 @@ class ThinkerOrchestrator:
         await websocket.send_json({
             "type": "action",
             "function": "processing",
-            "text": f"🧠 Analyzing request...\nIdentified as: {thinking['identified_type']}\nEngaging agents: {', '.join(thinking['agents_to_use'])}"
+            "text": f"Analyzing request...\nType: {thinking['identified_type']}\nEngaging {len(thinking['agents_to_use'])} agents"
         })
         await asyncio.sleep(0.5)  # Simulate thinking time
         
@@ -456,11 +489,8 @@ class ThinkerOrchestrator:
                 logger.info(f"[ORCHESTRATOR] Result {i+1}: {result.agent_name} - Confidence: {result.confidence:.2f}, Method: {result.method}")
                 logger.info(f"[ORCHESTRATOR] Result {i+1} content: {result.result[:200]}...")
                 
-                # Send detailed agent result with explanation
-                status_text = f"✅ {result.agent_name}: Completed (confidence: {result.confidence:.2f})\n\n"
-                status_text += f"📋 Method: {result.method}\n\n"
-                status_text += f"💡 {result.explanation}\n\n"
-                status_text += f"📊 Result: {result.result[:200]}{'...' if len(result.result) > 200 else ''}"
+                # Send agent completion status
+                status_text = f"{result.agent_name}: Completed\nMethod: {result.method}\nResult: {result.result[:100]}{'...' if len(result.result) > 100 else ''}"
                 
                 await websocket.send_json({
                     "type": "action",
@@ -487,33 +517,35 @@ class ThinkerOrchestrator:
         # Calculate total time before using it
         total_time = time.time() - orchestration_start
         
-        # Create comprehensive final response with explanation
-        final_text = f"**TLDR: {best_result.result}**\n\n"
-        final_text += "---\n\n"
-        final_text += f"## 🎯 Final Answer Selection Process:\n\n"
-        final_text += f"I analyzed your request and identified it as a **{thinking['identified_type']}**. "
-        final_text += f"I engaged {len(valid_results)} specialized agents to work on this problem in parallel:\n\n"
-        
-        # Add summary of all agent results
-        for idx, result in enumerate(valid_results, 1):
-            final_text += f"**{idx}. {result.agent_name}** (Confidence: {result.confidence:.0%}):\n"
-            final_text += f"   - Method: {result.method}\n"
-            final_text += f"   - Result: {result.result[:100]}{'...' if len(result.result) > 100 else ''}\n"
-            final_text += f"   - Explanation: {result.explanation[:150]}{'...' if len(result.explanation) > 150 else ''}\n\n"
-        
-        # Add selection reasoning
-        final_text += f"## 🏆 Why I chose {best_result.agent_name}'s answer:\n\n"
-        if best_result.confidence == 1.0:
-            final_text += f"This agent provided a mathematically certain answer with 100% confidence using {best_result.method}. "
-            final_text += "When dealing with mathematical computations, I always prefer exact calculations over approximations.\n\n"
-        elif best_result.confidence >= 0.9:
-            final_text += f"This agent had the highest confidence ({best_result.confidence:.0%}) and used {best_result.method}, "
-            final_text += "which is the most reliable approach for this type of problem.\n\n"
+        # Create clean final response - always start with TLDR/Answer
+        if "code" in thinking['identified_type'].lower() or best_result.agent_name == "CodeAgent":
+            # For code results, format as: Answer, Code, Errors
+            final_text = f"**Answer:** {best_result.result}\n\n"
+            
+            # Check if there was generated code in the metadata
+            if "generated_code" in str(best_result.explanation):
+                final_text += f"**Code:** See execution output above\n\n"
+            
+            # Check for errors
+            if "error" in best_result.result.lower() or "failed" in best_result.result.lower():
+                final_text += f"**Errors:** {best_result.result}\n\n"
+            else:
+                final_text += "**Errors:** None\n\n"
         else:
-            final_text += f"Among all agents, {best_result.agent_name} provided the most reliable answer "
-            final_text += f"with {best_result.confidence:.0%} confidence using {best_result.method}.\n\n"
+            # For non-code results, just start with the answer
+            final_text = f"**Answer:** {best_result.result}\n\n"
         
-        final_text += f"⏱️ Total orchestration time: {total_time:.2f} seconds"
+        # Add minimal context about what happened
+        final_text += "---\n\n"
+        final_text += f"**Process:** Analyzed as {thinking['identified_type']}, ran {len(valid_results)} agents\n\n"
+        
+        # Brief summary of agent results (no percentages)
+        final_text += "**Agent Results:**\n"
+        for result in valid_results:
+            final_text += f"- {result.agent_name}: {result.result[:60]}{'...' if len(result.result) > 60 else ''}\n"
+        
+        final_text += f"\n**Selected:** {best_result.agent_name} using {best_result.method}\n"
+        final_text += f"**Time:** {total_time:.2f}s"
         
         # Send final response in format expected by UI
         await websocket.send_json({
