@@ -61,6 +61,7 @@ class WSDeps:
         self.publish_relay_event = kwargs["publish_relay_event"]
         self.register_ack = kwargs["register_ack"]
         self.project_dirs = kwargs["project_dirs"]
+        self.save_thread_snapshot = kwargs.get("save_thread_snapshot")
 
 
 async def _ws_send_safe(ws: WebSocket, text: str) -> bool:
@@ -239,6 +240,12 @@ def register_ws_chat(app: FastAPI, deps: WSDeps, route_path: str = "/ws/chat/{pr
             if content:
                 db.add(deps.ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="user", content=content))
                 db.commit()
+                # Snapshot after user message
+                try:
+                    if getattr(deps, 'save_thread_snapshot', None):
+                        deps.save_thread_snapshot(project_id, thr.id)
+                except Exception:
+                    pass
                 # Set thread title from the first 10 characters of the first prompt when thread has a default/placeholder title
                 try:
                     title_now = (thr.title or '').strip()
@@ -566,6 +573,11 @@ Response formatting:
                 dbpmsg = SessionLocal()
                 dbpmsg.add(deps.ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="assistant", display_title="Assistant", content="Prepared LLM prompt", payload_json=messages))
                 dbpmsg.commit()
+                try:
+                    if getattr(deps, 'save_thread_snapshot', None):
+                        deps.save_thread_snapshot(project_id, thr.id)
+                except Exception:
+                    pass
             except Exception:
                 try: dbpmsg.rollback()
                 except Exception: pass
@@ -759,6 +771,22 @@ Response formatting:
         if final_json:
             try:
                 _enqueue({"type": "final", "text": final_text, "json": final_json, "thread_id": thr.id}, require_ack=True)
+            except Exception:
+                pass
+            # Persist final assistant message and snapshot
+            try:
+                dbf = SessionLocal()
+                dbf.add(deps.ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="assistant", display_title=(final_title or "final"), content=(final_text or ""), payload_json=final_json))
+                dbf.commit()
+            except Exception:
+                try: dbf.rollback()
+                except Exception: pass
+            finally:
+                try: dbf.close()
+                except Exception: pass
+            try:
+                if getattr(deps, 'save_thread_snapshot', None):
+                    deps.save_thread_snapshot(project_id, thr.id)
             except Exception:
                 pass
 

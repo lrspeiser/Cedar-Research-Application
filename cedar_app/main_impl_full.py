@@ -240,13 +240,15 @@ def _project_dirs(project_id: int) -> Dict[str, str]:
     base = os.path.join(PROJECTS_ROOT, str(project_id))
     db_path = os.path.join(base, "database.db")
     files_root = os.path.join(base, "files")
-    return {"base": base, "db_path": db_path, "files_root": files_root}
+    threads_root = os.path.join(base, "threads")
+    return {"base": base, "db_path": db_path, "files_root": files_root, "threads_root": threads_root}
 
 
 def _ensure_project_storage(project_id: int) -> None:
     paths = _project_dirs(project_id)
     os.makedirs(paths["base"], exist_ok=True)
     os.makedirs(paths["files_root"], exist_ok=True)
+    os.makedirs(paths.get("threads_root") or os.path.join(paths["base"], "threads"), exist_ok=True)
 
 
 def _get_project_engine(project_id: int):
@@ -281,6 +283,62 @@ def get_project_db(project_id: int) -> Session:
         yield db
     finally:
         db.close()
+
+
+def save_thread_snapshot(project_id: int, thread_id: int) -> Optional[str]:
+    """Write a JSON snapshot of a thread's session (metadata + messages) to threads_root.
+    Returns the absolute path of the snapshot on success, else None.
+    """
+    try:
+        _ensure_project_storage(project_id)
+        paths = _project_dirs(project_id)
+        out_dir = paths.get("threads_root") or os.path.join(paths["base"], "threads")
+        os.makedirs(out_dir, exist_ok=True)
+        SessionLocal = sessionmaker(bind=_get_project_engine(project_id), autoflush=False, autocommit=False, future=True)
+        db = SessionLocal()
+        try:
+            thr = db.query(Thread).filter(Thread.id==int(thread_id), Thread.project_id==project_id).first()
+            if not thr:
+                return None
+            msgs = db.query(ThreadMessage).filter(ThreadMessage.project_id==project_id, ThreadMessage.thread_id==thread_id).order_by(ThreadMessage.created_at.asc()).all()
+            out = {
+                "project_id": project_id,
+                "thread_id": int(thread_id),
+                "branch_id": getattr(thr, 'branch_id', None),
+                "title": getattr(thr, 'title', None),
+                "created_at": (thr.created_at.isoformat()+"Z") if getattr(thr, 'created_at', None) else None,
+                "messages": []
+            }
+            for m in msgs:
+                try:
+                    out["messages"].append({
+                        "role": m.role,
+                        "title": getattr(m, 'display_title', None),
+                        "content": m.content,
+                        "payload": getattr(m, 'payload_json', None),
+                        "created_at": (m.created_at.isoformat()+"Z") if getattr(m, 'created_at', None) else None,
+                    })
+                except Exception:
+                    pass
+            abs_path = os.path.abspath(os.path.join(out_dir, f"thread_{int(thread_id)}.json"))
+            tmp_path = abs_path + ".tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(out, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, abs_path)
+            try:
+                print(f"[thread-snapshot] wrote {abs_path}")
+            except Exception:
+                pass
+            return abs_path
+        finally:
+            try: db.close()
+            except Exception: pass
+    except Exception as e:
+        try:
+            print(f"[thread-snapshot-error] {type(e).__name__}: {e}")
+        except Exception:
+            pass
+        return None
 
 
 def _migrate_project_files_ai_columns(engine_obj):
@@ -1280,7 +1338,7 @@ try:
         from cedar_orchestrator.ws_chat import register_ws_chat, WSDeps
         print("[startup] Using original WebSocket flow")
     from main_helpers import _publish_relay_event as __pub, _register_ack as __ack
-    deps = WSDeps(
+deps = WSDeps(
         get_project_engine=_get_project_engine,
         ensure_project_initialized=ensure_project_initialized,
         record_changelog=record_changelog,
@@ -1302,6 +1360,7 @@ try:
         publish_relay_event=__pub,
         register_ack=__ack,
         project_dirs=_project_dirs,
+        save_thread_snapshot=save_thread_snapshot,
     )
     # Register canonical and dev routes using extracted orchestrator
     register_ws_chat(app, deps, route_path="/ws/chat/{project_id}")
@@ -5903,6 +5962,75 @@ def home(request: Request, db: Session = Depends(get_registry_db)):
 # ----------------------------------------------------------------------------------
 # Log page
 # ----------------------------------------------------------------------------------
+
+# Thread APIs
+@app.get("/api/threads/list")
+def api_threads_list(project_id: int, branch_id: Optional[int] = None):
+    SessionLocal = sessionmaker(bind=_get_project_engine(project_id), autoflush=False, autocommit=False, future=True)
+    db = SessionLocal()
+    try:
+        q = db.query(Thread).filter(Thread.project_id==project_id)
+        if branch_id is not None:
+            try:
+                q = q.filter(Thread.branch_id==int(branch_id))
+            except Exception:
+                pass
+        threads = q.order_by(Thread.created_at.desc()).limit(200).all()
+        out = []
+        for t in threads:
+            last_at = None
+            try:
+                last = db.query(ThreadMessage).filter(ThreadMessage.project_id==project_id, ThreadMessage.thread_id==t.id).order_by(ThreadMessage.created_at.desc()).first()
+                if last and getattr(last, 'created_at', None):
+                    last_at = last.created_at.isoformat()+"Z"
+            except Exception:
+                pass
+            out.append({
+                "id": int(t.id),
+                "title": (t.title or ""),
+                "branch_id": getattr(t, 'branch_id', None),
+                "created_at": (t.created_at.isoformat()+"Z") if getattr(t, 'created_at', None) else None,
+                "last_message_at": last_at,
+            })
+        return {"ok": True, "threads": out}
+    finally:
+        try: db.close()
+        except Exception: pass
+
+@app.get("/api/threads/session/{thread_id}")
+def api_threads_session(thread_id: int, project_id: int):
+    # Ensure snapshot exists; generate if missing
+    p = save_thread_snapshot(project_id, int(thread_id))
+    try:
+        if not p:
+            # Fallback: build in-memory from DB
+            SessionLocal = sessionmaker(bind=_get_project_engine(project_id), autoflush=False, autocommit=False, future=True)
+            db = SessionLocal()
+            try:
+                thr = db.query(Thread).filter(Thread.id==int(thread_id), Thread.project_id==project_id).first()
+                if not thr:
+                    raise HTTPException(status_code=404, detail="thread not found")
+                msgs = db.query(ThreadMessage).filter(ThreadMessage.project_id==project_id, ThreadMessage.thread_id==thread_id).order_by(ThreadMessage.created_at.asc()).all()
+                out = {
+                    "project_id": int(project_id),
+                    "thread_id": int(thread_id),
+                    "branch_id": getattr(thr, 'branch_id', None),
+                    "title": getattr(thr, 'title', None),
+                    "created_at": (thr.created_at.isoformat()+"Z") if getattr(thr, 'created_at', None) else None,
+                    "messages": [
+                        {"role": m.role, "title": getattr(m, 'display_title', None), "content": m.content, "payload": getattr(m, 'payload_json', None), "created_at": (m.created_at.isoformat()+"Z") if getattr(m, 'created_at', None) else None}
+                        for m in msgs
+                    ]
+                }
+                return out
+            finally:
+                try: db.close()
+                except Exception: pass
+        else:
+            with open(p, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
 
 @app.get("/log", response_class=HTMLResponse)
 def view_logs(project_id: Optional[int] = None, branch_id: Optional[int] = None):
