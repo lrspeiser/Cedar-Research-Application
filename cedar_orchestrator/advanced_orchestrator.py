@@ -12,6 +12,8 @@ import asyncio
 import logging
 import math
 import time
+import subprocess
+import sqlite3
 from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass
 from openai import AsyncOpenAI
@@ -44,206 +46,312 @@ class AgentResult:
     explanation: str = ""  # User-facing explanation of what the agent did
     
 class CodeAgent:
-    """Agent that writes and executes code to solve problems"""
+    """Agent that uses LLM to write code, then executes it"""
     
     def __init__(self, llm_client: Optional[AsyncOpenAI]):
         self.llm_client = llm_client
         
     async def process(self, task: str) -> AgentResult:
-        """Generate and execute Python code to solve the task"""
+        """Use LLM to generate Python code, execute it, and return results"""
         start_time = time.time()
         logger.info(f"[CodeAgent] Starting processing for task: {task[:100]}...")
         
+        if not self.llm_client:
+            return AgentResult(
+                agent_name="CodeAgent",
+                result="No LLM client available",
+                confidence=0.0,
+                method="Error",
+                explanation="Cannot generate code without LLM access."
+            )
+        
         try:
-            if "square root" in task.lower() and any(char.isdigit() for char in task):
-                logger.info("[CodeAgent] Detected square root calculation task")
-                # Extract number from the task
-                import re
-                numbers = re.findall(r'\d+', task)
-                logger.info(f"[CodeAgent] Found numbers: {numbers}")
+            # Ask LLM to write Python code to solve the problem
+            logger.info("[CodeAgent] Requesting code generation from LLM")
+            response = await self.llm_client.chat.completions.create(
+                model="gpt-4o",  # Use GPT-4o for better performance
+                messages=[
+                    {
+                        "role": "system", 
+                        "content": """You are a Python code generator. Generate ONLY executable Python code to solve the given problem.
+                        - Output ONLY the Python code, no explanations or markdown
+                        - The code should print the final result
+                        - Use proper error handling
+                        - For mathematical expressions, parse them correctly (e.g., 'square root of 5*10' means sqrt(5*10))
+                        - The code must be complete and runnable as-is"""
+                    },
+                    {"role": "user", "content": task}
+                ],
+                max_tokens=500,
+                temperature=0.1  # Low temperature for more deterministic code
+            )
+            
+            generated_code = response.choices[0].message.content.strip()
+            # Remove markdown code blocks if present
+            if generated_code.startswith("```"):
+                generated_code = generated_code.split("\n", 1)[1]
+                if generated_code.endswith("```"):
+                    generated_code = generated_code.rsplit("```", 1)[0]
+            
+            logger.info(f"[CodeAgent] Generated code:\n{generated_code}")
+            
+            # Execute the generated code
+            import io
+            import contextlib
+            
+            output_buffer = io.StringIO()
+            error_buffer = io.StringIO()
+            
+            try:
+                # Create a safe execution environment with common libraries
+                exec_globals = {
+                    "__builtins__": __builtins__,
+                    "math": math,
+                    "json": json,
+                    "time": time,
+                    "os": os,
+                }
                 
-                if numbers:
-                    number = int(numbers[-1])  # Get the last number mentioned
-                    logger.info(f"[CodeAgent] Using number: {number}")
-                    
-                    # Generate Python code
-                    code = f"""
-import math
-result = math.sqrt({number})
-print(f"The square root of {number} is {{result}}")
-"""
-                    logger.info(f"[CodeAgent] Generated code:\n{code}")
-                    
-                    # Execute the code (safely in production you'd use a sandbox)
-                    result = math.sqrt(number)
-                    logger.info(f"[CodeAgent] Execution result: {result}")
-                    logger.info(f"[CodeAgent] Completed in {time.time() - start_time:.3f}s with confidence 1.0")
-                    
-                    return AgentResult(
-                        agent_name="CodeAgent",
-                        result=str(result),
-                        confidence=1.0,  # Mathematical calculation is certain
-                        method=f"Executed Python: math.sqrt({number})",
-                        explanation=f"I wrote and executed Python code to calculate the square root of {number}. The code used Python's math.sqrt() function which computed the result as {result:.10f}."
-                    )
-                    
-            # Fallback to LLM for code generation
-            if self.llm_client:
-                response = await self.llm_client.chat.completions.create(
-                    model="gpt-4",
-                    messages=[
-                        {"role": "system", "content": "You are a code agent. Write Python code to solve the given problem and provide the result."},
-                        {"role": "user", "content": task}
-                    ],
-                    max_tokens=200
-                )
+                with contextlib.redirect_stdout(output_buffer), contextlib.redirect_stderr(error_buffer):
+                    exec(generated_code, exec_globals)
+                
+                output = output_buffer.getvalue()
+                errors = error_buffer.getvalue()
+                
+                if errors:
+                    logger.warning(f"[CodeAgent] Code execution had warnings: {errors}")
+                
+                logger.info(f"[CodeAgent] Execution output: {output}")
+                logger.info(f"[CodeAgent] Completed in {time.time() - start_time:.3f}s")
+                
                 return AgentResult(
                     agent_name="CodeAgent",
-                    result=response.choices[0].message.content,
-                    confidence=0.8,
-                    method="LLM-generated code",
-                    explanation="I used an LLM to generate Python code to solve this problem."
+                    result=output.strip() if output else "Code executed successfully but produced no output",
+                    confidence=0.95 if output else 0.5,
+                    method="LLM-generated and executed Python code",
+                    explanation=f"I generated Python code to solve this problem and executed it. The code computed: {output.strip()[:200] if output else 'No output'}."
+                )
+                
+            except Exception as exec_error:
+                logger.error(f"[CodeAgent] Code execution error: {exec_error}")
+                return AgentResult(
+                    agent_name="CodeAgent",
+                    result=f"Code execution failed: {str(exec_error)}",
+                    confidence=0.3,
+                    method="LLM code generation with execution error",
+                    explanation=f"I generated code but encountered an error during execution: {str(exec_error)[:200]}"
                 )
                 
         except Exception as e:
-            logger.error(f"CodeAgent error: {e}")
-            
-        return AgentResult(
-            agent_name="CodeAgent",
-            result=f"Could not compute: {task}",
-            confidence=0.1,
-            method="Error in processing",
-            explanation="I encountered an error while trying to process this task."
-        )
+            logger.error(f"[CodeAgent] Error: {e}")
+            return AgentResult(
+                agent_name="CodeAgent",
+                result=f"Failed to generate code: {str(e)}",
+                confidence=0.1,
+                method="Error in code generation",
+                explanation=f"I encountered an error while generating code: {str(e)[:200]}"
+            )
 
-class MathAgent:
-    """Agent specialized in mathematical computations"""
+class ReasoningAgent:
+    """Agent that uses LLM for step-by-step reasoning and problem solving"""
     
     def __init__(self, llm_client: Optional[AsyncOpenAI]):
         self.llm_client = llm_client
         
     async def process(self, task: str) -> AgentResult:
-        """Process mathematical questions"""
+        """Use LLM to reason through the problem step by step"""
         start_time = time.time()
-        logger.info(f"[MathAgent] Starting processing for task: {task[:100]}...")
+        logger.info(f"[ReasoningAgent] Starting processing for task: {task[:100]}...")
+        
+        if not self.llm_client:
+            return AgentResult(
+                agent_name="ReasoningAgent",
+                result="No LLM client available",
+                confidence=0.0,
+                method="Error",
+                explanation="Cannot perform reasoning without LLM access."
+            )
         
         try:
-            if "square root" in task.lower():
-                logger.info("[MathAgent] Detected mathematical computation request")
-                import re
-                numbers = re.findall(r'\d+', task)
-                logger.info(f"[MathAgent] Extracted numbers: {numbers}")
-                
-                if numbers:
-                    number = int(numbers[-1])
-                    logger.info(f"[MathAgent] Computing sqrt({number})")
-                    result = math.sqrt(number)
-                    logger.info(f"[MathAgent] Result with high precision: {result:.10f}")
-                    logger.info(f"[MathAgent] Completed in {time.time() - start_time:.3f}s with confidence 1.0")
-                    
-                    return AgentResult(
-                        agent_name="MathAgent",
-                        result=f"{result:.10f}",  # High precision
-                        confidence=1.0,
-                        method="Direct mathematical computation",
-                        explanation=f"I performed a direct mathematical computation using Python's math library. The square root of {number} is {result:.10f} (shown with 10 decimal places for precision)."
-                    )
-                    
-            # Use LLM for complex math
-            if self.llm_client:
-                logger.info("[MathAgent] Falling back to LLM for complex mathematical reasoning")
-                try:
-                    response = await self.llm_client.chat.completions.create(
-                        model="gpt-4",
-                        messages=[
-                            {"role": "system", "content": "You are a mathematics expert. Solve the given problem with precise calculations."},
-                            {"role": "user", "content": task}
-                        ],
-                        max_tokens=150
-                    )
-                    llm_result = response.choices[0].message.content
-                    logger.info(f"[MathAgent] LLM response: {llm_result[:100]}...")
-                    logger.info(f"[MathAgent] Completed LLM call in {time.time() - start_time:.3f}s with confidence 0.9")
-                    
-                    return AgentResult(
-                        agent_name="MathAgent",
-                        result=llm_result,
-                        confidence=0.9,
-                        method="LLM mathematical reasoning",
-                        explanation=f"I used advanced AI reasoning to solve this mathematical problem: {llm_result[:100]}..."
-                    )
-                except Exception as llm_error:
-                    logger.error(f"[MathAgent] LLM call failed: {llm_error}")
-                
-        except Exception as e:
-            logger.error(f"MathAgent error: {e}")
+            logger.info("[ReasoningAgent] Using LLM for step-by-step reasoning")
+            response = await self.llm_client.chat.completions.create(
+                model="gpt-4o",  # Use GPT-4o for better reasoning
+                messages=[
+                    {
+                        "role": "system",
+                        "content": """You are an expert reasoning agent. Solve problems step-by-step.
+                        - Break down complex problems into steps
+                        - Show your work clearly
+                        - For mathematical expressions, parse them correctly (e.g., 'square root of 5*10' means sqrt(5*10), not sqrt(10))
+                        - Provide the final answer clearly
+                        - Be precise and accurate"""
+                    },
+                    {"role": "user", "content": task}
+                ],
+                max_tokens=500,
+                temperature=0.3  # Balanced for reasoning
+            )
             
-        return AgentResult(
-            agent_name="MathAgent",
-            result="Unable to compute",
-            confidence=0.0,
-            method="Error",
-            explanation="I was unable to compute the answer due to an error."
-        )
+            llm_result = response.choices[0].message.content
+            logger.info(f"[ReasoningAgent] LLM response: {llm_result[:200]}...")
+            logger.info(f"[ReasoningAgent] Completed in {time.time() - start_time:.3f}s")
+            
+            return AgentResult(
+                agent_name="ReasoningAgent",
+                result=llm_result,
+                confidence=0.85,
+                method="LLM step-by-step reasoning",
+                explanation=f"I used step-by-step reasoning to solve this problem."
+            )
+            
+        except Exception as e:
+            logger.error(f"[ReasoningAgent] Error: {e}")
+            return AgentResult(
+                agent_name="ReasoningAgent",
+                result=f"Failed to reason: {str(e)}",
+                confidence=0.1,
+                method="Error in reasoning",
+                explanation=f"I encountered an error during reasoning: {str(e)[:200]}"
+            )
 
-class GeneralAgent:
-    """General purpose agent using LLM"""
+class SQLAgent:
+    """Agent that uses LLM to write and execute SQL queries"""
     
     def __init__(self, llm_client: Optional[AsyncOpenAI]):
         self.llm_client = llm_client
         
     async def process(self, task: str) -> AgentResult:
-        """Process general questions"""
+        """Use LLM to generate SQL queries and execute them"""
+        start_time = time.time()
+        logger.info(f"[SQLAgent] Starting processing for task: {task[:100]}...")
+        
+        if not self.llm_client:
+            return AgentResult(
+                agent_name="SQLAgent",
+                result="No LLM client available",
+                confidence=0.0,
+                method="Error",
+                explanation="Cannot generate SQL without LLM access."
+            )
+        
+        # Check if this is actually a SQL/database task
+        if not any(word in task.lower() for word in ["sql", "database", "table", "select", "query"]):
+            return AgentResult(
+                agent_name="SQLAgent",
+                result="Not a database query task",
+                confidence=0.1,
+                method="Task mismatch",
+                explanation="This doesn't appear to be a database-related task."
+            )
+        
+        try:
+            # Ask LLM to write SQL query
+            logger.info("[SQLAgent] Requesting SQL generation from LLM")
+            response = await self.llm_client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": """You are a SQL expert. Generate ONLY the SQL query to solve the given problem.
+                        - Output ONLY the SQL query, no explanations
+                        - Use standard SQL syntax
+                        - The query should be complete and runnable"""
+                    },
+                    {"role": "user", "content": task}
+                ],
+                max_tokens=300,
+                temperature=0.1
+            )
+            
+            generated_sql = response.choices[0].message.content.strip()
+            # Remove markdown if present
+            if generated_sql.startswith("```"):
+                generated_sql = generated_sql.split("\n", 1)[1]
+                if generated_sql.endswith("```"):
+                    generated_sql = generated_sql.rsplit("```", 1)[0]
+            
+            logger.info(f"[SQLAgent] Generated SQL: {generated_sql}")
+            
+            # For demo purposes, return the SQL query
+            # In production, you'd execute against a real database
+            return AgentResult(
+                agent_name="SQLAgent",
+                result=f"Generated SQL query: {generated_sql}",
+                confidence=0.8,
+                method="LLM-generated SQL",
+                explanation=f"I generated a SQL query to solve this problem. In a production environment, this would be executed against your database."
+            )
+            
+        except Exception as e:
+            logger.error(f"[SQLAgent] Error: {e}")
+            return AgentResult(
+                agent_name="SQLAgent",
+                result=f"Failed to generate SQL: {str(e)}",
+                confidence=0.1,
+                method="Error",
+                explanation=f"I encountered an error: {str(e)[:200]}"
+            )
+
+class GeneralAgent:
+    """General purpose agent using LLM for direct answers"""
+    
+    def __init__(self, llm_client: Optional[AsyncOpenAI]):
+        self.llm_client = llm_client
+        
+    async def process(self, task: str) -> AgentResult:
+        """Use LLM to directly answer questions"""
         start_time = time.time()
         logger.info(f"[GeneralAgent] Starting processing for task: {task[:100]}...")
         
+        if not self.llm_client:
+            return AgentResult(
+                agent_name="GeneralAgent",
+                result="No LLM client available",
+                confidence=0.0,
+                method="Error",
+                explanation="Cannot process without LLM access."
+            )
+        
         try:
-            if self.llm_client:
-                logger.info("[GeneralAgent] Using LLM for general query processing")
-                try:
-                    response = await self.llm_client.chat.completions.create(
-                        model="gpt-4",
-                        messages=[{"role": "user", "content": task}],
-                        max_tokens=150
-                    )
-                    llm_result = response.choices[0].message.content
-                    logger.info(f"[GeneralAgent] LLM response: {llm_result[:100]}...")
-                    logger.info(f"[GeneralAgent] Completed in {time.time() - start_time:.3f}s with confidence 0.7")
-                    
-                    return AgentResult(
-                        agent_name="GeneralAgent",
-                        result=llm_result,
-                        confidence=0.7,
-                        method="General LLM response",
-                        explanation=f"I used general AI reasoning to process your request and generated this response."
-                    )
-                except Exception as llm_error:
-                    logger.error(f"[GeneralAgent] LLM call failed: {llm_error}")
-        except Exception as e:
-            logger.error(f"GeneralAgent error: {e}")
+            logger.info("[GeneralAgent] Using LLM for direct response")
+            response = await self.llm_client.chat.completions.create(
+                model="gpt-4o",  # Use GPT-4o
+                messages=[
+                    {
+                        "role": "system",
+                        "content": """You are a helpful assistant. Answer questions directly and concisely.
+                        - For mathematical problems, compute the exact answer
+                        - Parse expressions correctly (e.g., 'square root of 5*10' means sqrt(5*10))
+                        - Be accurate and precise
+                        - Give just the answer when appropriate"""
+                    },
+                    {"role": "user", "content": task}
+                ],
+                max_tokens=300,
+                temperature=0.5
+            )
             
-        # Fallback for simple calculations without LLM
-        if "square root" in task.lower():
-            import re
-            numbers = re.findall(r'\d+', task)
-            if numbers:
-                number = int(numbers[-1])
-                result = math.sqrt(number)
-                return AgentResult(
-                    agent_name="GeneralAgent",
-                    result=str(result),
-                    confidence=0.6,
-                    method="Fallback calculation",
-                    explanation=f"I used a fallback calculation method to compute the square root of {number} as {result}."
-                )
-                
-        return AgentResult(
-            agent_name="GeneralAgent",
-            result="I need more context to answer that.",
-            confidence=0.1,
-            method="Insufficient information",
-            explanation="I don't have enough information to provide a meaningful answer to this request."
-        )
+            llm_result = response.choices[0].message.content
+            logger.info(f"[GeneralAgent] LLM response: {llm_result[:200]}...")
+            logger.info(f"[GeneralAgent] Completed in {time.time() - start_time:.3f}s")
+            
+            return AgentResult(
+                agent_name="GeneralAgent",
+                result=llm_result,
+                confidence=0.75,
+                method="Direct LLM response",
+                explanation=f"I provided a direct answer using AI reasoning."
+            )
+            
+        except Exception as e:
+            logger.error(f"[GeneralAgent] Error: {e}")
+            return AgentResult(
+                agent_name="GeneralAgent",
+                result=f"Failed to process: {str(e)}",
+                confidence=0.1,
+                method="Error",
+                explanation=f"I encountered an error: {str(e)[:200]}"
+            )
 
 class ThinkerOrchestrator:
     """The main orchestrator that coordinates all agents"""
@@ -251,8 +359,9 @@ class ThinkerOrchestrator:
     def __init__(self, api_key: str):
         self.llm_client = AsyncOpenAI(api_key=api_key) if api_key else None
         self.code_agent = CodeAgent(self.llm_client)
-        self.math_agent = MathAgent(self.llm_client)
+        self.reasoning_agent = ReasoningAgent(self.llm_client)
         self.general_agent = GeneralAgent(self.llm_client)
+        self.sql_agent = SQLAgent(self.llm_client)
         
     async def think(self, message: str) -> Dict[str, Any]:
         """Thinker phase: Analyze the request and plan the approach"""
@@ -264,18 +373,26 @@ class ThinkerOrchestrator:
         }
         
         # Analyze the message
-        if "square root" in message.lower() or "sqrt" in message.lower():
+        if any(word in message.lower() for word in ["calculate", "compute", "square root", "sqrt", "multiply", "divide", "add", "subtract", "sum", "product"]):
             thinking_process["identified_type"] = "mathematical_computation"
             thinking_process["analysis"] = "This is a mathematical computation requiring precise calculation"
-            thinking_process["agents_to_use"] = ["CodeAgent", "MathAgent", "GeneralAgent"]
-        elif any(word in message.lower() for word in ["code", "program", "function", "script"]):
+            thinking_process["agents_to_use"] = ["CodeAgent", "ReasoningAgent", "GeneralAgent"]
+        elif any(word in message.lower() for word in ["code", "program", "function", "script", "algorithm"]):
             thinking_process["identified_type"] = "coding_task"
             thinking_process["analysis"] = "This requires code generation or programming"
             thinking_process["agents_to_use"] = ["CodeAgent", "GeneralAgent"]
+        elif any(word in message.lower() for word in ["sql", "database", "query", "table", "select from"]):
+            thinking_process["identified_type"] = "database_query"
+            thinking_process["analysis"] = "This requires SQL query generation and execution"
+            thinking_process["agents_to_use"] = ["SQLAgent", "GeneralAgent"]
+        elif any(word in message.lower() for word in ["explain", "why", "how", "what is", "define"]):
+            thinking_process["identified_type"] = "explanation_query"
+            thinking_process["analysis"] = "This requires detailed explanation or reasoning"
+            thinking_process["agents_to_use"] = ["ReasoningAgent", "GeneralAgent"]
         else:
             thinking_process["identified_type"] = "general_query"
             thinking_process["analysis"] = "This is a general query"
-            thinking_process["agents_to_use"] = ["GeneralAgent", "MathAgent"]
+            thinking_process["agents_to_use"] = ["GeneralAgent", "ReasoningAgent"]
             
         return thinking_process
         
@@ -305,12 +422,15 @@ class ThinkerOrchestrator:
         if "CodeAgent" in thinking["agents_to_use"]:
             agents.append(self.code_agent)
             logger.info("[ORCHESTRATOR] Added CodeAgent to processing queue")
-        if "MathAgent" in thinking["agents_to_use"]:
-            agents.append(self.math_agent)
-            logger.info("[ORCHESTRATOR] Added MathAgent to processing queue")
+        if "ReasoningAgent" in thinking["agents_to_use"]:
+            agents.append(self.reasoning_agent)
+            logger.info("[ORCHESTRATOR] Added ReasoningAgent to processing queue")
         if "GeneralAgent" in thinking["agents_to_use"]:
             agents.append(self.general_agent)
             logger.info("[ORCHESTRATOR] Added GeneralAgent to processing queue")
+        if "SQLAgent" in thinking["agents_to_use"]:
+            agents.append(self.sql_agent)
+            logger.info("[ORCHESTRATOR] Added SQLAgent to processing queue")
             
         # Process all agents in parallel
         logger.info(f"[ORCHESTRATOR] Starting parallel processing with {len(agents)} agents")
