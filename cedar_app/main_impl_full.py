@@ -1327,16 +1327,10 @@ def record_changelog(db: Session, project_id: int, branch_id: int, action: str, 
 
 app = FastAPI(title="Cedar")
 
-# Register WebSocket routes from extracted orchestrator module
+# Register WebSocket routes using new thinker-orchestrator flow
 try:
-    # Try to use the new thinker-orchestrator flow first
-    try:
-        from cedar_orchestrator.ws_chat_new import register_ws_chat, WSDeps
-        print("[startup] Using new thinker-orchestrator WebSocket flow")
-    except ImportError:
-        # Fall back to old implementation if new one not available
-        from cedar_orchestrator.ws_chat import register_ws_chat, WSDeps
-        print("[startup] Using original WebSocket flow")
+    from cedar_orchestrator.ws_chat import register_ws_chat, WSDeps
+    print("[startup] Using new thinker-orchestrator WebSocket flow")
     from main_helpers import _publish_relay_event as __pub, _register_ack as __ack
 deps = WSDeps(
         get_project_engine=_get_project_engine,
@@ -1370,35 +1364,7 @@ except Exception as e:
     print(f"[startup] Could not register /ws/chat2: {type(e).__name__}: {e}")
     pass
 
-# Also try to register legacy stub from main_ws_chat if it exists
-try:
-    from main_ws_chat import register_ws_chat as register_ws_chat_stub, WSDeps as WSDeps_stub
-    from main_helpers import _publish_relay_event as __pub2, _register_ack as __ack2
-    deps_stub = WSDeps_stub(
-        get_project_engine=_get_project_engine,
-        ensure_project_initialized=ensure_project_initialized,
-        record_changelog=record_changelog,
-        llm_client_config=_llm_client_config,
-        tabular_import_via_llm=_tabular_import_via_llm,
-        RegistrySessionLocal=RegistrySessionLocal,
-        FileEntry=FileEntry,
-        Dataset=Dataset,
-        Thread=Thread,
-        ThreadMessage=ThreadMessage,
-        Note=Note,
-        Branch=Branch,
-        ChangelogEntry=ChangelogEntry,
-        branch_filter_ids=branch_filter_ids,
-        current_branch=current_branch,
-        file_extension_to_type=file_extension_to_type,
-        publish_relay_event=__pub2,
-        register_ack=__ack2,
-        project_dirs=_project_dirs,
-    )
-    # Keep stub at a different path for compatibility testing
-    # register_ws_chat_stub(app, deps_stub, route_path="/ws/chat_stub/{project_id}")
-except Exception:
-    pass
+# Legacy stub registration removed - using new thinker-orchestrator flow only
 
 # WS ack handshake endpoint (must be defined after `app` is created)
 # See README: "WebSocket handshake and client acks"

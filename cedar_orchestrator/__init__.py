@@ -1,26 +1,18 @@
 """
-Cedar Orchestrator module for LLM chat and component management.
+Cedar Orchestrator module - New thinker-orchestrator implementation.
 
-This module provides:
-- WebSocket chat orchestration with fan-out/fan-in pattern
-- Component-based architecture for concurrent LLM operations
-- Aggregator LLM for result reconciliation
-- Full event streaming via WebSocket and Redis/SSE relay
+This module provides the new WebSocket chat implementation with:
+- Thinker that streams its reasoning process
+- Parallel agent execution
+- Smart result selection
 """
 
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    # Type imports for IDE support without circular dependencies
-    from .ws_chat import register_ws_chat, WSDeps
-    from .ctx import OrchestratorCtx, ComponentResult
+from cedar_orchestrator.ws_chat import register_ws_chat, WSDeps
 
 __all__ = [
     "register_ws_chat",
     "WSDeps",
-    "OrchestratorCtx", 
-    "ComponentResult",
 ]
 
 # Version info
-__version__ = "0.1.0"
+__version__ = "2.0.0"
