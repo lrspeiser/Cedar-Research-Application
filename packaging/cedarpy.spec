@@ -46,12 +46,12 @@ datas += shib_d
 binaries += shib_b
 hiddenimports += shib_h
 
-# Ensure server framework dependencies are included in the bundle even when main.py is loaded via fallback
-for pkg in [
-    'fastapi',
-    'starlette',
-    'pydantic',
-    'pydantic_core',
+# Ensure server framework dependencies are included in the bundle
+for fname in ['main.py', 'page.html']:
+    try:
+        datas.append((os.path.join(repo_root, fname), '.'))
+    except Exception:
+        pass
     'typing_extensions',
     'anyio',
     'sqlalchemy',
@@ -76,7 +76,7 @@ _backend_hidden = [
     'fastapi', 'starlette', 'pydantic', 'pydantic_core', 'typing_extensions',
     'anyio', 'sqlalchemy', 'uvicorn', 'websockets', 'httpx', 'certifi', 'sniffio', 'h11', 'click'
 ]
-hiddenimports = list(set(hiddenimports + ['main', 'main_mini', 'cedar_app.main_impl_full'] + _backend_hidden))
+hiddenimports = list(set(hiddenimports + ['main', 'cedar_app.main_impl_full'] + _backend_hidden))
 
 # Exclude unused Qt3D modules to avoid macOS framework symlink collisions (FileExistsError)
 # See: known PyInstaller + Qt frameworks dedup issues on macOS

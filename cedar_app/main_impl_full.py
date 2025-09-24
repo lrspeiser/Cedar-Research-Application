@@ -1332,7 +1332,7 @@ try:
     from cedar_orchestrator.ws_chat import register_ws_chat, WSDeps
     print("[startup] Using new thinker-orchestrator WebSocket flow")
     from main_helpers import _publish_relay_event as __pub, _register_ack as __ack
-deps = WSDeps(
+    deps = WSDeps(
         get_project_engine=_get_project_engine,
         ensure_project_initialized=ensure_project_initialized,
         record_changelog=record_changelog,

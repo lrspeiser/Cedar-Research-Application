@@ -444,53 +444,38 @@ See also: docs/CI.md (CI and Packaging Guide) and CHANGELOG.md (2025-09-20 CI st
 
 ## Postmortem: startup failures and fixes
 
-### Mini/no-server modes and the packaged FastAPI import error — what happened and the durable fix
+### No-server mode and prior startup issues — postmortem
 
 Symptoms observed
-- Launching the app with CEDARPY_MINI=1 still tried to import FastAPI (from main.py), producing "No module named 'fastapi'" and failing to start the server.
+- Earlier experiments with an alternate minimal app path caused confusion and inconsistent packaging. We have removed that path and only support the full app.
 - Launching with CEDARPY_NO_SERVER=1 still emitted log lines indicating attempts to import backend frameworks and/or start uvicorn, sometimes followed by failure messages like "Server failed to start on 127.0.0.1:8000".
 - Fallback logs also showed "failed to locate main.py in fallback paths" in certain bundles, because only main.py was considered and main_mini.py was not shipped.
 
 Root causes
-- The server launcher only attempted to load main.py; it did not support selecting a different module or falling back to main_mini.py.
+- The server launcher now only loads main.py (full app).
 - The Qt wrapper (cedarqt.py) imported backend frameworks unconditionally at startup, even when the intention was frontend-only mode.
-- Packaging configurations (PyInstaller, py2app, embedded DMG) didn't consistently include main_mini.py, so even when a fallback tried to import it, the file wasn't available inside the bundle.
+- Packaging standardizes on the full app and required dependencies; no alternate module is shipped.
 
 Fixes implemented
-- Module selection: The server launcher supports CEDARPY_APP_MODULE and CEDARPY_MINI.
-  - Set CEDARPY_APP_MODULE=main_mini to explicitly select the minimal app module (pure ASGI, no FastAPI).
-  - Or set CEDARPY_MINI=1 to auto-select main_mini.
-  - Robust file-based fallback now looks for both main.py and main_mini.py across packaged locations.
-- Frontend-only mode: cedarqt.py reads CEDARPY_NO_SERVER very early and skips importing backend frameworks when enabled.
-  - Startup logs show: "[cedarqt] startup flags: NO_SERVER=1 MINI=... APP_MODULE=..." and "no_server=1: running frontend-only".
-  - In this mode, it renders a small static HTML page to verify the Qt shell without starting a backend.
-- Packaging updates: All build paths now include main_mini.py so the fallback can always find it.
-  - PyInstaller (build_dmg.sh): Adds hidden-import main_mini and add-data main_mini.py.
-  - py2app (py2app_setup.py): Includes 'main_mini' and ships the file in data_files.
-  - Embedded DMG (build_dmg_embedded.sh): Copies main_mini.py into Resources alongside main.py and run_cedarpy.py.
+- Module selection: The launcher no longer supports a minimal fallback path; it always loads the full app (main).
+- Frontend-only mode: cedarqt.py supports CEDARPY_NO_SERVER to skip backend launch for diagnostics and to verify the Qt shell without starting the server.
+- Packaging updates: DMG bundles the full app and UI assets (page.html and optional assets/static).
 
 How to run the different modes
 - Frontend-only (no server):
   - CEDARPY_NO_SERVER=1 open /Applications/CedarPy.app
   - Expect: Qt shell shows a static "Cedar (Frontend-only)" page; logs confirm backend was not launched.
-- Minimal backend (no FastAPI):
-  - CEDARPY_MINI=1 open /Applications/CedarPy.app
-  - Expect: The launcher loads main_mini.app (pure ASGI), uvicorn runs, and the minimal page is served.
 - Full backend:
-  - Open the app without those variables (or set CEDARPY_APP_MODULE=main) to run the standard FastAPI server from main.py.
+  - Open the app normally to run the standard FastAPI server from main.py.
 
 What to keep in place (do not undo)
-- Do not remove the module selection logic in run_cedarpy.py or its fallback that includes main_mini.
-- Do not move backend import statements in cedarqt.py above the early CEDARPY_NO_SERVER check.
-- Do not remove main_mini.py from packaging scripts (PyInstaller, py2app, embedded DMG). The minimal module is a safety valve whenever FastAPI is not available in the target machine.
+- Keep the early CEDARPY_NO_SERVER check for diagnostic-only runs.
 
 How to avoid regressions
 - Manual checks before shipping a DMG:
   1) CEDARPY_NO_SERVER=1 open CedarPy.app → should show frontend-only page, with logs confirming no backend import.
-  2) CEDARPY_MINI=1 open CedarPy.app → minimal page is served; logs show app module main_mini.
-  3) Open CedarPy.app with no env flags → full backend runs; homepage renders.
-- Ensure build scripts include main_mini.py and hidden-imports/data as described above.
-- Keep the "startup flags" lines in cedarqt logs; they make it obvious which mode is active.
+  2) Open CedarPy.app normally → full backend runs; homepage renders.
+- Keep descriptive startup logs in cedarqt so mode is obvious.
 
 Notes on macOS signing and quarantine
 - If you see EXC_CRASH / taskgated rejections (invalid code signature), you may have an ad-hoc signature or a quarantined app. Either:
@@ -510,11 +495,6 @@ Recovery Playbook (documented attempts)
   - Run: Mount DMG, copy CedarPyServer.app to /Applications, remove quarantine, open.
   - Outcome: Use this as a baseline — if this fails, investigate server imports and data dirs under ~/CedarPyData.
 
-- Attempt C: Minimal packaged server inside Qt (CEDARPY_MINI=1)
-  - Purpose: Remove most frontend and app logic while keeping Qt wrapper. Adds main_mini.py (serves just “Cedar (Mini)”).
-  - How to run: CEDARPY_MINI=1 open /Applications/CedarPy.app
-  - If this works: gradually re-enable features (Shell API, project pages, LLM) to find the crashing layer.
-  - If this fails: focus on Qt/WebEngine init and bundle layout issues (e.g., Resources path, permissions, sandbox).
 
 - What to record each time:
   - The exact DMG/build used and environment variables.

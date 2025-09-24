@@ -482,21 +482,10 @@ def _launch_server_inprocess(host: str, port: int):
             print(f"[cedarqt] fallback loader init failed: {e3}")
         return None
 
-    fastapi_app = None
-    # Prefer minimal app when requested
-    use_mini = os.getenv("CEDARPY_MINI", "").strip().lower() in {"1", "true", "yes"}
-    if use_mini:
-        print("[cedarqt] CEDARPY_MINI=1: attempting to load main_mini")
-        fastapi_app = _load_app_by_name('main_mini') or _load_app_from_candidates('main_mini', 'main_mini.py')
+    # Always load the full app; no minimal fallback
+    fastapi_app = _load_app_by_name('main') or _load_app_from_candidates('main', 'main.py')
     if fastapi_app is None:
-        # Try full app
-        fastapi_app = _load_app_by_name('main') or _load_app_from_candidates('main', 'main.py')
-    if fastapi_app is None:
-        # As a last resort, try minimal app to at least boot the UI
-        print("[cedarqt] falling back to minimal app")
-        fastapi_app = _load_app_by_name('main_mini') or _load_app_from_candidates('main_mini', 'main_mini.py')
-    if fastapi_app is None:
-        print("[cedarqt] ERROR: could not load any app (main or main_mini)")
+        print("[cedarqt] ERROR: could not load full app (main)")
         return None, None
 
     from uvicorn import Config, Server

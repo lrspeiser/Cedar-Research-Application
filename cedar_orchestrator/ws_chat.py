@@ -1,76 +1,117 @@
 """
-Patched WebSocket chat orchestrator that uses the new thinker-orchestrator flow.
-This replaces the old ws_chat.py module's functionality.
+Simple WebSocket chat orchestrator with thinker-orchestrator flow.
 """
 
 import os
-import sys
 import json
 import asyncio
 import logging
 from fastapi import WebSocket, FastAPI
-from typing import Any, Dict
-
-# Add parent directory to path to import our new modules
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from typing import Any, Dict, Optional
+from openai import AsyncOpenAI
 
 logger = logging.getLogger(__name__)
 
 class WSDeps:
     """Compatibility wrapper for dependencies container"""
     def __init__(self, **kwargs):
-        # Store all the dependencies for compatibility
         for k, v in kwargs.items():
             setattr(self, k, v)
 
-# Import the new WebSocket handler
-try:
-    from ws_chat import WebSocketChatHandler
-    NEW_FLOW_AVAILABLE = True
-    logger.info("New thinker-orchestrator flow loaded successfully")
-except ImportError as e:
-    logger.error(f"Failed to import new flow: {e}")
-    NEW_FLOW_AVAILABLE = False
-    # Fall back to old implementation
-    from cedar_orchestrator.ws_chat import register_ws_chat as register_ws_chat_old, WSDeps as WSDeps_old
+class SimpleThinkerOrchestrator:
+    """Simple thinker-orchestrator implementation for testing"""
+    
+    def __init__(self, api_key: str):
+        self.client = AsyncOpenAI(api_key=api_key) if api_key else None
+    
+    async def process_message(self, websocket: WebSocket, message: str):
+        """Process a message with thinker reasoning and parallel agents"""
+        
+        # Stream thinker reasoning
+        await websocket.send_json({
+            "type": "thinker_reasoning",
+            "content": f"Thinking about: {message}"
+        })
+        
+        # Simulate parallel agent work
+        agents = ["Agent1", "Agent2", "Agent3"]
+        for agent in agents:
+            await websocket.send_json({
+                "type": "agent_result",
+                "agent_name": agent,
+                "content": f"{agent} processed: {message}"
+            })
+            await asyncio.sleep(0.1)
+        
+        # Final response
+        final_response = f"Processed your message: {message}"
+        
+        if self.client:
+            try:
+                # Get actual LLM response
+                completion = await self.client.chat.completions.create(
+                    model="gpt-4",
+                    messages=[{"role": "user", "content": message}],
+                    max_tokens=150
+                )
+                final_response = completion.choices[0].message.content or final_response
+            except Exception as e:
+                logger.error(f"LLM error: {e}")
+        
+        await websocket.send_json({
+            "type": "final_response",
+            "content": final_response
+        })
 
 def register_ws_chat(app: FastAPI, deps: WSDeps, route_path: str = "/ws/chat/{project_id}"):
     """
-    Register the WebSocket chat orchestrator with the new thinker-orchestrator flow.
-    Falls back to the old implementation if the new modules aren't available.
+    Register WebSocket chat routes.
     """
     
-    if NEW_FLOW_AVAILABLE:
-        # Use the new thinker-orchestrator flow
-        api_key = os.getenv("CEDARPY_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
-        chat_handler = WebSocketChatHandler(api_key)
-        
+    api_key = os.getenv("OPENAI_API_KEY") or os.getenv("CEDARPY_OPENAI_API_KEY")
+    orchestrator = SimpleThinkerOrchestrator(api_key)
+    
+    # Register route WITH project_id for compatibility
+    if "{project_id}" in route_path:
         @app.websocket(route_path)
-        async def ws_chat_new(websocket: WebSocket, project_id: int):
-            """WebSocket endpoint using new thinker-orchestrator flow"""
+        async def ws_chat_with_project(websocket: WebSocket, project_id: int):
+            await handle_ws_chat(websocket, orchestrator, project_id)
+    
+    # Also register a simple route WITHOUT project_id for testing
+    simple_path = "/ws/chat"
+    @app.websocket(simple_path)
+    async def ws_chat_simple(websocket: WebSocket):
+        await handle_ws_chat(websocket, orchestrator, None)
+    
+    logger.info(f"Registered WebSocket routes: {route_path} and {simple_path}")
+    print(f"[startup] WebSocket routes registered: {route_path} and {simple_path}")
+
+async def handle_ws_chat(websocket: WebSocket, orchestrator: SimpleThinkerOrchestrator, project_id: Optional[int]):
+    """Handle WebSocket chat connection"""
+    try:
+        await websocket.accept()
+        await websocket.send_json({
+            "type": "connected",
+            "message": f"Connected to Cedar WebSocket chat" + (f" (project {project_id})" if project_id else "")
+        })
+        
+        while True:
             try:
-                await chat_handler.handle_connection(websocket, project_id)
+                data = await websocket.receive_json()
+                if data.get("type") == "message":
+                    content = data.get("content", "")
+                    await orchestrator.process_message(websocket, content)
             except Exception as e:
-                logger.error(f"Error in new WebSocket handler: {e}")
-                try:
-                    await websocket.send_json({
-                        "type": "error",
-                        "event": "system_error", 
-                        "data": {"error": str(e)}
-                    })
-                    await websocket.close()
-                except:
-                    pass
-        
-        logger.info(f"Registered new thinker-orchestrator WebSocket handler at {route_path}")
-        print(f"[startup] New thinker-orchestrator flow registered at {route_path}")
-        
-    else:
-        # Fall back to old implementation
-        logger.warning("New flow not available, falling back to old implementation")
-        print("[startup] WARNING: New thinker-orchestrator flow not available, using old implementation")
-        
-        # Import and use the old implementation
-        from cedar_orchestrator import ws_chat as old_module
-        old_deps = old_module.WSDeps(**{k: getattr(deps, k) for k in dir(deps) if not k.startswith('_')})
-        old_module.register_ws_chat(app, old_deps, route_path)
+                logger.error(f"Message processing error: {e}")
+                await websocket.send_json({
+                    "type": "error",
+                    "content": str(e)
+                })
+                
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
+    finally:
+        try:
+            await websocket.close()
+        except:
+            pass

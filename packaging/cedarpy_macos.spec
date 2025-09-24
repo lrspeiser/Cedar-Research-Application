@@ -10,6 +10,10 @@ _datas = [
     ('../main.py', '.'),
     ('../PROJECT_SEPARATION_README.md', '.'),
     ('../page.html', '.'),
+    ('../cedar_app', 'cedar_app'),
+    ('../cedar_orchestrator', 'cedar_orchestrator'),
+    ('../main_helpers.py', '.'),
+    ('../cedar_tools.py', '.'),
 ]
 try:
     _repo = os.path.abspath('..')
@@ -30,6 +34,12 @@ a = Analysis(
     binaries=[],
     datas=_datas,
     hiddenimports=[
+        'cedar_app',
+        'cedar_app.main_impl_full',
+        'cedar_orchestrator',
+        'cedar_orchestrator.ws_chat',
+        'main_helpers',
+        'cedar_tools',
         'uvicorn.logging',
         'uvicorn.loops',
         'uvicorn.loops.auto',
@@ -56,6 +66,7 @@ a = Analysis(
         'multiprocessing',
         'multiprocessing.pool',
         'multipart',  # python-multipart for FastAPI forms/uploads
+        'openai',  # For the WebSocket chat
     ],
     hookspath=[],
     hooksconfig={},
