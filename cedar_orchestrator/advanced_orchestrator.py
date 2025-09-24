@@ -557,13 +557,19 @@ class ThinkerOrchestrator:
         thinking = await self.think(message)
         logger.info(f"[ORCHESTRATOR] Thinking result: Type={thinking['identified_type']}, Agents={thinking['agents_to_use']}")
         
-        # Send processing action that UI expects
+        # Send processing action that UI expects - this sets up streamText variable
         await websocket.send_json({
             "type": "action",
             "function": "processing",
             "text": f"Analyzing request...\nType: {thinking['identified_type']}\nEngaging {len(thinking['agents_to_use'])} agents"
         })
-        await asyncio.sleep(0.5)  # Simulate thinking time
+        await asyncio.sleep(0.5)  # Allow UI to set up streaming
+        
+        # Send initial streaming update
+        await websocket.send_json({
+            "type": "stream",
+            "text": "Processing with multiple specialized agents..."
+        })
         
         # Phase 2: Parallel agent processing
         logger.info("[ORCHESTRATOR] PHASE 2: Parallel Agent Processing")
@@ -584,6 +590,13 @@ class ThinkerOrchestrator:
         # Process all agents in parallel
         logger.info(f"[ORCHESTRATOR] Starting parallel processing with {len(agents)} agents")
         parallel_start = time.time()
+        
+        # Update stream to show agents running
+        await websocket.send_json({
+            "type": "stream",
+            "text": f"Running {len(agents)} specialized agents in parallel..."
+        })
+        
         agent_tasks = [agent.process(message) for agent in agents]
         results = await asyncio.gather(*agent_tasks, return_exceptions=True)
         logger.info(f"[ORCHESTRATOR] Parallel processing completed in {time.time() - parallel_start:.3f}s")
@@ -661,6 +674,12 @@ class ThinkerOrchestrator:
         best_result = await self.select_best_result(valid_results, thinking)
         logger.info(f"[ORCHESTRATOR] Selected best result: {best_result.agent_name} with confidence {best_result.confidence}")
         logger.info(f"[ORCHESTRATOR] Selection reasoning: Method={best_result.method}")
+        
+        # Send stream update before final
+        await websocket.send_json({
+            "type": "stream", 
+            "text": "Finalizing response..."
+        })
         
         # Calculate total time before using it
         total_time = time.time() - orchestration_start
