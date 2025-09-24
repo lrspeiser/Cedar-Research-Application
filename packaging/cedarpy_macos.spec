@@ -5,28 +5,15 @@ import os
 
 block_cipher = None
 
-# Build datas list including core files and optional UI assets (assets/, static/)
+# Build datas list including core files only (no static UI assets or page.html)
 _datas = [
     ('../main.py', '.'),
     ('../PROJECT_SEPARATION_README.md', '.'),
-    ('../page.html', '.'),
     ('../cedar_app', 'cedar_app'),
     ('../cedar_orchestrator', 'cedar_orchestrator'),
     ('../main_helpers.py', '.'),
     ('../cedar_tools.py', '.'),
 ]
-try:
-    _repo = os.path.abspath('..')
-    for _ui_dir_name in ['assets', 'static']:
-        _dir = os.path.join(_repo, _ui_dir_name)
-        if os.path.isdir(_dir):
-            for root, _dirs, _files in os.walk(_dir):
-                for _f in _files:
-                    _src = os.path.join(root, _f)
-                    _rel = os.path.relpath(root, _repo)
-                    _datas.append((_src, _rel))
-except Exception:
-    pass
 
 a = Analysis(
     ['../run_cedarpy.py'],

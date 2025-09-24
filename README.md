@@ -66,20 +66,19 @@ This starts the FastAPI server and opens the UI inside a QtWebEngine window. Jav
 
 5. Open http://127.0.0.1:8000 in your browser.
 
-## Frontend (page.html) and UI selection
+## Frontend (dynamic UI only)
 
-The app now prefers a standalone frontend file at the repo root: `page.html`.
+The app serves a dynamic, backend-driven UI only. The legacy standalone page.html and any assets/static directories are no longer used or bundled.
 
-- In packaged builds (DMG/Qt app) and in development, if `page.html` exists it is served by default at `/`.
-- Optional static asset directories `assets/` or `static/` next to `page.html` are automatically mounted at `/assets` and `/static` when present and are bundled into the DMG.
-- Verbose logs indicate which UI path was chosen, e.g., `[ui] serving new UI page.html from ...` or `[ui] serving legacy inline UI (...)`.
+- The home route renders server-side HTML with small inline JS.
+- No external static bundles are mounted at /assets or /static.
+- Logs continue to indicate UI route activity.
 
 Overrides
-- Force legacy inline UI: set `CEDARPY_LEGACY_UI=1` or open `http://127.0.0.1:8000/?legacy=1`.
-- Back-compat: `CEDARPY_NEW_UI=1` remains supported but is no longer needed when `page.html` is present.
+- CEDARPY_LEGACY_UI is ignored; the dynamic UI is always used.
 
 Packaging
-- The DMG includes `page.html` by default. If `assets/` or `static/` directories exist, they are recursively bundled and mounted inside the app at `/assets` and `/static`.
+- The DMG bundles only the application code; no page.html or assets/static directories are included.
 - See packaging files: `packaging/cedarpy.spec` and `packaging/cedarpy_macos.spec`.
 
 Notes

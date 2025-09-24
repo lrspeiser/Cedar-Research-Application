@@ -1656,25 +1656,6 @@ try:
 except Exception as e:
     print(f"[cedarpy] Skipping /uploads-legacy mount due to error: {e}")
 
-# Optional: mount packaged/static UI assets when present (assets or static directories next to page.html)
-try:
-    import sys as _sys
-    if getattr(_sys, 'frozen', False):
-        _app_dir = os.path.dirname(_sys.executable)
-        _base = os.path.abspath(os.path.join(_app_dir, '..', 'Resources'))
-    else:
-        _base = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-    for _name in ("assets", "static"):
-        _dir = os.path.join(_base, _name)
-        if os.path.isdir(_dir):
-            mount_path = f"/{_name}"
-            try:
-                app.mount(mount_path, StaticFiles(directory=_dir), name=f"ui_{_name}")
-                print(f"[cedarpy] Mounted {mount_path} from {_dir}")
-            except Exception as _e:
-                print(f"[cedarpy] Failed to mount {mount_path} from {_dir}: {_e}")
-except Exception as _e2:
-    print(f"[cedarpy] Skipping UI assets mount due to error: {_e2}")
 
 @app.get("/uploads/{project_id}/{path:path}")
 def serve_project_upload(project_id: int, path: str):
