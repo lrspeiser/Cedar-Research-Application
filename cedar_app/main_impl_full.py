@@ -461,6 +461,7 @@ def ensure_project_initialized(project_id: int) -> None:
         eng = _get_project_engine(project_id)
         # Create all tables for this project DB
         Base.metadata.create_all(eng)
+        print(f"[ensure-project] Created tables for project {project_id}")
         # Lightweight migrations for this project DB
         _migrate_project_files_ai_columns(eng)
         _migrate_thread_messages_columns(eng)
@@ -482,6 +483,7 @@ def ensure_project_initialized(project_id: int) -> None:
                 title = title or f"Project {project_id}"
                 pdb.add(Project(id=project_id, title=title))
                 pdb.commit()
+                print(f"[ensure-project] Added project row for {project_id}")
             ensure_main_branch(pdb, project_id)
         finally:
             pdb.close()
@@ -489,8 +491,9 @@ def ensure_project_initialized(project_id: int) -> None:
         _migrate_project_files_ai_columns(eng)
         _migrate_thread_messages_columns(eng)
         _migrate_project_langextract_tables(eng)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[ensure-project-error] Failed to initialize project {project_id}: {type(e).__name__}: {e}")
+        raise  # Re-raise to surface the error
 
 # ----------------------------------------------------------------------------------
 # Models
@@ -6386,7 +6389,10 @@ def create_project(title: str = Form(...), db: Session = Depends(get_registry_db
         finally:
             pdb.close()
         _ensure_project_storage(p.id)
-    except Exception:
+        print(f"[create-project] Successfully initialized project {p.id} DB with tables")
+    except Exception as e:
+        print(f"[create-project-error] Failed to initialize project {p.id} DB: {type(e).__name__}: {e}")
+        # Still redirect but project may be broken
         pass
 
     # Redirect into the new project's Main branch
@@ -6595,7 +6601,11 @@ def _collect_code_items(db: Session, project_id: int, threads: List[Thread]) -> 
 
 @app.get("/project/{project_id}", response_class=HTMLResponse)
 def view_project(project_id: int, branch_id: Optional[int] = None, msg: Optional[str] = None, file_id: Optional[int] = None, dataset_id: Optional[int] = None, thread_id: Optional[int] = None, code_mid: Optional[int] = None, code_idx: Optional[int] = None, db: Session = Depends(get_project_db)):
-    ensure_project_initialized(project_id)
+    try:
+        ensure_project_initialized(project_id)
+    except Exception as e:
+        print(f"[view-project-error] Failed to ensure project {project_id} initialized: {e}")
+        return layout("Error", f"<h1>Project Initialization Error</h1><p class='muted'>Failed to initialize project database: {html.escape(str(e))}</p><p><a href='/'>Return to Projects</a></p>")
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         return layout("Not found", "<h1>Project not found</h1>")
