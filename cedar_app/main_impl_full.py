@@ -6820,6 +6820,10 @@ def create_thread(project_id: int, request: Request, title: Optional[str] = Form
 # We log all I/O to thread messages and to the changelog; verbose on errors.
 # Code/tool execution is sandboxed best-effort and limited to project DB/files.
 def ask_orchestrator(project_id: int, request: Request, query: str = Form(...), db: Session = Depends(get_project_db)):
+    try:
+        print(f"[ask-orchestrator] START project_id={project_id} query='{query[:100]}...'" if len(query) > 100 else f"[ask-orchestrator] START project_id={project_id} query='{query}'")
+    except Exception:
+        pass
     ensure_project_initialized(project_id)
     # derive branch
     branch_q = request.query_params.get("branch_id")
@@ -6926,9 +6930,12 @@ def ask_orchestrator(project_id: int, request: Request, query: str = Form(...), 
 
     def _call_llm(messages: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         try:
+            print(f"[ask-llm] Calling model={model} with {len(messages)} messages")
             resp = client.chat.completions.create(model=model, messages=messages)
             raw = (resp.choices[0].message.content or "").strip()
-            return json.loads(raw)
+            result = json.loads(raw)
+            print(f"[ask-llm] Response: {json.dumps(result)[:200]}..." if len(json.dumps(result)) > 200 else f"[ask-llm] Response: {json.dumps(result)}")
+            return result
         except Exception as e:
             try: print(f"[ask-llm-error] {type(e).__name__}: {e}")
             except Exception: pass
@@ -6977,6 +6984,10 @@ def ask_orchestrator(project_id: int, request: Request, query: str = Form(...), 
             return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
     def _exec_code(source: str) -> Dict[str, Any]:
+        try:
+            print(f"[ask-exec-code] Executing {len(source)} chars of Python code")
+        except Exception:
+            pass
         logs = io.StringIO()
         def _cedar_query(sql_text: str):
             return _exec_sql(sql_text)
@@ -7008,7 +7019,10 @@ def ask_orchestrator(project_id: int, request: Request, query: str = Form(...), 
         try:
             with contextlib.redirect_stdout(logs):
                 exec(compile(source, filename="<ask_code>", mode="exec"), safe_globals, safe_globals)
+            log_output = logs.getvalue()
+            print(f"[ask-exec-code] Success! Output: {log_output[:200]}..." if len(log_output) > 200 else f"[ask-exec-code] Success! Output: {log_output}")
         except Exception as e:
+            print(f"[ask-exec-code] Failed: {type(e).__name__}: {e}")
             return {"ok": False, "error": f"{type(e).__name__}: {e}", "logs": logs.getvalue()}
         return {"ok": True, "logs": logs.getvalue()}
 
@@ -7079,8 +7093,10 @@ def ask_orchestrator(project_id: int, request: Request, query: str = Form(...), 
 
     while loop_count < 6:
         loop_count += 1
+        print(f"[ask-orchestrator] Loop {loop_count}/6")
         resp = _call_llm(messages)
         if not resp:
+            print(f"[ask-orchestrator] No response from LLM, breaking loop")
             break
         last_response = resp
         try:
@@ -7107,6 +7123,7 @@ def ask_orchestrator(project_id: int, request: Request, query: str = Form(...), 
         for call in calls:
             name = str(call.get("name") or "").strip().lower()
             args = call.get("args") or {}
+            print(f"[ask-orchestrator] Executing tool: {name} with args: {json.dumps(args)[:100]}..." if len(json.dumps(args)) > 100 else f"[ask-orchestrator] Executing tool: {name} with args: {json.dumps(args)}")
             out: Dict[str, Any] = {"name": name, "ok": False, "result": None}
             if name == "sql":
                 out["result"] = _exec_sql(str(args.get("sql") or ""))
@@ -7154,6 +7171,7 @@ def ask_orchestrator(project_id: int, request: Request, query: str = Form(...), 
 
     show_msg = final_text or question_text or (last_text_visible.strip() if last_text_visible and last_text_visible.strip() else "") or ( (last_response and str(last_response.get("Text Visible To User") or "").strip()) or "") or (last_tool_summary if last_tool_summary else "(no response)")
 
+    print(f"[ask-orchestrator] Final message: {show_msg[:200]}..." if len(show_msg) > 200 else f"[ask-orchestrator] Final message: {show_msg}")
     am = ThreadMessage(project_id=project.id, branch_id=branch.id, thread_id=thr.id, role="assistant", display_title=("Ask • Final" if final_text else ("Ask • Question" if question_text else "Ask • Update")), content=show_msg)
     db.add(am); db.commit()
 
@@ -7541,11 +7559,13 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
         except Exception:
             pass
         raw = await websocket.receive_text()
+        print(f"[ws-chat] Received raw text: '{raw[:100]}...'" if len(raw) > 100 else f"[ws-chat] Received raw text: '{raw}'")
         try:
             payload = json.loads(raw)
         except Exception:
             payload = {"action": "chat", "content": raw}
         content = (payload.get("content") or "").strip()
+        print(f"[ws-chat] Parsed content: '{content[:100]}...'" if len(content) > 100 else f"[ws-chat] Parsed content: '{content}'")
         br_id = payload.get("branch_id")
         thr_id = payload.get("thread_id")
     except Exception:
@@ -7599,6 +7619,7 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
         except Exception:
             branch_name_str = 'Main'
         if content:
+            print(f"[ws-chat] Saving user message to DB for thread {thr.id}: '{content[:100]}...'" if len(content) > 100 else f"[ws-chat] Saving user message to DB for thread {thr.id}: '{content}'")
             db.add(ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="user", content=content))
             db.commit()
             # Set thread title from the first 10 characters of the first prompt when thread has a default/placeholder title
