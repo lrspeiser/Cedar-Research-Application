@@ -5889,56 +5889,8 @@ def _execute_sql_with_undo(db: Session, sql_text: str, project_id: int, branch_i
 
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request, db: Session = Depends(get_registry_db)):
-    # New UI default: serve page.html when present (packaged or dev). Legacy UI can be forced via CEDARPY_LEGACY_UI=1
-    # See README.md section "Frontend (page.html) and UI selection" for details.
-    try:
-        import sys as _sys
-        _force_legacy = str(os.getenv('CEDARPY_LEGACY_UI', '')).strip().lower() in {'1','true','yes'}
-        # Backward-compat: CEDARPY_NEW_UI still enables new UI even if not packaged
-        _prefer_new_flag = str(os.getenv('CEDARPY_NEW_UI', '')).strip().lower() in {'1','true','yes'}
-        # Query param override: /?legacy=1 forces legacy
-        try:
-            from urllib.parse import parse_qs
-            _qs = parse_qs((request.url.query or '')) if getattr(request, 'url', None) else {}
-            if str((_qs.get('legacy') or [''])[0]).strip().lower() in {'1','true','yes'}:
-                _force_legacy = True
-        except Exception:
-            pass
-        if not _force_legacy:
-            # Locate page.html in dev (repo root) or packaged Resources
-            base = None
-            try:
-                if getattr(_sys, 'frozen', False):
-                    app_dir = os.path.dirname(_sys.executable)
-                    base = os.path.abspath(os.path.join(app_dir, '..', 'Resources'))
-                else:
-                    base = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-                page_path = os.path.join(base, 'page.html')
-            except Exception:
-                page_path = None
-            if page_path and os.path.isfile(page_path):
-                try:
-                    print(f"[ui] serving new UI page.html from {page_path}")
-                except Exception:
-                    pass
-                return FileResponse(page_path)
-            elif _prefer_new_flag:
-                try:
-                    print("[ui] CEDARPY_NEW_UI=1 set but page.html not found; falling back to legacy")
-                except Exception:
-                    pass
-    except Exception as e:
-        try:
-            print(f"[ui] error probing new UI: {type(e).__name__}: {e}")
-        except Exception:
-            pass
-
-    # Fallback to legacy inline UI (projects list)
+    """Home page - displays the list of all projects."""
     projects = db.query(Project).order_by(Project.created_at.desc()).all()
-    try:
-        print(f"[ui] serving legacy inline UI (projects={len(projects)})")
-    except Exception:
-        pass
     return layout("Cedar", projects_list_html(projects), header_label="All Projects")
 
 
