@@ -1,117 +1,169 @@
 """
-Simple WebSocket chat orchestrator with thinker-orchestrator flow.
+WebSocket Chat with Advanced Thinker-Orchestrator Implementation
+This module provides the real multi-agent orchestration system.
 """
 
 import os
-import json
-import asyncio
 import logging
+from typing import Optional
 from fastapi import WebSocket, FastAPI
-from typing import Any, Dict, Optional
-from openai import AsyncOpenAI
+from cedar_orchestrator.advanced_orchestrator import ThinkerOrchestrator
 
 logger = logging.getLogger(__name__)
 
 class WSDeps:
-    """Compatibility wrapper for dependencies container"""
+    """Dependencies container for WebSocket chat"""
     def __init__(self, **kwargs):
         for k, v in kwargs.items():
             setattr(self, k, v)
 
-class SimpleThinkerOrchestrator:
-    """Simple thinker-orchestrator implementation for testing"""
-    
-    def __init__(self, api_key: str):
-        self.client = AsyncOpenAI(api_key=api_key) if api_key else None
-    
-    async def process_message(self, websocket: WebSocket, message: str):
-        """Process a message with thinker reasoning and parallel agents"""
-        
-        # Stream thinker reasoning
-        await websocket.send_json({
-            "type": "thinker_reasoning",
-            "content": f"Thinking about: {message}"
-        })
-        
-        # Simulate parallel agent work
-        agents = ["Agent1", "Agent2", "Agent3"]
-        for agent in agents:
-            await websocket.send_json({
-                "type": "agent_result",
-                "agent_name": agent,
-                "content": f"{agent} processed: {message}"
-            })
-            await asyncio.sleep(0.1)
-        
-        # Final response
-        final_response = f"Processed your message: {message}"
-        
-        if self.client:
-            try:
-                # Get actual LLM response
-                completion = await self.client.chat.completions.create(
-                    model="gpt-4",
-                    messages=[{"role": "user", "content": message}],
-                    max_tokens=150
-                )
-                final_response = completion.choices[0].message.content or final_response
-            except Exception as e:
-                logger.error(f"LLM error: {e}")
-        
-        await websocket.send_json({
-            "type": "final_response",
-            "content": final_response
-        })
-
 def register_ws_chat(app: FastAPI, deps: WSDeps, route_path: str = "/ws/chat/{project_id}"):
     """
-    Register WebSocket chat routes.
+    Register WebSocket chat routes with advanced orchestrator.
+    
+    Args:
+        app: FastAPI application instance
+        deps: Dependencies container
+        route_path: WebSocket route path pattern
     """
     
-    api_key = os.getenv("OPENAI_API_KEY") or os.getenv("CEDARPY_OPENAI_API_KEY")
-    orchestrator = SimpleThinkerOrchestrator(api_key)
+    # Get API key from environment
+    api_key = os.getenv("OPENAI_API_KEY") or os.getenv("CEDARPY_OPENAI_API_KEY") or ""
+    
+    if not api_key:
+        logger.warning("No OpenAI API key found. Some features will be limited.")
+        print("[startup] WARNING: No OpenAI API key configured. LLM features will be limited.")
+    else:
+        print("[startup] OpenAI API key configured. Full orchestration enabled.")
+    
+    # Create the advanced orchestrator
+    orchestrator = ThinkerOrchestrator(api_key)
     
     # Register route WITH project_id for compatibility
     if "{project_id}" in route_path:
         @app.websocket(route_path)
         async def ws_chat_with_project(websocket: WebSocket, project_id: int):
-            await handle_ws_chat(websocket, orchestrator, project_id)
+            """WebSocket endpoint with project context"""
+            await handle_ws_chat(websocket, orchestrator, project_id, deps)
     
-    # Also register a simple route WITHOUT project_id for testing
+    # Also register a simple route WITHOUT project_id
     simple_path = "/ws/chat"
     @app.websocket(simple_path)
     async def ws_chat_simple(websocket: WebSocket):
-        await handle_ws_chat(websocket, orchestrator, None)
+        """WebSocket endpoint without project context"""
+        await handle_ws_chat(websocket, orchestrator, None, deps)
     
-    logger.info(f"Registered WebSocket routes: {route_path} and {simple_path}")
-    print(f"[startup] WebSocket routes registered: {route_path} and {simple_path}")
+    logger.info(f"Registered advanced WebSocket routes: {route_path} and {simple_path}")
+    print(f"[startup] Advanced thinker-orchestrator WebSocket routes registered")
+    print(f"[startup]   - {route_path} (with project context)")
+    print(f"[startup]   - {simple_path} (general chat)")
 
-async def handle_ws_chat(websocket: WebSocket, orchestrator: SimpleThinkerOrchestrator, project_id: Optional[int]):
-    """Handle WebSocket chat connection"""
+async def handle_ws_chat(
+    websocket: WebSocket, 
+    orchestrator: ThinkerOrchestrator, 
+    project_id: Optional[int],
+    deps: WSDeps
+):
+    """
+    Handle WebSocket chat connection with advanced orchestration.
+    
+    Args:
+        websocket: WebSocket connection
+        orchestrator: ThinkerOrchestrator instance
+        project_id: Optional project ID for context
+        deps: Dependencies container
+    """
     try:
         await websocket.accept()
+        
+        # Send connection confirmation
         await websocket.send_json({
             "type": "connected",
-            "message": f"Connected to Cedar WebSocket chat" + (f" (project {project_id})" if project_id else "")
+            "message": f"Connected to Cedar Advanced Orchestrator" + 
+                      (f" (Project {project_id})" if project_id else ""),
+            "features": {
+                "thinker": True,
+                "code_agent": True,
+                "math_agent": True,
+                "general_agent": True,
+                "parallel_processing": True
+            }
         })
         
+        logger.info(f"WebSocket connected: project_id={project_id}")
+        
+        # Main message loop
         while True:
             try:
+                # Receive message from client
                 data = await websocket.receive_json()
+                
                 if data.get("type") == "message":
-                    content = data.get("content", "")
-                    await orchestrator.process_message(websocket, content)
+                    content = data.get("content", "").strip()
+                    
+                    if not content:
+                        await websocket.send_json({
+                            "type": "error",
+                            "content": "Empty message received"
+                        })
+                        continue
+                    
+                    logger.info(f"Processing message: {content[:50]}...")
+                    
+                    # Process with advanced orchestrator
+                    await orchestrator.orchestrate(content, websocket)
+                    
+                    # Log to changelog if we have the necessary deps
+                    if project_id and hasattr(deps, 'record_changelog'):
+                        try:
+                            # Get a database session
+                            if hasattr(deps, 'RegistrySessionLocal'):
+                                db = deps.RegistrySessionLocal()
+                                try:
+                                    branch_id = 1  # Default branch
+                                    deps.record_changelog(
+                                        db=db,
+                                        project_id=project_id,
+                                        branch_id=branch_id,
+                                        action="ws_chat",
+                                        input_payload={"message": content},
+                                        output_payload={"processed": True}
+                                    )
+                                finally:
+                                    db.close()
+                        except Exception as e:
+                            logger.error(f"Failed to record changelog: {e}")
+                    
+                elif data.get("type") == "ping":
+                    # Handle ping/pong for connection keepalive
+                    await websocket.send_json({"type": "pong"})
+                    
+                elif data.get("type") == "close":
+                    # Clean close requested
+                    break
+                    
+                else:
+                    # Unknown message type
+                    await websocket.send_json({
+                        "type": "error",
+                        "content": f"Unknown message type: {data.get('type')}"
+                    })
+                    
             except Exception as e:
-                logger.error(f"Message processing error: {e}")
+                logger.error(f"Error processing message: {e}")
                 await websocket.send_json({
                     "type": "error",
-                    "content": str(e)
+                    "content": f"Error processing message: {str(e)}"
                 })
                 
     except Exception as e:
-        logger.error(f"WebSocket error: {e}")
+        logger.error(f"WebSocket connection error: {e}")
     finally:
         try:
             await websocket.close()
+            logger.info(f"WebSocket disconnected: project_id={project_id}")
         except:
             pass
+
+# Export public interface
+__all__ = ['register_ws_chat', 'WSDeps']

@@ -1,0 +1,154 @@
+{
+  "timestamp": "2025-09-24T10:59:41.414477",
+  "base_url": "http://localhost:8000",
+  "suites": {
+    "core": {
+      "passed": [
+        "Server Running",
+        "Home Page"
+      ],
+      "failed": [
+        "API Health",
+        "Static Routes",
+        "Projects API",
+        "Create Project Form"
+      ],
+      "total": 6,
+      "details": [
+        {
+          "name": "Server Running",
+          "passed": true,
+          "message": "Server is running and responding"
+        },
+        {
+          "name": "Home Page",
+          "passed": true,
+          "message": "Home page loads with expected content"
+        },
+        {
+          "name": "API Health",
+          "passed": false,
+          "message": "API health check failed with status: 404"
+        },
+        {
+          "name": "Static Routes",
+          "passed": false,
+          "message": "Failed routes: projects:404"
+        },
+        {
+          "name": "Projects API",
+          "passed": false,
+          "message": "Projects API returned status: 404"
+        },
+        {
+          "name": "Create Project Form",
+          "passed": false,
+          "message": "Could not find project creation interface"
+        }
+      ],
+      "success_rate": 33.33333333333333
+    },
+    "projects": {
+      "passed": [
+        "Delete Project"
+      ],
+      "failed": [
+        "List Projects",
+        "Create Project",
+        "Open Project",
+        "Project API Operations"
+      ],
+      "total": 5,
+      "details": [
+        {
+          "name": "List Projects",
+          "passed": false,
+          "message": "Failed to list projects, status: 404"
+        },
+        {
+          "name": "Create Project",
+          "passed": false,
+          "message": "Failed to create project, status: 404"
+        },
+        {
+          "name": "Open Project",
+          "passed": false,
+          "message": "No project ID available to test opening"
+        },
+        {
+          "name": "Project API Operations",
+          "passed": false,
+          "message": "No project available for API operations test"
+        },
+        {
+          "name": "Delete Project",
+          "passed": true,
+          "message": "No test project to delete"
+        }
+      ],
+      "created_project_id": null,
+      "success_rate": 20.0
+    },
+    "websocket": {
+      "passed": [],
+      "failed": [
+        "WebSocket Connection",
+        "Simple Message",
+        "Math Question",
+        "Simple Arithmetic",
+        "Message Streaming"
+      ],
+      "total": 5,
+      "details": [
+        {
+          "name": "WebSocket Connection",
+          "passed": false,
+          "message": "WebSocket connection error: BaseEventLoop.create_connection() got an unexpected keyword argument 'timeout'"
+        },
+        {
+          "name": "Simple Message",
+          "passed": false,
+          "message": "Simple message test error: BaseEventLoop.create_connection() got an unexpected keyword argument 'timeout'"
+        },
+        {
+          "name": "Math Question",
+          "passed": false,
+          "message": "Math question test error: BaseEventLoop.create_connection() got an unexpected keyword argument 'timeout'"
+        },
+        {
+          "name": "Simple Arithmetic",
+          "passed": false,
+          "message": "Simple arithmetic test error: BaseEventLoop.create_connection() got an unexpected keyword argument 'timeout'"
+        },
+        {
+          "name": "Message Streaming",
+          "passed": false,
+          "message": "Streaming test error: BaseEventLoop.create_connection() got an unexpected keyword argument 'timeout'"
+        }
+      ],
+      "success_rate": 0.0
+    }
+  },
+  "summary": {
+    "total_tests": 16,
+    "total_passed": 3,
+    "total_failed": 13,
+    "success_rate": 18.75,
+    "failed_tests": [
+      "core::API Health",
+      "core::Static Routes",
+      "core::Projects API",
+      "core::Create Project Form",
+      "projects::List Projects",
+      "projects::Create Project",
+      "projects::Open Project",
+      "projects::Project API Operations",
+      "websocket::WebSocket Connection",
+      "websocket::Simple Message",
+      "websocket::Math Question",
+      "websocket::Simple Arithmetic",
+      "websocket::Message Streaming"
+    ],
+    "duration": "0:00:04.145373"
+  }
+}

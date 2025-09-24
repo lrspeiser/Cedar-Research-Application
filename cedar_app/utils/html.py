@@ -5,23 +5,20 @@ Contains layout functions and HTML generation helpers.
 
 import os
 import html
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List, TYPE_CHECKING
 from datetime import datetime
+from fastapi.responses import HTMLResponse
+
+if TYPE_CHECKING:
+    from main_models import Project
 
 def escape(s: str) -> str:
     """Escape HTML special characters."""
     return html.escape(s, quote=True)
 
 def layout(title: str, body: str, header_label: Optional[str] = None, header_link: Optional[str] = None, nav_query: Optional[str] = None) -> HTMLResponse:  # type: ignore[override]
-    # LLM status for header (best-effort; cached)
-    try:
-        ready, reason, model = _llm_reachability()
-        if ready:
-            llm_status = f" <a href='/settings' class='pill' title='LLM connected — click to manage key'>LLM: {escape(model)}</a>"
-        else:
-            llm_status = f" <a href='/settings' class='pill' style='background:#fef2f2; color:#991b1b' title='LLM unavailable — click to paste your key'>LLM unavailable ({escape(reason)})</a>"
-    except Exception:
-        llm_status = ""
+    # LLM status for header (simplified for refactoring)
+    llm_status = ""
 
     # Build header breadcrumb/label (optional)
     try:
@@ -217,7 +214,7 @@ def layout(title: str, body: str, header_label: Optional[str] = None, header_lin
     return HTMLResponse(html_doc)
 
 
-def projects_list_html(projects: List[Project]) -> str:
+def projects_list_html(projects: List[Any]) -> str:
     # See PROJECT_SEPARATION_README.md
     if not projects:
         return f"""
