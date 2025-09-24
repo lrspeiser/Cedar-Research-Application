@@ -328,8 +328,7 @@
           var line = '[' + (pl.level||'INFO') + '] ' + (pl.message||'');
           var when = (pl.when||'').replace('T',' ').replace('Z','')
           if (when) line = when + ' ' + line;
-          procPre.textContent += (procPre.textContent ? '
-' : '') + line;
+          procPre.textContent += (procPre.textContent ? '\n' : '') + line;
           // Trim lines to last 8000 chars to avoid runaway growth
           if (procPre.textContent.length > 8000) {
             procPre.textContent = procPre.textContent.slice(-8000);
