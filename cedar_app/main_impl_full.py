@@ -3058,6 +3058,30 @@ SELECT * FROM demo LIMIT 10;""")
             stepAdvance('assistant:prompt', wrapP);
             ackEvent(m);
           } catch(_) { }
+        } else if (m.type === 'agent_result') {
+          // Handle agent results from orchestrator
+          try {
+            var agentName = m.agent_name || 'Agent';
+            var wrapA = document.createElement('div');
+            wrapA.className = 'msg assistant';
+            var metaA = document.createElement('div');
+            metaA.className = 'meta small';
+            metaA.innerHTML = "<span class='pill'>agent</span> <span class='title' style='font-weight:600'>" + agentName + "</span>";
+            var bubA = document.createElement('div');
+            bubA.className = 'bubble assistant';
+            var contA = document.createElement('div');
+            contA.className = 'content';
+            contA.style.whiteSpace = 'pre-wrap';
+            contA.textContent = m.text || '';
+            bubA.appendChild(contA);
+            wrapA.appendChild(metaA);
+            wrapA.appendChild(bubA);
+            if (msgs) msgs.appendChild(wrapA);
+            stepAdvance('agent:' + agentName.toLowerCase(), wrapA);
+            ackEvent(m);
+          } catch(e) {
+            console.error('[agent_result] error', e);
+          }
         } else if (m.type === 'action') {
           try {
             var fn = String(m.function||'').trim();

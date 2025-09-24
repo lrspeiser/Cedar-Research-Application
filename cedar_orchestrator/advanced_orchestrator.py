@@ -47,10 +47,13 @@ except Exception as e:
 @dataclass
 class AgentResult:
     agent_name: str
+    display_name: str  # User-friendly name for the UI
     result: Any
     confidence: float
     method: str
     explanation: str = ""  # User-facing explanation of what the agent did
+    needs_rerun: bool = False  # Whether this agent needs to be rerun
+    rerun_reason: str = ""  # Why a rerun is needed
     
 class CodeAgent:
     """Agent that uses LLM to write code, then executes it"""
@@ -143,32 +146,52 @@ class CodeAgent:
                 logger.info(f"[CodeAgent] Execution output: {output}")
                 logger.info(f"[CodeAgent] Completed in {time.time() - start_time:.3f}s")
                 
+                # Format output for user
+                formatted_output = f"""Answer: {output.strip() if output else 'Code executed successfully'}
+
+Code:
+{generated_code}
+
+Potential issues: {"None" if not errors else errors}"""
+                
                 return AgentResult(
                     agent_name="CodeAgent",
-                    result=output.strip() if output else "Code executed successfully but produced no output",
+                    display_name="Code Executor",
+                    result=formatted_output,
                     confidence=0.95 if output else 0.5,
                     method="LLM-generated and executed Python code",
-                    explanation=f"I generated Python code to solve this problem and executed it. The code computed: {output.strip()[:200] if output else 'No output'}."
+                    explanation=f"Generated and executed Python code"
                 )
                 
             except Exception as exec_error:
                 logger.error(f"[CodeAgent] Code execution error: {exec_error}")
+                formatted_output = f"""Answer: Error during execution
+
+Code:
+{generated_code}
+
+Potential issues: {str(exec_error)}"""
+                
                 return AgentResult(
                     agent_name="CodeAgent",
-                    result=f"Code execution failed: {str(exec_error)}",
+                    display_name="Code Executor",
+                    result=formatted_output,
                     confidence=0.3,
                     method="LLM code generation with execution error",
-                    explanation=f"I generated code but encountered an error during execution: {str(exec_error)[:200]}"
+                    explanation=f"Code execution error",
+                    needs_rerun=True,
+                    rerun_reason=f"Execution error: {str(exec_error)[:100]}"
                 )
                 
         except Exception as e:
             logger.error(f"[CodeAgent] Error: {e}")
             return AgentResult(
                 agent_name="CodeAgent",
-                result=f"Failed to generate code: {str(e)}",
+                display_name="Code Executor",
+                result=f"Answer: Failed to generate code\n\nPotential issues: {str(e)}",
                 confidence=0.1,
                 method="Error in code generation",
-                explanation=f"I encountered an error while generating code: {str(e)[:200]}"
+                explanation=f"Code generation failed"
             )
 
 class ReasoningAgent:
@@ -225,22 +248,31 @@ class ReasoningAgent:
             logger.info(f"[ReasoningAgent] LLM response: {llm_result[:200]}...")
             logger.info(f"[ReasoningAgent] Completed in {time.time() - start_time:.3f}s")
             
+            # Format reasoning output
+            formatted_output = f"""Answer: {llm_result}
+
+Reasoning method: Step-by-step logical analysis
+
+Potential issues: None"""
+            
             return AgentResult(
                 agent_name="ReasoningAgent",
-                result=llm_result,
+                display_name="Logical Reasoner",
+                result=formatted_output,
                 confidence=0.85,
                 method="LLM step-by-step reasoning",
-                explanation=f"I used step-by-step reasoning to solve this problem."
+                explanation=f"Applied logical reasoning"
             )
             
         except Exception as e:
             logger.error(f"[ReasoningAgent] Error: {e}")
             return AgentResult(
                 agent_name="ReasoningAgent",
-                result=f"Failed to reason: {str(e)}",
+                display_name="Logical Reasoner",
+                result=f"Answer: Reasoning failed\n\nPotential issues: {str(e)}",
                 confidence=0.1,
                 method="Error in reasoning",
-                explanation=f"I encountered an error during reasoning: {str(e)[:200]}"
+                explanation=f"Reasoning error"
             )
 
 class SQLAgent:
@@ -313,12 +345,20 @@ class SQLAgent:
             
             # For demo purposes, return the SQL query
             # In production, you'd execute against a real database
+            formatted_output = f"""Answer: SQL query generated
+
+SQL Query:
+{generated_sql}
+
+Potential issues: Query not executed (no database connection)"""
+            
             return AgentResult(
                 agent_name="SQLAgent",
-                result=f"Generated SQL query: {generated_sql}",
+                display_name="SQL Generator",
+                result=formatted_output,
                 confidence=0.8,
                 method="LLM-generated SQL",
-                explanation=f"I generated a SQL query to solve this problem. In a production environment, this would be executed against your database."
+                explanation=f"Generated SQL query"
             )
             
         except Exception as e:
@@ -384,22 +424,31 @@ class GeneralAgent:
             logger.info(f"[GeneralAgent] LLM response: {llm_result[:200]}...")
             logger.info(f"[GeneralAgent] Completed in {time.time() - start_time:.3f}s")
             
+            # Format general response
+            formatted_output = f"""Answer: {llm_result}
+
+Method: Direct AI response
+
+Potential issues: None"""
+            
             return AgentResult(
                 agent_name="GeneralAgent",
-                result=llm_result,
+                display_name="General Assistant",
+                result=formatted_output,
                 confidence=0.75,
                 method="Direct LLM response",
-                explanation=f"I provided a direct answer using AI reasoning."
+                explanation=f"Direct AI answer"
             )
             
         except Exception as e:
             logger.error(f"[GeneralAgent] Error: {e}")
             return AgentResult(
                 agent_name="GeneralAgent",
-                result=f"Failed to process: {str(e)}",
+                display_name="General Assistant",
+                result=f"Answer: Processing failed\n\nPotential issues: {str(e)}",
                 confidence=0.1,
                 method="Error",
-                explanation=f"I encountered an error: {str(e)[:200]}"
+                explanation=f"Processing error"
             )
 
 class ThinkerOrchestrator:
@@ -463,12 +512,21 @@ class ThinkerOrchestrator:
             
         return thinking_process
         
-    async def orchestrate(self, message: str, websocket: WebSocket):
-        """Full orchestration process"""
+    async def orchestrate(self, message: str, websocket: WebSocket, rerun_count: int = 0, previous_results: List[AgentResult] = None):
+        """Full orchestration process with rerun capability"""
         orchestration_start = time.time()
         logger.info("="*80)
-        logger.info(f"[ORCHESTRATOR] Starting orchestration for message: {message}")
+        logger.info(f"[ORCHESTRATOR] Starting orchestration for message: {message} (rerun: {rerun_count})")
         logger.info("="*80)
+        
+        # Check rerun limit
+        if rerun_count >= 30:
+            await websocket.send_json({
+                "type": "message",
+                "role": "Orchestrator",
+                "text": "Answer: Maximum retry limit (30) reached. Please refine your request or try a different approach.\n\nPotential issues: Multiple agent failures"
+            })
+            return
         
         # Phase 1: Thinking
         logger.info("[ORCHESTRATOR] PHASE 1: Thinker Analysis")
@@ -514,17 +572,18 @@ class ThinkerOrchestrator:
                 logger.info(f"[ORCHESTRATOR] Result {i+1}: {result.agent_name} - Confidence: {result.confidence:.2f}, Method: {result.method}")
                 logger.info(f"[ORCHESTRATOR] Result {i+1} content: {result.result[:200]}...")
                 
-                # Send agent completion status
-                status_text = f"{result.agent_name}: Completed\nMethod: {result.method}\nResult: {result.result[:100]}{'...' if len(result.result) > 100 else ''}"
+                # Send agent completion status with display name
+                status_text = result.result  # Already formatted by the agent
                 
                 await websocket.send_json({
-                    "type": "action",
-                    "function": "status",
+                    "type": "agent_result",
+                    "agent_name": result.display_name,  # Use display name for UI
                     "text": status_text,
                     "metadata": {
                         "agent": result.agent_name,
                         "confidence": result.confidence,
-                        "method": result.method
+                        "method": result.method,
+                        "needs_rerun": result.needs_rerun
                     }
                 })
                 valid_results.append(result)
@@ -532,9 +591,30 @@ class ThinkerOrchestrator:
             elif isinstance(result, Exception):
                 logger.error(f"[ORCHESTRATOR] Agent {i+1} failed with exception: {result}")
                 
-        # Phase 3: Select best result
-        logger.info("[ORCHESTRATOR] PHASE 3: Result Selection")
+        # Phase 3: Select best result and check for reruns
+        logger.info("[ORCHESTRATOR] PHASE 3: Result Selection and Rerun Check")
         logger.info(f"[ORCHESTRATOR] Comparing {len(valid_results)} valid results")
+        
+        # Check if any agent needs rerun
+        needs_rerun = any(r.needs_rerun for r in valid_results if r.confidence < 0.5)
+        
+        if needs_rerun and rerun_count < 30:
+            # Prepare context for rerun
+            context = f"{message}\n\nPrevious attempts had issues:\n"
+            for r in valid_results:
+                if r.needs_rerun:
+                    context += f"- {r.display_name}: {r.rerun_reason}\n"
+            
+            await websocket.send_json({
+                "type": "agent_result",
+                "agent_name": "Orchestrator",
+                "text": f"Status: Retrying with improved context (attempt {rerun_count + 2}/30)\n\nReason: {valid_results[0].rerun_reason if valid_results else 'Error in processing'}"
+            })
+            
+            # Rerun with context
+            await asyncio.sleep(0.5)
+            return await self.orchestrate(context, websocket, rerun_count + 1, valid_results)
+        
         best_result = await self.select_best_result(valid_results, thinking)
         logger.info(f"[ORCHESTRATOR] Selected best result: {best_result.agent_name} with confidence {best_result.confidence}")
         logger.info(f"[ORCHESTRATOR] Selection reasoning: Method={best_result.method}")
@@ -542,23 +622,14 @@ class ThinkerOrchestrator:
         # Calculate total time before using it
         total_time = time.time() - orchestration_start
         
-        # Create clean final response - always start with TLDR/Answer
-        if "code" in thinking['identified_type'].lower() or best_result.agent_name == "CodeAgent":
-            # For code results, format as: Answer, Code, Errors
-            final_text = f"**Answer:** {best_result.result}\n\n"
-            
-            # Check if there was generated code in the metadata
-            if "generated_code" in str(best_result.explanation):
-                final_text += f"**Code:** See execution output above\n\n"
-            
-            # Check for errors
-            if "error" in best_result.result.lower() or "failed" in best_result.result.lower():
-                final_text += f"**Errors:** {best_result.result}\n\n"
-            else:
-                final_text += "**Errors:** None\n\n"
-        else:
-            # For non-code results, just start with the answer
-            final_text = f"**Answer:** {best_result.result}\n\n"
+        # Create final response - result is already formatted by agent
+        final_text = f"**FINAL ANSWER**\n\n{best_result.result}\n\n"
+        
+        # Add execution metadata
+        final_text += f"---\n\n"
+        final_text += f"Processed by: {best_result.display_name}\n"
+        if rerun_count > 0:
+            final_text += f"Attempts: {rerun_count + 1}\n"
         
         # Add minimal context about what happened
         final_text += "---\n\n"
@@ -572,10 +643,10 @@ class ThinkerOrchestrator:
         final_text += f"\n**Selected:** {best_result.agent_name} using {best_result.method}\n"
         final_text += f"**Time:** {total_time:.2f}s"
         
-        # Send final response in format expected by UI
+        # Send final response with proper agent attribution
         await websocket.send_json({
             "type": "message",
-            "role": "assistant",
+            "role": best_result.display_name,  # Show which agent provided the answer
             "text": final_text,
             "metadata": {
                 "selected_agent": best_result.agent_name,
