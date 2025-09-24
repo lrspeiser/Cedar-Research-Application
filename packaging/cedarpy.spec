@@ -92,7 +92,7 @@ excludes = [
 repo_root = os.path.abspath(os.getcwd())
 
 # Ensure main.py and main_mini.py are present as data files for cedarqt fallback
-for fname in ['main.py', 'main_mini.py', 'page.html']:
+for fname in ['main.py', 'main_mini.py']:
     try:
         datas.append((os.path.join(repo_root, fname), '.'))
     except Exception:
