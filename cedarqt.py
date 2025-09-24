@@ -295,6 +295,7 @@ class LoggingWebPage(QWebEnginePage):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._console_logs: list[str] = []
+        self._child_windows = []  # prevent GC of spawned windows
 
     def _append_console_log(self, entry: str) -> None:
         try:
@@ -342,6 +343,29 @@ class LoggingWebPage(QWebEnginePage):
             except Exception:
                 pass
         return super().chooseFiles(mode, oldFiles, acceptedMimeTypes)
+
+    def createWindow(self, _type):  # type: ignore[override]
+        """Handle target=_blank / window.open by spawning a new window with its own view/page."""
+        try:
+            new_view = QWebEngineView()
+            new_page = LoggingWebPage(new_view)
+            new_view.setPage(new_page)
+            win = QMainWindow()
+            win.setWindowTitle("CedarPy")
+            win.setCentralWidget(new_view)
+            win.resize(1100, 800)
+            win.show()
+            try:
+                self._child_windows.append((win, new_view, new_page))
+            except Exception:
+                pass
+            return new_page
+        except Exception as e:
+            try:
+                print(f"[qt-page] createWindow error: {e}")
+            except Exception:
+                pass
+            return super().createWindow(_type)
 
 
 def _wait_for_server(url: str, timeout_sec: float = 20.0) -> bool:

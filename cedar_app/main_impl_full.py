@@ -1441,7 +1441,7 @@ def layout(title: str, body: str, header_label: Optional[str] = None, header_lin
         f"<a href='/shell{nav_qs}'>Shell</a> | "
         f"<a href='/merge{nav_qs}'>Merge</a> | "
         f"<a href='/changelog{nav_qs}'>Changelog</a> | "
-        f"<a href='/log{nav_qs}'>Log</a> | "
+        f"<a href='/log{nav_qs}' target='_blank' rel='noopener'>Log</a> | "
         f"<a href='/settings'>Settings</a>"
     )
 
@@ -1499,6 +1499,22 @@ def layout(title: str, body: str, header_label: Optional[str] = None, header_lin
     try { var r = ev && ev.reason; base('error', (r && (r.message || r.toString())) || 'unhandledrejection', 'unhandledrejection', { stack: r && r.stack ? String(r.stack) : null }); } catch(e){}
   });
   document.addEventListener('DOMContentLoaded', function(){ try { console.log('[ui] page ready'); } catch(e){} }, { once: true });
+  // Auto-restore last thread on cold open of '/' (fresh launch). Bypass with ?home=1.
+  try {
+    if ((location.pathname === '/' || location.pathname === '') && document.referrer === '') {
+      var _sp = new URLSearchParams(location.search || '');
+      if (!_sp.has('home')) {
+        var _lp = null, _lb = null, _lt = null;
+        try { _lp = localStorage.getItem('cedar:lastProject'); } catch(_){}
+        try { _lb = localStorage.getItem('cedar:lastBranch'); } catch(_){}
+        try { _lt = localStorage.getItem('cedar:lastThread'); } catch(_){}
+        if (_lp && _lb && _lt) {
+          var _dest = '/project/' + encodeURIComponent(String(_lp)) + '?branch_id=' + encodeURIComponent(String(_lb)) + '&thread_id=' + encodeURIComponent(String(_lt));
+          location.replace(_dest);
+        }
+      }
+    }
+  } catch(_){ }
 })();
 </script>
 """
@@ -3417,6 +3433,26 @@ SELECT * FROM demo LIMIT 10;""")
             }
           } catch(_){}
         })();
+      } catch(_){}
+
+      // Persist last active context and attach SSE for the current thread (rehydrate on reopen)
+      try {
+        var _savedOnce = false;
+        function _saveAndAttachIfReady(){
+          try {
+            var sp1 = new URLSearchParams(location.search || '');
+            var tidNow = sp1.get('thread_id') || (chatForm && chatForm.getAttribute('data-thread-id')) || null;
+            if (tidNow && !_savedOnce) {
+              _savedOnce = true;
+              try { localStorage.setItem('cedar:lastProject', String(PROJECT_ID||'')); } catch(_){}
+              try { localStorage.setItem('cedar:lastBranch', String(BRANCH_ID||'')); } catch(_){}
+              try { localStorage.setItem('cedar:lastThread', String(tidNow||'')); } catch(_){}
+              try { startSSE(tidNow); } catch(_){ }
+            }
+          } catch(_){ }
+        }
+        _saveAndAttachIfReady();
+        setTimeout(_saveAndAttachIfReady, 700);
       } catch(_){}
 
       // Auto-start chat once after upload redirect so user sees processing in Chat
