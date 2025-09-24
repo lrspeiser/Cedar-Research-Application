@@ -4849,11 +4849,134 @@ def api_test_tool_exec(body: ToolExecRequest, request: Request):
 
     raise HTTPException(status_code=400, detail="unsupported function")
 
-# Client log ingestion API
+# Client + Server unified log buffer
+# We maintain a single in-memory ring buffer of recent logs and write both client- and server-side log entries into it.
+# The /log page renders from this buffer (latest last for readability in UI).
+# See README.md: "Client-side logging" and "Unified backend logging".
+_LOG_BUFFER: deque = deque(maxlen=5000)
+# Back-compat aliases (existing code references these):
+_CLIENT_LOG_BUFFER = _LOG_BUFFER  # client posts append here
+_SERVER_LOG_BUFFER = _LOG_BUFFER  # server handler appends here
+
+# Lightweight server logging integration
+# - Capture Python logging via a custom handler
+# - Capture print(...) by patching builtins (optional; enabled by default)
+# - Add HTTP middleware to log request start/end with timing
+import logging as _logging, contextvars as _ctxv, builtins as _bi, time as _time
+
+_current_path: _ctxv.ContextVar[str] = _ctxv.ContextVar("cedarpy_current_path", default="")
+
+class CedarBufferHandler(_logging.Handler):
+    def emit(self, record: _logging.LogRecord) -> None:  # type: ignore[name-defined]
+        try:
+            ts = datetime.utcnow().isoformat() + "Z"
+            lvl = record.levelname.upper()
+            msg = record.getMessage()
+            url = ""  # HTTP middleware sets current path for logs during requests
+            try:
+                url = _current_path.get() or ""
+            except Exception:
+                url = ""
+            loc = f"{record.module}:{record.lineno}"
+            origin = f"server:{record.name}"
+            _SERVER_LOG_BUFFER.append({
+                "ts": ts,
+                "level": lvl,
+                "host": "127.0.0.1",  # local app
+                "origin": origin,
+                "url": url,
+                "loc": loc,
+                "ua": None,
+                "message": msg,
+                "stack": None,
+            })
+        except Exception:
+            # Never raise from handler
+            pass
+
+def _install_unified_logging() -> None:
+    try:
+        # Attach handler to root and common app servers
+        h = CedarBufferHandler()
+        h.setLevel(_logging.DEBUG)
+        root = _logging.getLogger()
+        root.addHandler(h)
+        root.setLevel(_logging.DEBUG)
+        for name in ("uvicorn", "uvicorn.error", "uvicorn.access", "fastapi", "starlette"):
+            lg = _logging.getLogger(name)
+            lg.addHandler(h)
+            lg.setLevel(_logging.DEBUG)
+        # Optionally patch print to also append to buffer (enabled by default; set CEDARPY_PATCH_PRINT=0 to disable)
+        if str(os.getenv("CEDARPY_PATCH_PRINT", "1")).strip().lower() not in {"0", "false", "no"}:
+            try:
+                _orig_print = _bi.print
+                def _cedar_print(*args, **kwargs):  # type: ignore[override]
+                    try:
+                        _orig_print(*args, **kwargs)
+                    finally:
+                        try:
+                            msg = " ".join([str(a) for a in args])
+                            loc = None
+                            # Best-effort caller info
+                            try:
+                                import inspect as _inspect
+                                fr = _inspect.currentframe()
+                                if fr and fr.f_back and fr.f_back.f_back:
+                                    co = fr.f_back.f_back.f_code
+                                    loc = f"{os.path.basename(co.co_filename)}:{co.co_firstlineno}"
+                            except Exception:
+                                loc = None
+                            _SERVER_LOG_BUFFER.append({
+                                "ts": datetime.utcnow().isoformat()+"Z",
+                                "level": "INFO",
+                                "host": "127.0.0.1",
+                                "origin": "server:print",
+                                "url": _current_path.get() if _current_path else "",
+                                "loc": loc or "print",
+                                "ua": None,
+                                "message": msg,
+                                "stack": None,
+                            })
+                        except Exception:
+                            pass
+                _bi.print = _cedar_print  # type: ignore[assignment]
+            except Exception:
+                pass
+        # Register HTTP middleware for request logs
+        @app.middleware("http")
+        async def _cedar_logging_mw(request: Request, call_next):
+            path = str(getattr(request, "url", "") or "")
+            token = None
+            try:
+                token = _current_path.set(path)
+            except Exception:
+                token = None
+            start = _time.time()
+            try:
+                _logging.getLogger("cedarpy").debug(f"request.start {request.method} {request.url.path}")
+                resp = await call_next(request)
+                dur_ms = int((_time.time() - start) * 1000)
+                _logging.getLogger("cedarpy").debug(f"request.end {request.method} {request.url.path} status={getattr(resp,'status_code',None)} dur_ms={dur_ms}")
+                return resp
+            except Exception as e:
+                dur_ms = int((_time.time() - start) * 1000)
+                _logging.getLogger("cedarpy").exception(f"request.error {request.method} {request.url.path} dur_ms={dur_ms} error={type(e).__name__}: {e}")
+                raise
+            finally:
+                try:
+                    if token is not None:
+                        _current_path.reset(token)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+# Install unified logging immediately at import time
+_install_unified_logging()
+
+# Client log ingestion API (merges into _LOG_BUFFER)
 # This endpoint receives client-side console/error logs sent by the injected script in layout().
 # See README.md (section "Client-side logging") for details and troubleshooting.
-# In-memory ring buffer of recent client logs (latest first when rendered)
-_CLIENT_LOG_BUFFER: deque = deque(maxlen=1000)
 
 class ClientLogEntry(BaseModel):
     when: Optional[str] = None
@@ -4874,10 +4997,10 @@ def api_client_log(entry: ClientLogEntry, request: Request):
     url = entry.url or ""
     lc = f"{entry.line or ''}:{entry.column or ''}" if (entry.line or entry.column) else ""
     ua = entry.userAgent or ""
-    origin = entry.origin or ""
-    # Append to in-memory buffer for viewing in /log
+    origin = entry.origin or "client"
+    # Append to unified in-memory buffer for viewing in /log
     try:
-        _CLIENT_LOG_BUFFER.append({
+        _LOG_BUFFER.append({
             "ts": ts,
             "level": lvl,
             "host": host,
@@ -4891,6 +5014,7 @@ def api_client_log(entry: ClientLogEntry, request: Request):
     except Exception:
         pass
     try:
+        # This print will also be captured by the unified print patch if enabled.
         print(f"[client-log] ts={ts} level={lvl} host={host} origin={origin} url={url} loc={lc} ua={ua} msg={entry.message}")
         if entry.stack:
             print("[client-log-stack] " + str(entry.stack))
@@ -5808,10 +5932,10 @@ def home(request: Request, db: Session = Depends(get_registry_db)):
 
 @app.get("/log", response_class=HTMLResponse)
 def view_logs(project_id: Optional[int] = None, branch_id: Optional[int] = None):
-    # Render recent client logs (newest last for readability)
+    # Render recent client + server logs (newest last for readability)
     rows = []
     try:
-        logs = list(_CLIENT_LOG_BUFFER)
+        logs = list(_LOG_BUFFER)
     except Exception:
         logs = []
     if logs:
