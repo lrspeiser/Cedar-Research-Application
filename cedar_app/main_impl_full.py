@@ -1271,8 +1271,14 @@ app = FastAPI(title="Cedar")
 
 # Register WebSocket routes from extracted orchestrator module
 try:
-    # Use the extracted orchestrator for main route
-    from cedar_orchestrator.ws_chat import register_ws_chat, WSDeps
+    # Try to use the new thinker-orchestrator flow first
+    try:
+        from cedar_orchestrator.ws_chat_new import register_ws_chat, WSDeps
+        print("[startup] Using new thinker-orchestrator WebSocket flow")
+    except ImportError:
+        # Fall back to old implementation if new one not available
+        from cedar_orchestrator.ws_chat import register_ws_chat, WSDeps
+        print("[startup] Using original WebSocket flow")
     from main_helpers import _publish_relay_event as __pub, _register_ack as __ack
     deps = WSDeps(
         get_project_engine=_get_project_engine,
