@@ -19,20 +19,14 @@ from __future__ import annotations
 # This keeps existing imports working (e.g., `from main import app`).
 import importlib
 
-# TEMPORARILY COMMENTED OUT TO TEST DEPENDENCIES
-# try:
-#     _impl = importlib.import_module('cedar_app.main_impl_full')
-#     # Force a reload so per-test environment changes (e.g., CEDARPY_* vars) take effect.
-#     _impl = importlib.reload(_impl)
-#     app = getattr(_impl, 'app')  # FastAPI instance
-# except Exception as e:
-#     # Provide a clear import-time error if the implementation module is missing
-#     raise RuntimeError(f"Failed to import cedar_app.main_impl_full: {type(e).__name__}: {e}")
-
-# Create a minimal app for testing
-from fastapi import FastAPI
-app = FastAPI(title="Cedar Test")
-_impl = None  # Set to None so the attribute exports fail gracefully
+try:
+    _impl = importlib.import_module('cedar_app.main_impl_full')
+    # Force a reload so per-test environment changes (e.g., CEDARPY_* vars) take effect.
+    _impl = importlib.reload(_impl)
+    app = getattr(_impl, 'app')  # FastAPI instance
+except Exception as e:
+    # Provide a clear import-time error if the implementation module is missing
+    raise RuntimeError(f"Failed to import cedar_app.main_impl_full: {type(e).__name__}: {e}")
 
 # Optional: re-export commonly used functions/objects to preserve backwards-compat usage across the codebase
 # without forcing immediate refactors. If you want stricter encapsulation, narrow this list over time.
