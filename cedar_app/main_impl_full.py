@@ -3537,6 +3537,22 @@ SELECT * FROM demo LIMIT 10;""")
         })();
       }, true);
 
+      // Make All Chats items (entire row) clickable to open the full thread in the main Chat view
+      document.addEventListener('click', function(ev){
+        try {
+          var item = ev.target && ev.target.closest ? ev.target.closest('#left-allchats .thread-item') : null;
+          if (!item) return;
+          var a = item.querySelector('a[href]');
+          if (!a) return;
+          ev.preventDefault();
+          var url = a.getAttribute('href');
+          if (!url) return;
+          try { console.log('[ui] open-thread ' + url); } catch(_){ }
+          // Navigate to the thread URL so the server renders the full history
+          try { window.location.href = url; } catch(_) { try { window.location.assign(url); } catch(_){ } }
+        } catch(_) { }
+      }, true);
+
     } catch(_) {}
   }, { once: true });
 })();
