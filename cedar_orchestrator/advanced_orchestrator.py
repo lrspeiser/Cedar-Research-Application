@@ -11,12 +11,29 @@ import json
 import asyncio
 import logging
 import math
+import time
 from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass
 from openai import AsyncOpenAI
 from fastapi import WebSocket
 
+# Configure detailed logging
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Also log to file for persistence
+try:
+    import sys
+    log_dir = os.path.join(os.path.expanduser("~"), "Library", "Logs", "CedarPy")
+    os.makedirs(log_dir, exist_ok=True)
+    from datetime import datetime
+    log_file = os.path.join(log_dir, f"orchestrator_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+    logger.addHandler(file_handler)
+    logger.info(f"Orchestrator logging initialized to {log_file}")
+except Exception as e:
+    logger.warning(f"Could not set up file logging: {e}")
 
 @dataclass
 class AgentResult:
@@ -33,13 +50,20 @@ class CodeAgent:
         
     async def process(self, task: str) -> AgentResult:
         """Generate and execute Python code to solve the task"""
+        start_time = time.time()
+        logger.info(f"[CodeAgent] Starting processing for task: {task[:100]}...")
+        
         try:
             if "square root" in task.lower() and any(char.isdigit() for char in task):
+                logger.info("[CodeAgent] Detected square root calculation task")
                 # Extract number from the task
                 import re
                 numbers = re.findall(r'\d+', task)
+                logger.info(f"[CodeAgent] Found numbers: {numbers}")
+                
                 if numbers:
                     number = int(numbers[-1])  # Get the last number mentioned
+                    logger.info(f"[CodeAgent] Using number: {number}")
                     
                     # Generate Python code
                     code = f"""
@@ -47,8 +71,12 @@ import math
 result = math.sqrt({number})
 print(f"The square root of {number} is {{result}}")
 """
+                    logger.info(f"[CodeAgent] Generated code:\n{code}")
+                    
                     # Execute the code (safely in production you'd use a sandbox)
                     result = math.sqrt(number)
+                    logger.info(f"[CodeAgent] Execution result: {result}")
+                    logger.info(f"[CodeAgent] Completed in {time.time() - start_time:.3f}s with confidence 1.0")
                     
                     return AgentResult(
                         agent_name="CodeAgent",
@@ -92,13 +120,23 @@ class MathAgent:
         
     async def process(self, task: str) -> AgentResult:
         """Process mathematical questions"""
+        start_time = time.time()
+        logger.info(f"[MathAgent] Starting processing for task: {task[:100]}...")
+        
         try:
             if "square root" in task.lower():
+                logger.info("[MathAgent] Detected mathematical computation request")
                 import re
                 numbers = re.findall(r'\d+', task)
+                logger.info(f"[MathAgent] Extracted numbers: {numbers}")
+                
                 if numbers:
                     number = int(numbers[-1])
+                    logger.info(f"[MathAgent] Computing sqrt({number})")
                     result = math.sqrt(number)
+                    logger.info(f"[MathAgent] Result with high precision: {result:.10f}")
+                    logger.info(f"[MathAgent] Completed in {time.time() - start_time:.3f}s with confidence 1.0")
+                    
                     return AgentResult(
                         agent_name="MathAgent",
                         result=f"{result:.10f}",  # High precision
@@ -108,20 +146,28 @@ class MathAgent:
                     
             # Use LLM for complex math
             if self.llm_client:
-                response = await self.llm_client.chat.completions.create(
-                    model="gpt-4",
-                    messages=[
-                        {"role": "system", "content": "You are a mathematics expert. Solve the given problem with precise calculations."},
-                        {"role": "user", "content": task}
-                    ],
-                    max_tokens=150
-                )
-                return AgentResult(
-                    agent_name="MathAgent",
-                    result=response.choices[0].message.content,
-                    confidence=0.9,
-                    method="LLM mathematical reasoning"
-                )
+                logger.info("[MathAgent] Falling back to LLM for complex mathematical reasoning")
+                try:
+                    response = await self.llm_client.chat.completions.create(
+                        model="gpt-4",
+                        messages=[
+                            {"role": "system", "content": "You are a mathematics expert. Solve the given problem with precise calculations."},
+                            {"role": "user", "content": task}
+                        ],
+                        max_tokens=150
+                    )
+                    llm_result = response.choices[0].message.content
+                    logger.info(f"[MathAgent] LLM response: {llm_result[:100]}...")
+                    logger.info(f"[MathAgent] Completed LLM call in {time.time() - start_time:.3f}s with confidence 0.9")
+                    
+                    return AgentResult(
+                        agent_name="MathAgent",
+                        result=llm_result,
+                        confidence=0.9,
+                        method="LLM mathematical reasoning"
+                    )
+                except Exception as llm_error:
+                    logger.error(f"[MathAgent] LLM call failed: {llm_error}")
                 
         except Exception as e:
             logger.error(f"MathAgent error: {e}")
@@ -141,19 +187,30 @@ class GeneralAgent:
         
     async def process(self, task: str) -> AgentResult:
         """Process general questions"""
+        start_time = time.time()
+        logger.info(f"[GeneralAgent] Starting processing for task: {task[:100]}...")
+        
         try:
             if self.llm_client:
-                response = await self.llm_client.chat.completions.create(
-                    model="gpt-4",
-                    messages=[{"role": "user", "content": task}],
-                    max_tokens=150
-                )
-                return AgentResult(
-                    agent_name="GeneralAgent",
-                    result=response.choices[0].message.content,
-                    confidence=0.7,
-                    method="General LLM response"
-                )
+                logger.info("[GeneralAgent] Using LLM for general query processing")
+                try:
+                    response = await self.llm_client.chat.completions.create(
+                        model="gpt-4",
+                        messages=[{"role": "user", "content": task}],
+                        max_tokens=150
+                    )
+                    llm_result = response.choices[0].message.content
+                    logger.info(f"[GeneralAgent] LLM response: {llm_result[:100]}...")
+                    logger.info(f"[GeneralAgent] Completed in {time.time() - start_time:.3f}s with confidence 0.7")
+                    
+                    return AgentResult(
+                        agent_name="GeneralAgent",
+                        result=llm_result,
+                        confidence=0.7,
+                        method="General LLM response"
+                    )
+                except Exception as llm_error:
+                    logger.error(f"[GeneralAgent] LLM call failed: {llm_error}")
         except Exception as e:
             logger.error(f"GeneralAgent error: {e}")
             
@@ -214,9 +271,16 @@ class ThinkerOrchestrator:
         
     async def orchestrate(self, message: str, websocket: WebSocket):
         """Full orchestration process"""
+        orchestration_start = time.time()
+        logger.info("="*80)
+        logger.info(f"[ORCHESTRATOR] Starting orchestration for message: {message}")
+        logger.info("="*80)
         
         # Phase 1: Thinking
+        logger.info("[ORCHESTRATOR] PHASE 1: Thinker Analysis")
         thinking = await self.think(message)
+        logger.info(f"[ORCHESTRATOR] Thinking result: Type={thinking['identified_type']}, Agents={thinking['agents_to_use']}")
+        
         await websocket.send_json({
             "type": "thinker_reasoning",
             "content": f"Analyzing: {message}\nType: {thinking['identified_type']}\nPlan: Using {', '.join(thinking['agents_to_use'])} agents"
@@ -224,22 +288,33 @@ class ThinkerOrchestrator:
         await asyncio.sleep(0.5)  # Simulate thinking time
         
         # Phase 2: Parallel agent processing
+        logger.info("[ORCHESTRATOR] PHASE 2: Parallel Agent Processing")
         agents = []
         if "CodeAgent" in thinking["agents_to_use"]:
             agents.append(self.code_agent)
+            logger.info("[ORCHESTRATOR] Added CodeAgent to processing queue")
         if "MathAgent" in thinking["agents_to_use"]:
             agents.append(self.math_agent)
+            logger.info("[ORCHESTRATOR] Added MathAgent to processing queue")
         if "GeneralAgent" in thinking["agents_to_use"]:
             agents.append(self.general_agent)
+            logger.info("[ORCHESTRATOR] Added GeneralAgent to processing queue")
             
         # Process all agents in parallel
+        logger.info(f"[ORCHESTRATOR] Starting parallel processing with {len(agents)} agents")
+        parallel_start = time.time()
         agent_tasks = [agent.process(message) for agent in agents]
         results = await asyncio.gather(*agent_tasks, return_exceptions=True)
+        logger.info(f"[ORCHESTRATOR] Parallel processing completed in {time.time() - parallel_start:.3f}s")
         
         # Send agent results
+        logger.info("[ORCHESTRATOR] Processing agent results")
         valid_results = []
-        for result in results:
+        for i, result in enumerate(results):
             if isinstance(result, AgentResult):
+                logger.info(f"[ORCHESTRATOR] Result {i+1}: {result.agent_name} - Confidence: {result.confidence:.2f}, Method: {result.method}")
+                logger.info(f"[ORCHESTRATOR] Result {i+1} content: {result.result[:200]}...")
+                
                 await websocket.send_json({
                     "type": "agent_result",
                     "agent_name": result.agent_name,
@@ -247,9 +322,15 @@ class ThinkerOrchestrator:
                 })
                 valid_results.append(result)
                 await asyncio.sleep(0.2)
+            elif isinstance(result, Exception):
+                logger.error(f"[ORCHESTRATOR] Agent {i+1} failed with exception: {result}")
                 
         # Phase 3: Select best result
+        logger.info("[ORCHESTRATOR] PHASE 3: Result Selection")
+        logger.info(f"[ORCHESTRATOR] Comparing {len(valid_results)} valid results")
         best_result = await self.select_best_result(valid_results, thinking)
+        logger.info(f"[ORCHESTRATOR] Selected best result: {best_result.agent_name} with confidence {best_result.confidence}")
+        logger.info(f"[ORCHESTRATOR] Selection reasoning: Method={best_result.method}")
         
         # Send final response
         await websocket.send_json({
@@ -261,6 +342,12 @@ class ThinkerOrchestrator:
                 "method": best_result.method
             }
         })
+        
+        total_time = time.time() - orchestration_start
+        logger.info("="*80)
+        logger.info(f"[ORCHESTRATOR] Orchestration completed in {total_time:.3f}s")
+        logger.info(f"[ORCHESTRATOR] Final answer: {best_result.result[:100]}...")
+        logger.info("="*80)
         
     async def select_best_result(self, results: List[AgentResult], thinking: Dict) -> AgentResult:
         """Orchestrator logic to select the best result"""

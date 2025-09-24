@@ -5,10 +5,17 @@ This module provides the real multi-agent orchestration system.
 
 import os
 import logging
+import json
+import time
 from typing import Optional
 from fastapi import WebSocket, FastAPI
 from cedar_orchestrator.advanced_orchestrator import ThinkerOrchestrator
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 class WSDeps:
@@ -101,17 +108,31 @@ async def handle_ws_chat(
                 if data.get("type") == "message":
                     content = data.get("content", "").strip()
                     
+                    logger.info("*"*80)
+                    logger.info(f"[WebSocket] New message received from client")
+                    logger.info(f"[WebSocket] Project ID: {project_id}")
+                    logger.info(f"[WebSocket] Message content: {content}")
+                    logger.info(f"[WebSocket] Message length: {len(content)} characters")
+                    logger.info("*"*80)
+                    
                     if not content:
+                        logger.warning("[WebSocket] Empty message received, sending error")
                         await websocket.send_json({
                             "type": "error",
                             "content": "Empty message received"
                         })
                         continue
                     
-                    logger.info(f"Processing message: {content[:50]}...")
+                    logger.info(f"[WebSocket] Initiating orchestration for: {content[:100]}...")
+                    orchestration_start = time.time()
                     
                     # Process with advanced orchestrator
                     await orchestrator.orchestrate(content, websocket)
+                    
+                    orchestration_time = time.time() - orchestration_start
+                    logger.info("*"*80)
+                    logger.info(f"[WebSocket] Orchestration completed in {orchestration_time:.3f}s")
+                    logger.info("*"*80)
                     
                     # Log to changelog if we have the necessary deps
                     if project_id and hasattr(deps, 'record_changelog'):
