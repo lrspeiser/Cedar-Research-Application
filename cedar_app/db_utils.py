@@ -139,64 +139,14 @@ def _migrate_thread_messages_columns(engine_obj):
 
 
 def _migrate_project_langextract_tables(engine_obj):
+    """Create per-project tables for LangExtract chunk storage and FTS.
+    Delegates to cedar_langextract.ensure_langextract_schema for single source of truth.
+    """
     try:
-        with engine_obj.begin() as conn:
-            conn.exec_driver_sql(
-                """
-                CREATE TABLE IF NOT EXISTS doc_chunks (
-                  id TEXT PRIMARY KEY,
-                  file_id INTEGER NOT NULL,
-                  char_start INTEGER NOT NULL,
-                  char_end INTEGER NOT NULL,
-                  text TEXT NOT NULL,
-                  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                  UNIQUE(file_id, char_start, char_end)
-                )
-                """
-            )
-            conn.exec_driver_sql(
-                """
-                CREATE VIRTUAL TABLE IF NOT EXISTS doc_chunks_fts USING fts5(
-                  chunk_id UNINDEXED,
-                  file_id UNINDEXED,
-                  text,
-                  tokenize = 'porter'
-                )
-                """
-            )
-            def _tr_exists(name: str) -> bool:
-                res = conn.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='trigger' AND name=?", (name,))
-                return res.fetchone() is not None
-            if not _tr_exists("doc_chunks_ai"):
-                conn.exec_driver_sql(
-                    """
-                    CREATE TRIGGER doc_chunks_ai AFTER INSERT ON doc_chunks BEGIN
-                      INSERT INTO doc_chunks_fts(rowid, chunk_id, file_id, text)
-                      VALUES (new.rowid, new.id, new.file_id, new.text);
-                    END;
-                    """
-                )
-            if not _tr_exists("doc_chunks_ad"):
-                conn.exec_driver_sql(
-                    """
-                    CREATE TRIGGER doc_chunks_ad AFTER DELETE ON doc_chunks BEGIN
-                      INSERT INTO doc_chunks_fts(doc_chunks_fts, rowid, chunk_id, file_id, text)
-                      VALUES ('delete', old.rowid, old.id, old.file_id, old.text);
-                    END;
-                    """
-                )
-            if not _tr_exists("doc_chunks_au"):
-                conn.exec_driver_sql(
-                    """
-                    CREATE TRIGGER doc_chunks_au AFTER UPDATE ON doc_chunks BEGIN
-                      INSERT INTO doc_chunks_fts(doc_chunks_fts, rowid, chunk_id, file_id, text)
-                      VALUES ('delete', old.rowid, old.id, old.file_id, old.text);
-                      INSERT INTO doc_chunks_fts(rowid, chunk_id, file_id, text)
-                      VALUES (new.rowid, new.id, new.file_id, new.text);
-                    END;
-                    """
-                )
+        from cedar_langextract import ensure_langextract_schema
+        ensure_langextract_schema(engine_obj)
     except Exception:
+        # Best-effort; ignore if cedar_langextract is unavailable
         pass
 
 

@@ -14,16 +14,12 @@ from fastapi import WebSocket, WebSocketDisconnect, HTTPException, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 from starlette.responses import RedirectResponse
 
-from ..db_utils import (_get_project_engine, SQLUndoLog, ensure_project_initialized, 
-                       current_branch, record_changelog, get_project_db)
+from ..db_utils import (_get_project_engine, ensure_project_initialized, 
+                       get_project_db)
 from ..database import registry_engine
-from ..models import Project, Branch
-from ..auth import require_shell_enabled_and_auth
-from ..ui_utils import layout, escape
-
-# Configuration
-SHELL_API_ENABLED = os.getenv("CEDARPY_SHELL_API_TOKEN") is not None
-SHELL_API_TOKEN = os.getenv("CEDARPY_SHELL_API_TOKEN")
+from main_models import SQLUndoLog, Project, Branch
+from ..ui_utils import escape
+from ..config import SHELL_API_ENABLED, SHELL_API_TOKEN
 
 # SQL Helper Functions
 def _dialect(engine_obj=None) -> str:

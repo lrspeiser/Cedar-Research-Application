@@ -621,28 +621,33 @@ def _maybe_prompt_full_disk_access_once():
         pass
 
 
-def _choose_listen_port(host: str, desired: int) -> int:
-    try:
-        import socket as _s
-        # Try desired
-        s = _s.socket(_s.AF_INET, _s.SOCK_STREAM)
+# Import unified port selection from cedar_utils
+try:
+    from cedar_utils.ports import choose_listen_port as _choose_listen_port
+except ImportError:
+    # Fallback if cedar_utils not available
+    def _choose_listen_port(host: str, desired: int) -> int:
         try:
-            s.bind((host, desired))
-            s.close()
-            return desired
-        except Exception:
+            import socket as _s
+            # Try desired
+            s = _s.socket(_s.AF_INET, _s.SOCK_STREAM)
             try:
+                s.bind((host, desired))
                 s.close()
+                return desired
             except Exception:
-                pass
-        # Find free
-        s2 = _s.socket(_s.AF_INET, _s.SOCK_STREAM)
-        s2.bind((host, 0))
-        port = s2.getsockname()[1]
-        s2.close()
-        return int(port)
-    except Exception:
-        return desired
+                try:
+                    s.close()
+                except Exception:
+                    pass
+            # Find free
+            s2 = _s.socket(_s.AF_INET, _s.SOCK_STREAM)
+            s2.bind((host, 0))
+            port = s2.getsockname()[1]
+            s2.close()
+            return int(port)
+        except Exception:
+            return desired
 
 
 def main():
