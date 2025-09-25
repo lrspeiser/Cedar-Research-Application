@@ -20,10 +20,8 @@ from ..changelog_utils import record_changelog
 from main_models import (
     Project, Branch, Thread, ThreadMessage, FileEntry
 )
-from main_helpers import (
-    current_branch, add_version, branch_filter_ids,
-    get_project_db
-)
+from main_helpers import current_branch
+from ..db_utils import get_project_db
 
 
 def serve_project_upload(project_id: int, file_id: int, db: Session = Depends(get_project_db)):

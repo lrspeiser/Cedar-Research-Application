@@ -2523,6 +2523,1513 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
     except Exception:
         pass
     sender_task = _aio.create_task(_sender())
+    def _enqueue(obj: dict, require_ack: bool = False):
+        try:
+            if require_ack:
+                try:
+                    eid = uuid.uuid4().hex
+                    obj['eid'] = eid
+                    # Ensure thread_id present when possible
+                    try:
+                        if ('thread_id' not in obj or obj.get('thread_id') is None) and ('thr' in locals() or True):
+                            try:
+                                # thr is defined later; capture from closure if available
+                                _tid_local = None
+                                try:
+                                    _tid_local = thr.id  # type: ignore[name-defined]
+                                except Exception:
+                                    _tid_local = obj.get('thread_id')
+                                if _tid_local is not None:
+                                    obj['thread_id'] = _tid_local
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                    info = { 'type': obj.get('type'), 'function': obj.get('function'), 'thread_id': obj.get('thread_id') }
+                    try:
+                        t_ms = int(os.getenv('CEDARPY_ACK_TIMEOUT_MS', '10000'))
+                    except Exception:
+                        t_ms = 10000
+                    try:
+                        asyncio.get_event_loop().create_task(_register_ack(eid, info, timeout_ms=t_ms))
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+            # Publish to Redis (best-effort) for Node SSE relay
+            try:
+                asyncio.get_event_loop().create_task(_publish_relay_event(obj))
+            except Exception:
+                pass
+            event_q.put_nowait(json.dumps(obj))
+        except Exception:
+            pass
+    try:
+        try:
+            print(f"[ws-chat] accepted project_id={project_id}")
+        except Exception:
+            pass
+        raw = await websocket.receive_text()
+        print(f"[ws-chat] Received raw text: '{raw[:100]}...'" if len(raw) > 100 else f"[ws-chat] Received raw text: '{raw}'")
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            payload = {"action": "chat", "content": raw}
+        content = (payload.get("content") or "").strip()
+        print(f"[ws-chat] Parsed content: '{content[:100]}...'" if len(content) > 100 else f"[ws-chat] Parsed content: '{content}'")
+        br_id = payload.get("branch_id")
+        thr_id = payload.get("thread_id")
+    except Exception:
+        _enqueue({"type": "error", "error": "invalid payload"})
+        try:
+            await event_q.put(None)
+            await sender_task
+        except Exception:
+            pass
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+        return
+
+    # Immediately inform client that the request is submitted and planning has started (for responsiveness)
+    try:
+        _enqueue({"type": "info", "stage": "submitted", "t": datetime.utcnow().isoformat()+"Z"})
+        _enqueue({"type": "info", "stage": "planning", "t": datetime.utcnow().isoformat()+"Z"})
+        try:
+            print("[ws-chat] submitted+planning-sent-early")
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+    SessionLocal = sessionmaker(bind=_get_project_engine(project_id), autoflush=False, autocommit=False, future=True)
+    branch = None
+    thr = None
+    db = SessionLocal()
+    try:
+        ensure_project_initialized(project_id)
+        branch = current_branch(db, project_id, int(br_id) if br_id is not None else None)
+        if thr_id:
+            try:
+                thr = db.query(Thread).filter(Thread.id == int(thr_id), Thread.project_id == project_id).first()
+            except Exception:
+                thr = None
+        if not thr:
+            thr = db.query(Thread).filter(Thread.project_id==project_id, Thread.branch_id==branch.id, Thread.title=="Ask").first()
+            if not thr:
+                thr = Thread(project_id=project_id, branch_id=branch.id, title="Ask")
+                db.add(thr); db.commit(); db.refresh(thr)
+        # Capture branch context as plain values to avoid detached-instance refreshes later in tool closures
+        try:
+            branch_id_int = int(getattr(branch, 'id', 0)) if branch is not None else 0
+        except Exception:
+            branch_id_int = 0
+        try:
+            branch_name_str = str(getattr(branch, 'name', 'Main') or 'Main') if branch is not None else 'Main'
+        except Exception:
+            branch_name_str = 'Main'
+        if content:
+            print(f"[ws-chat] Saving user message to DB for thread {thr.id}: '{content[:100]}...'" if len(content) > 100 else f"[ws-chat] Saving user message to DB for thread {thr.id}: '{content}'")
+            db.add(ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="user", content=content))
+            db.commit()
+            # Set thread title from the first 10 characters of the first prompt when thread has a default/placeholder title
+            try:
+                title_now = (thr.title or '').strip()
+                if not title_now or title_now in {"Ask", "New Thread"} or title_now.startswith("File:") or title_now.startswith("DB:"):
+                    new_title = (content.strip().splitlines()[0])[:10] or "(untitled)"
+                    thr.title = new_title
+                    db.commit()
+                    try:
+                        _enqueue({"type": "action", "function": "thread_update", "text": "Thread updated", "call": {"thread_id": thr.id, "title": new_title}, "thread_id": thr.id}, require_ack=True)
+                    except Exception:
+                        pass
+            except Exception:
+                try: db.rollback()
+                except Exception: pass
+            # Emit backend-driven user message and processing ACK (frontend only renders backend events)
+            try:
+                _enqueue({"type": "message", "role": "user", "text": content, "thread_id": thr.id}, require_ack=True)
+            except Exception:
+                pass
+            try:
+                ack_text = "Processing…"
+                try:
+                    fid_ack = payload.get("file_id") if isinstance(payload, dict) else None
+                    if fid_ack is not None:
+                        f_ack = db.query(FileEntry).filter(FileEntry.id == int(fid_ack), FileEntry.project_id == project_id).first()
+                        if f_ack and getattr(f_ack, 'display_name', None):
+                            ack_text = f"Processing {f_ack.display_name}…"
+                except Exception:
+                    pass
+                _enqueue({"type": "action", "function": "processing", "text": ack_text, "thread_id": thr.id}, require_ack=True)
+            except Exception:
+                pass
+    except Exception:
+        try: db.rollback()
+        except Exception: pass
+    finally:
+        try: db.close()
+        except Exception: pass
+
+    client, model = _llm_client_config()
+    if not client:
+        try:
+            print("[ws-chat] missing-key")
+        except Exception:
+            pass
+        db2 = SessionLocal()
+        try:
+            am = ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="assistant", content="[llm-missing-key] Set CEDARPY_OPENAI_API_KEY or OPENAI_API_KEY.")
+            db2.add(am); db2.commit()
+        except Exception:
+            try: db2.rollback()
+            except Exception: pass
+        finally:
+            try: db2.close()
+            except Exception: pass
+        _enqueue({"type": "error", "error": "missing_key"})
+        try:
+            await event_q.put(None)
+            await sender_task
+        except Exception:
+            pass
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+        return
+
+    # Build context/resources/history using a fresh session
+    db2 = SessionLocal()
+    try:
+        # Optional context from file/dataset
+        fctx = None
+        dctx = None
+        try:
+            fid = payload.get("file_id")
+            if fid is not None:
+                fctx = db2.query(FileEntry).filter(FileEntry.id == int(fid), FileEntry.project_id == project_id).first()
+        except Exception:
+            fctx = None
+        try:
+            did = payload.get("dataset_id")
+            if did is not None:
+                dctx = db2.query(Dataset).filter(Dataset.id == int(did), Dataset.project_id == project_id).first()
+        except Exception:
+            dctx = None
+
+        ctx = {}
+        if fctx:
+            ctx["file"] = {
+                "display_name": fctx.display_name,
+                "file_type": fctx.file_type,
+                "structure": fctx.structure,
+                "ai_title": fctx.ai_title,
+                "ai_category": fctx.ai_category,
+                "ai_description": (fctx.ai_description or "")[:350],
+            }
+        if dctx:
+            ctx["dataset"] = {
+                "name": dctx.name,
+                "description": (dctx.description or "")[:500]
+            }
+
+        # Build resources index (files/dbs) and recent thread history
+        resources = {"files": [], "databases": []}
+        history = []
+        try:
+            ids = branch_filter_ids(db2, project_id, branch.id)
+            recs = db2.query(FileEntry).filter(FileEntry.project_id==project_id, FileEntry.branch_id.in_(ids)).order_by(FileEntry.created_at.desc()).limit(200).all()
+            for f in recs:
+                resources["files"].append({
+                    "id": f.id,
+                    "title": (f.ai_title or f.display_name or "").strip(),
+                    "display_name": f.display_name,
+                    "structure": f.structure,
+                    "file_type": f.file_type,
+                    "mime_type": f.mime_type,
+                    "size_bytes": f.size_bytes,
+                })
+            dsets = db2.query(Dataset).filter(Dataset.project_id==project_id, Dataset.branch_id.in_(ids)).order_by(Dataset.created_at.desc()).limit(200).all()
+            for d in dsets:
+                resources["databases"].append({
+                    "id": d.id,
+                    "name": d.name,
+                    "description": (d.description or "")[:500],
+                })
+        except Exception:
+            pass
+        try:
+            recent = db2.query(ThreadMessage).filter(ThreadMessage.project_id==project_id, ThreadMessage.thread_id==thr.id).order_by(ThreadMessage.created_at.desc()).limit(15).all()
+            for m in reversed(recent):
+                history.append({
+                    "role": m.role,
+                    "title": (m.display_title or None),
+                    "content": (m.content or "")[:2000]
+                })
+        except Exception:
+            pass
+
+        # Gather Notes and Changelog (recent)
+        notes = []
+        try:
+            recent_notes = db2.query(Note).filter(Note.project_id==project_id, Note.branch_id==branch.id).order_by(Note.created_at.desc()).limit(50).all()
+            for n in reversed(recent_notes):
+                notes.append({"id": n.id, "tags": (n.tags or []), "content": (n.content or "")[:1000], "created_at": n.created_at.isoformat() if getattr(n, 'created_at', None) else None})
+        except Exception:
+            notes = []
+        changelog = []
+        try:
+            with RegistrySessionLocal() as reg:
+                ents = reg.query(ChangelogEntry).filter(ChangelogEntry.project_id==project_id, ChangelogEntry.branch_id==branch.id).order_by(ChangelogEntry.created_at.desc()).limit(50).all()
+                for ce in reversed(ents):
+                    try:
+                        when = ce.created_at.isoformat() if getattr(ce, 'created_at', None) else None
+                    except Exception:
+                        when = None
+                    changelog.append({"when": when, "action": ce.action, "summary": (ce.summary_text or "")[:500]})
+        except Exception:
+            changelog = []
+
+        # Research tool system prompt and examples
+        # When chat_mode == single-shot, we override this with a simpler directive that returns plain text, not JSON.
+        sys_prompt = """
+You are an orchestrator that ALWAYS uses the LLM on each user prompt.
+
+FIRST TURN POLICY: Your FIRST response MUST be a {"function":"plan"} object — no exceptions. Do NOT return 'final' or a standalone 'question' on the first turn. If clarification is needed, include a 'question' step as step 1 in the plan.
+
+Plan requirements (STRICT JSON):
+- The plan is an executable list of function steps (web, download, extract, image, db, code, notes, compose, question, final).
+- The LLM may rewrite or refine the plan at any time based on tool results (adaptive planning).
+- Schema for plan/steps:
+  - function: 'plan' | 'web' | 'download' | 'extract' | 'image' | 'db' | 'code' | 'notes' | 'compose' | 'question' | 'final'
+  - title, description, goal_outcome
+  - status: 'in queue' | 'currently running' | 'done' | 'failed'
+  - state: 'new plan' | 'diff change'
+  - steps (for function=='plan'): non-empty array of step objects with the SAME fields above plus an 'args' object appropriate for that step's function.
+  - output_to_user, changelog_summary.
+
+Execution rules:
+- We will execute steps in-order. For each step, you must return EXACTLY ONE function call with a fully-specified 'args'.
+- When a step completes, set its status to 'done'. If a step needs more work, set status 'currently running' (or 'in process') and we will re-issue that step with the updated thread context. If the step fails, set 'failed' and either repair or rewrite the plan.
+- Strongly prefer using 'web'+'download'+'extract' to gather sources, 'db' for queries/aggregation, and 'code' for local processing when it improves quality or precision. Do not fabricate results—ground answers via these functions when relevant.
+
+PLANNING POLICY (strict):
+- After the FIRST plan is accepted, do NOT emit a new 'plan' unless following the CURRENT plan would likely fail given the latest tool results/context.
+- If the current plan is still valid, return ONE function call for the next step (not a new plan).
+- If you conclude the plan would fail, you may return a single {"function":"plan"} with the revised steps; otherwise return the next function.
+
+Response formatting:
+- Respond with STRICT JSON only (no prose), one function object per turn.
+- For 'code', include: language, packages (list), and source. For 'db', include: sql.
+- When the user asks to write code, include a 'code' step (with language, packages, source) before 'final'.
+- Always end the session with a single {"function":"final"} that includes args.text (answer), args.title (3–6 words), and args.run_summary (bulleted summary of actions and outcomes).
+        """
+
+        # If a file is focused, add upload policy notes so the plan avoids re-ingestion
+        try:
+            if ctx and isinstance(ctx, dict) and ctx.get('file') is not None:
+                sys_prompt = sys_prompt + "\n\nUPLOAD POLICY (strict):\n" + \
+                    "- The file has already been saved, classified (structure + ai_*), and (if tabular) may already be imported. Do NOT repeat ingestion steps.\n" + \
+                    "- If cleanup is needed for tabular data (e.g., header rows, wrong delimiter), propose a single 'tabular_import' tool call with explicit options (header_skip, delimiter, quotechar, encoding, date_formats, rename). The re-import should replace the existing table.\n" + \
+                    "- Otherwise, prefer 'db' queries (schema overview, COUNT/AVG/etc.) against the per-file table.\n" + \
+                    "- For non-tabular files, prefer retrieval/summarization over LangExtract chunks; avoid tabular steps.\n"
+        except Exception:
+            pass
+
+        examples_json = {
+            "plan": {
+                "function": "plan",
+                "title": "Analyze Files and Summarize",
+                "description": "Gather relevant files, extract key findings, compute simple stats, and write a short summary.",
+                "goal_outcome": "A concise answer with references to analyzed files",
+                "status": "in queue",
+                "state": "new plan",
+                "steps": [
+                    {
+                        "function": "web",
+                        "title": "Search recent survey",
+                        "description": "Find a relevant survey article to provide context",
+                        "goal_outcome": "One authoritative survey URL",
+                        "status": "in queue",
+                        "state": "new plan",
+                        "args": {"query": "site:nature.com CRISPR review 2024"}
+                    },
+                    {
+                        "function": "download",
+                        "title": "Download article",
+                        "description": "Download the selected article for analysis",
+                        "goal_outcome": "PDF saved to project files",
+                        "status": "in queue",
+                        "state": "new plan",
+                        "args": {"urls": ["https://example.org/paper.pdf"]}
+                    },
+                    {
+                        "function": "extract",
+                        "title": "Extract claims/citations",
+                        "description": "Extract key claims and references",
+                        "goal_outcome": "Structured list of claims and citations",
+                        "status": "in queue",
+                        "state": "new plan",
+                        "args": {"file_id": 123}
+                    },
+                    {
+                        "function": "final",
+                        "title": "Write the answer",
+                        "description": "Produce the final answer",
+                        "goal_outcome": "Clear, concise answer",
+                        "status": "in queue",
+                        "state": "new plan",
+                        "args": {"text": "<answer>", "title": "<3-6 words>"}
+                    }
+                ],
+                "output_to_user": "High-level plan with steps and intended tools",
+                "changelog_summary": "created plan"
+            },
+            "web": {"function": "web", "args": {"query": "site:nature.com CRISPR review 2024"}, "output_to_user": "Searched web", "changelog_summary": "web search"},
+            "download": {"function": "download", "args": {"urls": ["https://example.org/paper.pdf"]}, "output_to_user": "Queued 1 download", "changelog_summary": "download requested"},
+            "extract": {"function": "extract", "args": {"file_id": 123}, "output_to_user": "Extracted claims/citations", "changelog_summary": "extracted PDF"},
+            "image": {"function": "image", "args": {"image_id": 42, "purpose": "chart reading"}, "output_to_user": "Analyzed image", "changelog_summary": "image analysis"},
+            "db": {"function": "db", "args": {"sql": "SELECT COUNT(*) FROM claims"}, "output_to_user": "Ran SQL", "changelog_summary": "db query"},
+            "code": {"function": "code", "args": {"language": "python", "packages": ["pandas"], "source": "print(2+2)"}, "output_to_user": "Executed code", "changelog_summary": "code run"},
+            "shell": {"function": "shell", "args": {"script": "echo hello"}, "output_to_user": "Ran shell", "changelog_summary": "shell run"},
+            "notes": {"function": "notes", "args": {"themes": [{"name": "Risks", "notes": ["…"]}]}, "output_to_user": "Saved notes", "changelog_summary": "notes saved"},
+            "compose": {"function": "compose", "args": {"sections": [{"title": "Intro", "text": "…"}]}, "output_to_user": "Drafted section(s)", "changelog_summary": "compose partial"},
+            "tabular_import": {"function": "tabular_import", "args": {"file_id": 123, "options": {"header_skip": 1, "delimiter": ","}}, "output_to_user": "Re-imported tabular data", "changelog_summary": "tabular re-import"},
+            "question": {"function": "question", "args": {"text": "Which domain do you care about?"}, "output_to_user": "Need clarification", "changelog_summary": "asked user"},
+            "final": {"function": "final", "args": {"text": "2+2=4", "title": "Simple Arithmetic", "run_summary": ["Trivial query detected; skipped planning.", "No tools executed.", "No files created; no DB changes."]}, "output_to_user": "2+2=4", "changelog_summary": "finalized answer"}
+        }
+
+        # Allow replay mode: if the payload provides a full messages array, use it instead of building
+        replay_messages = None
+        try:
+            if isinstance(payload, dict) and payload.get('replay_messages'):
+                replay_messages = payload.get('replay_messages')
+        except Exception:
+            replay_messages = None
+
+        # Build LLM messages (orchestrated mode)
+        if replay_messages:
+            messages = replay_messages
+        else:
+            messages = [
+                {"role": "system", "content": sys_prompt},
+                {"role": "user",   "content": "Resources (files, databases):"},
+                {"role": "user",   "content": json.dumps(resources, ensure_ascii=False)},
+                {"role": "user",   "content": "History (recent thread messages):"},
+                {"role": "user",   "content": json.dumps(history, ensure_ascii=False)},
+                {"role": "user",   "content": "Notes (recent):"},
+                {"role": "user",   "content": json.dumps(notes, ensure_ascii=False)},
+                {"role": "user",   "content": "Changelog (recent):"},
+                {"role": "user",   "content": json.dumps(changelog, ensure_ascii=False)}
+            ]
+            if ctx:
+                try:
+                    messages.append({"role": "user", "content": "Context (focused file/DB):"})
+                    messages.append({"role": "user", "content": json.dumps(ctx, ensure_ascii=False)})
+                except Exception:
+                    pass
+            # Include plan state so the model can judge whether replanning is necessary
+            try:
+                messages.append({"role": "user", "content": "Plan state (JSON):"})
+                messages.append({"role": "user", "content": json.dumps({"steps": plan_ctx.get("steps") or [], "ptr": plan_ctx.get("ptr")}, ensure_ascii=False)})
+                messages.append({"role": "user", "content": "Plan policy (strict): Do NOT emit a new 'plan' unless following the current plan would likely fail. If plan remains valid, return ONE function call for the next step."})
+            except Exception:
+                pass
+            messages.append({"role": "user", "content": "Functions and examples:"})
+            try:
+                messages.append({"role": "user", "content": json.dumps(examples_json, ensure_ascii=False)})
+            except Exception:
+                messages.append({"role": "user", "content": "{\"error\":\"examples unavailable\"}"})
+            messages.append({"role": "user", "content": content})
+        # Emit the prepared prompt so the UI can show an "assistant prompt" bubble with full JSON
+        try:
+            _enqueue({"type": "prompt", "messages": messages, "thread_id": thr.id}, require_ack=True)
+        except Exception:
+            pass
+        # Persist the prepared prompt for replay across app restarts
+        try:
+            dbpmsg = SessionLocal()
+            dbpmsg.add(ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="assistant", display_title="Assistant", content="Prepared LLM prompt", payload_json=messages))
+            dbpmsg.commit()
+        except Exception:
+            try: dbpmsg.rollback()
+            except Exception: pass
+        finally:
+            try: dbpmsg.close()
+            except Exception: pass
+    except Exception as e:
+        import traceback as _tb
+        try:
+            print(f"[ws-chat-build-error] {type(e).__name__}: {e}\n" + "".join(_tb.format_exception(type(e), e, e.__traceback__))[-1500:])
+        except Exception:
+            pass
+        try:
+            _enqueue({"type": "error", "error": f"{type(e).__name__}: {e}"})
+        except Exception:
+            pass
+        try:
+            await event_q.put(None)
+            await sender_task
+        except Exception:
+            pass
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+        return
+    finally:
+        try:
+            db2.close()
+        except Exception:
+            pass
+
+    # Optional: emit debug prompt for testing
+    try:
+        if bool(payload.get('debug')):
+            _enqueue({"type": "debug", "prompt": messages})
+            try:
+                print("[ws-chat] debug-sent")
+            except Exception:
+                pass
+    except Exception as e:
+        try:
+            print(f"[ws-chat-debug-error] {type(e).__name__}: {e}")
+        except Exception:
+            pass
+
+    # Orchestrated plan/execute loop (non-streaming JSON)
+    # (planning event already sent early for responsiveness)
+
+    import urllib.request as _req
+    import re as _re
+
+    def _send_info(label: str):
+        try:
+            _enqueue({"type": "info", "stage": label})
+        except Exception:
+            pass
+        return None
+
+    # Tool executors
+    def tool_web(args: dict) -> dict:
+        url = str((args or {}).get("url") or "")
+        q = str((args or {}).get("query") or "")
+        return ct.tool_web(url=url, query=q)
+
+    def tool_download(args: dict) -> dict:
+        urls = (args or {}).get("urls") or []
+        if not isinstance(urls, list) or not urls:
+            return {"ok": False, "error": "urls required"}
+        return ct.tool_download(
+            project_id=project_id,
+            branch_id=branch_id_int,
+            branch_name=branch_name_str,
+            urls=urls,
+            project_dirs=_project_dirs,
+            SessionLocal=SessionLocal,
+            FileEntry=FileEntry,
+            file_extension_to_type=file_extension_to_type,
+        )
+
+    def tool_extract(args: dict) -> dict:
+        fid = (args or {}).get("file_id")
+        if fid is None:
+            return {"ok": False, "error": "file_id required"}
+        return ct.tool_extract(project_id=project_id, file_id=int(fid), SessionLocal=SessionLocal, FileEntry=FileEntry)
+
+    def tool_image(args: dict) -> dict:
+        try:
+            image_id = int((args or {}).get("image_id"))
+        except Exception:
+            return {"ok": False, "error": "image_id required"}
+        purpose = str((args or {}).get("purpose") or "")
+        return ct.tool_image(image_id=image_id, purpose=purpose, exec_img=_exec_img)
+
+    def tool_db(args: dict) -> dict:
+        sql_text = str((args or {}).get("sql") or "")
+        return ct.tool_db(project_id=project_id, sql_text=sql_text, execute_sql=_execute_sql)
+
+    def tool_code(args: dict) -> dict:
+        lang = str((args or {}).get("language") or "").lower()
+        source = str((args or {}).get("source") or "")
+        def _q(sql_text: str):
+            try:
+                return _execute_sql(sql_text, project_id, max_rows=200)
+            except Exception as e:
+                return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        return ct.tool_code(
+            language=lang or 'python',
+            source=source,
+            project_id=project_id,
+            branch_id=int(getattr(branch, 'id', 0) or 0),
+            SessionLocal=SessionLocal,
+            FileEntry=FileEntry,
+            branch_filter_ids=branch_filter_ids,
+            query_sql=_q,
+        )
+
+    def tool_shell(args: dict) -> dict:
+        script = str((args or {}).get("script") or "")
+        return ct.tool_shell(script=script)
+
+    def tool_notes(args: dict) -> dict:
+        themes = (args or {}).get("themes")
+        return ct.tool_notes(project_id=project_id, branch_id=branch.id, themes=themes, SessionLocal=SessionLocal, Note=Note)
+
+    def tool_compose(args: dict) -> dict:
+        secs = (args or {}).get("sections") or []
+        return ct.tool_compose(project_id=project_id, branch_id=branch.id, sections=secs, SessionLocal=SessionLocal, Note=Note)
+
+    def tool_tabular_import(args: dict) -> dict:
+        try:
+            fid = int((args or {}).get("file_id"))
+        except Exception:
+            return {"ok": False, "error": "file_id required"}
+        options = (args or {}).get("options") if isinstance(args, dict) else None
+        return ct.tool_tabular_import(
+            project_id=project_id,
+            branch_id=branch.id,
+            file_id=fid,
+            options=options if isinstance(options, dict) else None,
+            SessionLocal=SessionLocal,
+            FileEntry=FileEntry,
+            tabular_import_via_llm=_tabular_import_via_llm,
+        )
+
+    # Decide if a plan step has enough args to execute directly without re-asking the LLM
+    def _args_complete_for(fn: str, args: dict) -> bool:
+        try:
+            fn = (fn or '').strip().lower()
+        except Exception:
+            fn = ''
+        if not isinstance(args, dict):
+            return False
+        if fn == 'code':
+            return bool(str(args.get('language') or '').strip() and str(args.get('source') or '').strip())
+        if fn == 'db':
+            return bool(str(args.get('sql') or '').strip())
+        if fn == 'download':
+            return isinstance(args.get('urls'), list) and len(args.get('urls')) > 0
+        if fn == 'extract':
+            try:
+                int(args.get('file_id'))
+                return True
+            except Exception:
+                return False
+        if fn == 'image':
+            try:
+                int(args.get('image_id'))
+                return True
+            except Exception:
+                return False
+        if fn == 'tabular_import':
+            try:
+                int(args.get('file_id'))
+                return True
+            except Exception:
+                return False
+        if fn in {'notes','compose','shell','web'}:
+            # These are generally safe to send back to LLM for one-call confirmation; treat as incomplete here
+            return False
+        if fn == 'final':
+            return bool(str((args or {}).get('text') or '').strip())
+        return False
+
+    tools_map = {
+        "web": tool_web,
+        "download": tool_download,
+        "extract": tool_extract,
+        "image": tool_image,
+        "db": tool_db,
+        "code": tool_code,
+        "shell": tool_shell,
+        "notes": tool_notes,
+        "compose": tool_compose,
+        "tabular_import": tool_tabular_import,
+        "question": lambda args: {"ok": True, "question": (args or {}).get("text") or "Please clarify"},
+        "final": lambda args: {"ok": True, "text": (args or {}).get("text") or "Done."},
+    }
+
+    loop_count = 0
+    final_text = None
+    question_text = None
+    session_title: Optional[str] = None
+    final_call_obj: Optional[Dict[str, Any]] = None
+    # In-session plan tracking (steps, pointer)
+    plan_ctx: Dict[str, Any] = {"steps": [], "ptr": None}
+    plan_seen = False
+    forced_submit_once = False
+
+    # Overall budget: ensure we eventually time out and inform the client
+    import time as _time
+    try:
+        timeout_s = int(os.getenv("CEDARPY_CHAT_TIMEOUT_SECONDS", "300"))
+    except Exception:
+        timeout_s = 300
+    # Cap LLM turns to reduce latency flaps; configurable for complex sessions
+    try:
+        max_turns = int(os.getenv("CEDARPY_MAX_TURNS", "3"))
+    except Exception:
+        max_turns = 3
+    t0 = _time.time()
+    timed_out = False
+
+    # Always use the LLM. Optionally use a smaller/faster model for the first decision (plan vs final).
+    fast_model = os.getenv("CEDARPY_FAST_MODEL", "gpt-5-mini")
+    # Default: use fast model for all WS turns unless explicitly disabled
+    try:
+        # Default OFF: only the first user-submitted turn uses the fast model; subsequent turns use the main model
+        use_fast_all = str(os.getenv("CEDARPY_WS_USE_FAST", "0")).strip().lower() not in {"", "0", "false", "no", "off"}
+    except Exception:
+        use_fast_all = False
+
+    try:
+        while (not final_text) and (not question_text) and (loop_count < max_turns):
+            # Timeout guard (pre-turn)
+            try:
+                if (_time.time() - t0) > timeout_s:
+                    try:
+                        _enqueue({"type": "info", "stage": "timeout"})
+                    except Exception:
+                        pass
+                    # Provide a final assistant-style message so UI/test can click the Assistant bubble even on timeout
+                    try:
+                        elapsed = _time.time() - t0
+                        final_text_local = f"[timeout] Took too long. Exceeded {timeout_s}s budget; elapsed {elapsed:.1f}s. Please try again."
+                        # Set variables used later to emit a 'final' bubble
+                        final_text = final_text_local
+                        final_call_obj = {"function": "final", "args": {"text": final_text_local, "title": "Assistant", "run_summary": [f"Exceeded {timeout_s}s budget", f"Elapsed {elapsed:.1f}s", "Stopped orchestration."]}}
+                    except Exception:
+                        pass
+                    timed_out = True
+                    break
+            except Exception:
+                pass
+            loop_count += 1
+            # Optional "thinking" phase (planner) before strict JSON tool call
+            try:
+                # Default: ON. The planner streams thinking before and after every LLM call unless explicitly disabled.
+                use_thinking = str(os.getenv("CEDARPY_WS_THINKING", "1")).strip().lower() not in {"", "0", "false", "no", "off"}
+            except Exception:
+                use_thinking = True
+            if use_thinking:
+                try:
+                    thinking_model = os.getenv("CEDARPY_THINKING_MODEL", os.getenv("CEDARPY_FAST_MODEL", "gpt-5-mini"))
+                    # Planner instructions and glossary
+                    think_sys = (
+                        "You are Cedar's planner. In 2-5 short sentences, think out loud about the best tool steps to answer the user's request. "
+                        "Available tools: web (fetch), download (save files), extract (read/parse files), image (inline data URL), db (SQL over per-project DB), code (Python with cedar helpers), notes, compose, shell, tabular_import. "
+                        "Prefer code/db or downloads over answering from memory when computation/verifications are trivial. Output plain text only (no JSON)."
+                    )
+                    # Summarize current step
+                    try:
+                        step_hint = None
+                        if isinstance(plan_ctx.get('ptr'), int) and plan_ctx.get('steps'):
+                            idxh = int(plan_ctx['ptr'])
+                            if 0 <= idxh < len(plan_ctx['steps']):
+                                step_hint = plan_ctx['steps'][idxh].get('function')
+                    except Exception:
+                        step_hint = None
+                    # Build functions glossary (name -> description)
+                    planner_functions = [
+                        {"name": "web", "desc": "Fetch HTML from a URL (no file saved)."},
+                        {"name": "download", "desc": "Download URL(s) to project files; returns file_id(s)."},
+                        {"name": "extract", "desc": "Extract/parse a saved file by file_id; returns text/claims."},
+                        {"name": "image", "desc": "Return inline data URL for an uploaded image by file_id."},
+                        {"name": "db", "desc": "Run SQLite SQL over per-project database (tables from imports)."},
+                        {"name": "code", "desc": "Run Python with cedar helpers (cedar.query, cedar.list_files, cedar.read)."},
+                        {"name": "notes", "desc": "Save structured notes (themes)."},
+                        {"name": "compose", "desc": "Draft sections of text for output."},
+                        {"name": "shell", "desc": "Run a local shell command; for trusted local usage only."},
+                        {"name": "tabular_import", "desc": "LLM codegen to import CSV/NDJSON into SQLite (per-project)."}
+                    ]
+                    # Planner context: files/dbs/notes/changelog/history
+                    import json as _json_pl
+                    planner_context = {
+                        "functions": planner_functions,
+                        "resources": resources,
+                        "notes": notes,
+                        "changelog": changelog,
+                        "history": history,
+                        "plan_state": {"steps": plan_ctx.get("steps") or [], "ptr": plan_ctx.get("ptr")}
+                    }
+                    # Build planner message array with context and examples
+                    think_messages = [
+                        {"role": "system", "content": think_sys},
+                        {"role": "user", "content": "User request:"},
+                        {"role": "user", "content": content},
+                        {"role": "user", "content": "Planner context (JSON):"},
+                        {"role": "user", "content": _json_pl.dumps(planner_context, ensure_ascii=False)},
+                    ]
+                    try:
+                        think_messages.append({"role": "user", "content": "Functions and examples:"})
+                        think_messages.append({"role": "user", "content": _json_pl.dumps(examples_json, ensure_ascii=False)})
+                    except Exception:
+                        pass
+                    # Stream thinking token-by-token to the client; fall back to non-streaming on error
+                    t_th0 = _time.time()
+                    thinking_text = ""
+                    try:
+                        try:
+                            _enqueue({"type": "thinking_start", "model": thinking_model, "thread_id": thr.id}, require_ack=True)
+                        except Exception:
+                            pass
+                        stream_th = client.chat.completions.create(
+                            model=thinking_model,
+                            messages=think_messages,
+                            stream=True,
+                        )
+                        for chunk in stream_th:
+                            try:
+                                delta = getattr(chunk.choices[0].delta, 'content', None)  # type: ignore[attr-defined]
+                            except Exception:
+                                delta = None
+                            if delta:
+                                thinking_text += delta
+                                try:
+                                    _enqueue({"type": "thinking_token", "delta": delta})
+                                except Exception:
+                                    pass
+                    except Exception:
+                        # Non-streaming fallback
+                        resp_th = client.chat.completions.create(model=thinking_model, messages=think_messages)
+                        thinking_text = (resp_th.choices[0].message.content or "").strip()
+                    t_th1 = _time.time()
+                    _enqueue({"type": "thinking", "text": thinking_text, "elapsed_ms": int((t_th1 - t_th0)*1000), "model": thinking_model, "thread_id": thr.id}, require_ack=True)
+                    # Pass thinking + context into the strict-JSON call
+                    messages.append({"role": "user", "content": "Thinking (planner):"})
+                    messages.append({"role": "user", "content": thinking_text})
+                    try:
+                        messages.append({"role": "user", "content": "Planner context used (JSON):"})
+                        messages.append({"role": "user", "content": _json_pl.dumps(planner_context, ensure_ascii=False)})
+                    except Exception:
+                        pass
+                except Exception as _e_th:
+                    try:
+                        _enqueue({"type": "thinking", "text": f"(thinking failed: {type(_e_th).__name__})"})
+                    except Exception:
+                        pass
+            # Call LLM for next action (strict JSON)
+            try:
+                try:
+                    print("[ws-chat] llm-call")
+                except Exception:
+                    pass
+                # Use a faster model (gpt-5-mini by default). If not using fast for all, use fast for the first turn only.
+                if use_fast_all and fast_model:
+                    use_model = fast_model
+                else:
+                    # Fix: loop_count is incremented pre-call; first turn === 1
+                    use_model = (fast_model or model) if (loop_count == 1 and fast_model) else model
+                try:
+                    print(f"[ws-chat] using-model={use_model}")
+                except Exception:
+                    pass
+                t_llm0 = _time.time()
+                resp = client.chat.completions.create(model=use_model, messages=messages)
+                raw = (resp.choices[0].message.content or "").strip()
+                t_llm1 = _time.time()
+                try:
+                    _enqueue({"type": "info", "stage": "llm_call", "model": use_model, "elapsed_ms": int((t_llm1 - t_llm0)*1000)})
+                except Exception:
+                    pass
+                # Post-LLM thinking (reflection): run after every LLM decision and feed back into the next messages
+                if use_thinking:
+                    try:
+                        import json as _json_post
+                        think_sys_post = (
+                            "You are Cedar's planner (post-decision reflection). In 1-4 short sentences, verify the chosen function aligns with the current plan and the planning policy. "
+                            "If the current plan is still valid, do NOT propose a new plan. Only suggest replanning if following the current plan would likely fail. Output plain text."
+                        )
+                        planner_context_post = {
+                            "plan_state": {"steps": plan_ctx.get("steps") or [], "ptr": plan_ctx.get("ptr")},
+                            "policy": "Do NOT emit a new 'plan' unless following the current plan would likely fail.",
+                        }
+                        think_messages_post = [
+                            {"role": "system", "content": think_sys_post},
+                            {"role": "user", "content": "User request:"},
+                            {"role": "user", "content": content},
+                            {"role": "user", "content": "Plan state (JSON):"},
+                            {"role": "user", "content": _json_post.dumps(planner_context_post, ensure_ascii=False)},
+                            {"role": "user", "content": "Chosen call (raw JSON):"},
+                            {"role": "user", "content": raw},
+                        ]
+                        t_pth0 = _time.time()
+                        thinking_post = ""
+                        try:
+                            _enqueue({"type": "thinking_start", "model": thinking_model, "phase": "post", "thread_id": thr.id}, require_ack=True)
+                            stream_th2 = client.chat.completions.create(model=thinking_model, messages=think_messages_post, stream=True)
+                            for chunk2 in stream_th2:
+                                try:
+                                    delta2 = getattr(chunk2.choices[0].delta, 'content', None)
+                                except Exception:
+                                    delta2 = None
+                                if delta2:
+                                    thinking_post += delta2
+                                    try:
+                                        _enqueue({"type": "thinking_token", "delta": delta2, "phase": "post"})
+                                    except Exception:
+                                        pass
+                        except Exception:
+                            resp_th2 = client.chat.completions.create(model=thinking_model, messages=think_messages_post)
+                            thinking_post = (resp_th2.choices[0].message.content or "").strip()
+                        t_pth1 = _time.time()
+                        _enqueue({"type": "thinking", "text": thinking_post, "elapsed_ms": int((t_pth1 - t_pth0)*1000), "model": thinking_model, "phase": "post", "thread_id": thr.id}, require_ack=True)
+                        messages.append({"role": "user", "content": "Post-LLM reflection:"})
+                        messages.append({"role": "user", "content": thinking_post})
+                        # Reinforce plan policy explicitly on the next turn
+                        messages.append({"role": "user", "content": "Plan policy (strict): Do NOT emit a new 'plan' unless following the current plan would likely fail."})
+                    except Exception:
+                        pass
+            except Exception as e:
+                try:
+                    print(f"[ws-chat-llm-error] {type(e).__name__}: {e}")
+                except Exception:
+                    pass
+                _enqueue({"type": "error", "error": f"{type(e).__name__}: {e}"})
+                try:
+                    await event_q.put(None)
+                    await sender_task
+                except Exception:
+                    pass
+                try:
+                    await websocket.close()
+                except Exception:
+                    pass
+                return
+
+            # Persist assistant JSON response for traceability
+            dbj = SessionLocal()
+            try:
+                dbj.add(ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="assistant", content=raw, display_title="Research JSON"))
+                dbj.commit()
+            except Exception:
+                try: dbj.rollback()
+                except Exception: pass
+            finally:
+                try: dbj.close()
+                except Exception: pass
+
+            # Parse function call(s)
+            calls: List[Dict[str, Any]] = []
+            obj = None
+            try:
+                obj = json.loads(raw)
+            except Exception:
+                obj = None
+            # Update thread title from Thread_title on the first turn when available
+            try:
+                if (loop_count == 1) and isinstance(obj, dict):
+                    _tt = str(obj.get('Thread_title') or '').strip()
+                    if _tt:
+                        dbt1 = SessionLocal()
+                        try:
+                            thr_db = dbt1.query(Thread).filter(Thread.id == thr.id, Thread.project_id == project_id).first()
+                            if thr_db:
+                                thr_db.title = _tt[:100]
+                                dbt1.commit()
+                        except Exception:
+                            try: dbt1.rollback()
+                            except Exception: pass
+                        finally:
+                            try: dbt1.close()
+                            except Exception: pass
+            except Exception:
+                pass
+            if isinstance(obj, list):
+                calls = [c for c in obj if isinstance(c, dict)]
+            elif isinstance(obj, dict):
+                if 'function' in obj:
+                    calls = [obj]
+                elif 'steps' in obj:
+                    calls = [{"function": "plan", "steps": obj.get('steps') or []}]
+            else:
+                # Not parseable; ask for one function call
+                messages.append({"role": "user", "content": "Please respond with ONE function call in strict JSON."})
+                continue
+
+            # Initialize defaults so downstream references are always bound
+            name = None
+            args = {}
+            call_obj = {}
+            plan_handled = False
+            for call in calls:
+                name = str((call.get('function') or '')).strip().lower()
+                args = call.get('args') or {}
+                call_obj = call
+                # Enforce plan-first on first turn (no exceptions)
+                if (loop_count == 1) and (name != 'plan'):
+                    try:
+                        _send_info('plan-enforce')
+                    except Exception:
+                        pass
+                    messages.append({"role": "user", "content": "FIRST TURN POLICY: Respond NOW with exactly one JSON object: {\"function\":\"plan\", ...}. Do NOT return final/question directly. Use the required schema (title, description, goal_outcome, status, state, steps[]. Each step: function, title, description, goal_outcome, status, state, args). STRICT JSON only."})
+                    name = None; args = {}; call_obj = {}
+                    continue
+                # Guardrail: once we have a plan, do NOT accept a new plan unless current plan would likely fail
+                if plan_seen and name == 'plan':
+                    try:
+                        _send_info('plan-reject')
+                    except Exception:
+                        pass
+                    try:
+                        cur_idx = 0
+                        try:
+                            cur_idx = int(plan_ctx.get('ptr') or 0)
+                        except Exception:
+                            cur_idx = 0
+                        # Choose a template for the next expected step; fallback to final
+                        tmpl = {"function": "final", "args": {"text": ""}}
+                        try:
+                            next_fn = None
+                            if isinstance(plan_ctx.get('steps'), list) and len(plan_ctx['steps'])>cur_idx:
+                                next_fn = str(plan_ctx['steps'][cur_idx].get('function') or '').strip().lower()
+                            if next_fn and isinstance(examples_json, dict) and examples_json.get(next_fn):
+                                e = examples_json.get(next_fn)
+                                tmpl = {"function": e.get('function') or next_fn, "args": (e.get('args') or {})}
+                        except Exception:
+                            pass
+                        messages.append({"role": "user", "content": "Plan remains in effect. Respond NOW with ONE function call ONLY (STRICT JSON) matching this template:"})
+                        messages.append({"role": "user", "content": json.dumps(tmpl, ensure_ascii=False)})
+                        messages.append({"role": "user", "content": "Do NOT emit a new 'plan' unless following the current plan would likely fail."})
+                    except Exception:
+                        pass
+                    name = None; args = {}; call_obj = {}
+                    continue
+                if name == 'plan':
+                    _send_info('plan')
+                    # Enforce a non-empty steps array; if missing, immediately ask again for a proper plan
+                    try:
+                        steps = call.get('steps') if isinstance(call, dict) else None
+                    except Exception:
+                        steps = None
+                    if not steps or not isinstance(steps, list) or len(steps) == 0:
+                        messages.append({"role": "user", "content": "Your plan MUST include a non-empty steps array. Respond NOW with exactly one JSON object: {\"function\":\"plan\", ... , \"steps\":[...]} and NO commentary."})
+                        name = None; args = {}; call_obj = {}
+                        continue
+                    # Persist plan
+                    dbp = SessionLocal()
+                    try:
+                        dbp.add(ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="assistant", display_title="Plan", content=json.dumps(call, ensure_ascii=False), payload_json=call))
+                        dbp.commit()
+                        try:
+                            record_changelog(dbp, project_id, branch.id, "chat.plan", {"call": call}, {"plan": call, "run_summary": call.get("changelog_summary")})
+                        except Exception:
+                            pass
+                        try:
+                            _enqueue({"type": "action", "function": "plan", "text": "Plan created", "call": call, "thread_id": thr.id}, require_ack=True)
+                        except Exception:
+                            pass
+                    except Exception:
+                        try: dbp.rollback()
+                        except Exception: pass
+                    finally:
+                        try: dbp.close()
+                        except Exception: pass
+
+                    plan_seen = True
+
+                    # Update in-session plan state and set first step to running
+                    try:
+                        # Normalize steps: add step_id and clear timing
+                        norm_steps = []
+                        for i, st in enumerate(steps, start=1):
+                            try:
+                                st = dict(st)
+                                st['step_id'] = i
+                                st.pop('started_at', None)
+                                st.pop('finished_at', None)
+                                if not st.get('status'):
+                                    st['status'] = 'in queue'
+                                try:
+                                    s = str(st.get('status') or '').strip().lower()
+                                    if s in {'in process','processing','running'}:
+                                        st['status'] = 'currently running'
+                                except Exception:
+                                    pass
+                            except Exception:
+                                pass
+                            norm_steps.append(st)
+                        plan_ctx["steps"] = norm_steps
+                        plan_ctx["ptr"] = 0
+                        if plan_ctx["steps"]:
+                            try:
+                                plan_ctx["steps"][0]["status"] = "currently running"
+                                plan_ctx["steps"][0]["started_at"] = datetime.utcnow().isoformat()+"Z"
+                            except Exception:
+                                pass
+                        _enqueue({
+                            "type": "action",
+                            "function": "plan_update",
+                            "text": "Plan started",
+                            "call": {"steps": plan_ctx["steps"]},
+                            "thread_id": thr.id,
+                        }, require_ack=True)
+                    except Exception:
+                        pass
+
+                    # Execute step 1 immediately if args are complete; otherwise nudge LLM once
+                    try:
+                        step = (plan_ctx["steps"] or [])[0] if plan_ctx.get("ptr") == 0 else None
+                        if step:
+                            fn = str(step.get("function") or "").strip().lower()
+                            args0 = step.get("args") or {}
+                            tmpl = (examples_json.get(fn) if isinstance(examples_json, dict) else None) or {"function": fn, "args": {}}
+                            # Emit a submit_step event for UX regardless
+                            try:
+                                _enqueue({
+                                    "type": "action",
+                                    "function": "submit_step",
+                                    "text": f"Submitting Step 1: {step.get('title') or fn}",
+                                    "call": {"step": step, "template": {"function": tmpl.get("function"), "args": tmpl.get("args") or {}}},
+                                    "thread_id": thr.id,
+                                }, require_ack=True)
+                            except Exception:
+                                pass
+                            if _args_complete_for(fn, args0) and (fn in tools_map):
+                                # Run this step now in the current turn (no extra LLM roundtrip)
+                                name = fn
+                                args = args0
+                                call_obj = {"function": fn, "args": args0, "output_to_user": str(step.get('output_to_user') or '')}
+                                # Do NOT mark plan_handled; allow execution path below
+                            else:
+                                # Incomplete: ask the LLM to return the one function call now
+                                messages.append({"role": "user", "content": "Execute plan step 1 NOW. Respond with ONE function call ONLY matching this template (STRICT JSON):"})
+                                messages.append({"role": "user", "content": json.dumps({"function": tmpl.get("function"), "args": tmpl.get("args") or {}}, ensure_ascii=False)})
+                                messages.append({"role": "user", "content": "Important: Do NOT use placeholders (e.g., image_file: \"${uploaded_file}\"). If a required file/image id is not available in Resources, return {\"function\":\"question\"} asking the user to upload or select the file. Use only concrete args (e.g., image_id, file_id, sql). STRICT JSON only."})
+                                plan_handled = True
+                                name = None; args = {}; call_obj = {}
+                    except Exception:
+                        # On any error, fall back to nudge behavior
+                        try:
+                            tmpl = {"function": "final", "args": {"text": ""}}
+                            messages.append({"role": "user", "content": "Respond NOW with ONE function call ONLY (STRICT JSON) matching this template:"})
+                            messages.append({"role": "user", "content": json.dumps(tmpl, ensure_ascii=False)})
+                            plan_handled = True
+                            name = None; args = {}; call_obj = {}
+                        except Exception:
+                            pass
+
+                    if plan_handled:
+                        break
+            # If we deferred execution to the LLM (plan_handled==True), skip executing any tool and continue the loop
+            if plan_handled:
+                continue
+
+            # Guardrail: after first plan, reject new plans and require a single function call.
+            if name == 'plan' and plan_seen:
+                try:
+                    _send_info('plan-reject')
+                except Exception:
+                    pass
+                # Nudge: request a single function call for the current (or first) step
+                if not forced_submit_once:
+                    pass
+                try:
+                    cur_idx = 0
+                    try:
+                        cur_idx = int(plan_ctx.get('ptr') or 0)
+                    except Exception:
+                        cur_idx = 0
+                    tmpl = {"function": "final", "args": {"text": ""}}
+                    try:
+                        # Use examples_json template for next step function when available
+                        next_fn = None
+                        if isinstance(plan_ctx.get('steps'), list) and len(plan_ctx['steps'])>cur_idx:
+                            next_fn = str(plan_ctx['steps'][cur_idx].get('function') or '').strip().lower()
+                        if next_fn and isinstance(examples_json, dict) and examples_json.get(next_fn):
+                            e = examples_json.get(next_fn)
+                            tmpl = {"function": e.get('function') or next_fn, "args": (e.get('args') or {})}
+                    except Exception:
+                        pass
+                    messages.append({"role": "user", "content": "Respond NOW with ONE function call ONLY (STRICT JSON) matching this template:"})
+                    messages.append({"role": "user", "content": json.dumps(tmpl, ensure_ascii=False)})
+                except Exception:
+                    pass
+                # If we already nudged once, synthesize and execute step 1 directly
+                if forced_submit_once:
+                    try:
+                        cur_idx2 = int(plan_ctx.get('ptr') or 0)
+                    except Exception:
+                        cur_idx2 = 0
+                    # Synthesize call object from template
+                    synth_fn = None
+                    synth_args = {}
+                    try:
+                        if isinstance(plan_ctx.get('steps'), list) and len(plan_ctx['steps'])>cur_idx2:
+                            synth_fn = str(plan_ctx['steps'][cur_idx2].get('function') or '').strip().lower()
+                        if synth_fn and isinstance(examples_json, dict) and examples_json.get(synth_fn):
+                            e2 = examples_json.get(synth_fn)
+                            synth_fn = e2.get('function') or synth_fn
+                            synth_args = e2.get('args') or {}
+                    except Exception:
+                        pass
+                    if synth_fn:
+                        name = synth_fn
+                        args = synth_args
+                        call_obj = {"function": synth_fn, "args": synth_args, "output_to_user": "Submitting synthesized step"}
+                    else:
+                        # Fall back to final if we cannot synthesize properly
+                        name = 'final'
+                        args = {"text": "Attempted to synthesize step but no template was available."}
+                        call_obj = {"function": 'final', "args": args}
+                else:
+                    forced_submit_once = True
+                    # Loop to next turn after the nudge
+                    continue
+
+            if name in ('final', 'question'):
+                if name == 'final':
+                    final_text = str((args or {}).get('text') or call_obj.get('output_to_user') or '').strip() or 'Done.'
+                    final_call_obj = call_obj or final_call_obj
+                    try:
+                        session_title = str((args or {}).get('title') or '').strip() or None
+                    except Exception:
+                        session_title = session_title or None
+                    # NEW: Mark current step as done and update the plan panel
+                    try:
+                        if isinstance(plan_ctx.get("ptr"), int) and plan_ctx.get("steps"):
+                            idxf = int(plan_ctx['ptr']) if plan_ctx['ptr'] is not None else None
+                            if idxf is not None and 0 <= idxf < len(plan_ctx['steps']):
+                                plan_ctx['steps'][idxf]['status'] = 'done'
+                                plan_ctx['steps'][idxf]['finished_at'] = datetime.utcnow().isoformat()+"Z"
+                                _enqueue({"type": "action", "function": "plan_update", "text": "Plan updated", "call": {"steps": plan_ctx['steps']}, "thread_id": thr.id}, require_ack=True)
+                    except Exception:
+                        pass
+                else:
+                    question_text = str((args or {}).get('text') or call_obj.get('output_to_user') or '').strip() or 'I have a question for you.'
+                    # Mark current step done when it was a 'question' step
+                    try:
+                        if isinstance(plan_ctx.get("ptr"), int) and plan_ctx.get("steps"):
+                            idxq = int(plan_ctx['ptr']) if plan_ctx['ptr'] is not None else None
+                            if idxq is not None and 0 <= idxq < len(plan_ctx['steps']):
+                                plan_ctx['steps'][idxq]['status'] = 'done'
+                                plan_ctx['steps'][idxq]['finished_at'] = datetime.utcnow().isoformat()+"Z"
+                                _enqueue({"type": "action", "function": "plan_update", "text": "Plan updated", "call": {"steps": plan_ctx['steps']}})
+                    except Exception:
+                        pass
+                break
+            # Execute tool (only if not final/question)
+            # Validate function name and args; skip invalid/missing
+            if (not name) or (name == 'plan') or (name not in tools_map):
+                messages.append({"role": "user", "content": "Invalid or missing function. Respond NOW with ONE strict JSON object {\"function\": \"<tool>\", \"args\": { ... }} using concrete args only (no placeholders). If you need a file that is not present, use {\"function\":\"question\"} to ask the user to upload/select it."})
+                continue
+
+            _send_info(f"tool:{name}")
+            try:
+                _enqueue({
+                    "type": "action",
+                    "function": name,
+                    "text": str((call_obj or {}).get("output_to_user") or f"About to run {name}"),
+                    "call": call_obj or {"function": name, "args": (args or {})},
+                    "thread_id": thr.id,
+                }, require_ack=True)
+            except Exception:
+                pass
+            fn = tools_map.get(name)
+            try:
+                result = fn(args) if fn else {"ok": False, "error": f"unknown tool: {name}"}
+            except Exception as e:
+                try:
+                    print(f"[ws-chat-tool-error] {name}: {type(e).__name__}: {e}")
+                except Exception:
+                    pass
+                result = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+            # Persist tool result
+            dbt = SessionLocal()
+            try:
+                payload = {"function": name, "args": args, "result": result}
+                dbt.add(ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="assistant", display_title=f"Tool: {name}", content=json.dumps(payload, ensure_ascii=False), payload_json=payload))
+                dbt.commit()
+                try:
+                    record_changelog(dbt, project_id, branch.id, f"chat.{name}", {"function": name, "args": args}, {"result": result, "run_summary": (call_obj or {}).get("changelog_summary")})
+                except Exception:
+                    pass
+            except Exception:
+                try: dbt.rollback()
+                except Exception: pass
+            finally:
+                try: dbt.close()
+                except Exception: pass
+            # Emit condensed tool_result action
+            try:
+                summ = f"{name} {'ok' if bool(result.get('ok')) else 'error'}"
+                _enqueue({
+                    "type": "action",
+                    "function": "tool_result",
+                    "text": summ,
+                    "call": {"function": name, "args": args, "result": {k: result.get(k) for k in list(result.keys())[:6]}},
+                    "thread_id": thr.id,
+                }, require_ack=True)
+            except Exception:
+                pass
+
+            # Update plan step status and prompt next step if applicable
+            try:
+                if isinstance(plan_ctx.get("ptr"), int) and plan_ctx.get("steps"):
+                    idx = int(plan_ctx["ptr"]) if plan_ctx["ptr"] is not None else None
+                    if idx is not None and 0 <= idx < len(plan_ctx["steps"]):
+                        try:
+                            plan_ctx["steps"][idx]["status"] = "done" if bool(result.get("ok")) else "failed"
+                            plan_ctx["steps"][idx]["finished_at"] = datetime.utcnow().isoformat()+"Z"
+                        except Exception:
+                            pass
+                        # Send plan_update to refresh right panel
+                        try:
+                            _enqueue({
+                                "type": "action",
+                                "function": "plan_update",
+                                "text": "Plan updated",
+                                "call": {"steps": plan_ctx["steps"]},
+                                "thread_id": thr.id,
+                            }, require_ack=True)
+                        except Exception:
+                            pass
+                        # If done and more steps remain, advance to next step and nudge with template
+                        if bool(result.get("ok")) and (idx + 1) < len(plan_ctx["steps"]):
+                            plan_ctx["ptr"] = idx + 1
+                            try:
+                                plan_ctx["steps"][plan_ctx["ptr"]]["status"] = "currently running"
+                                plan_ctx["steps"][plan_ctx["ptr"]]["started_at"] = datetime.utcnow().isoformat()+"Z"
+                                plan_ctx["steps"][plan_ctx["ptr"]].pop("finished_at", None)
+                            except Exception:
+                                pass
+                            try:
+                                _enqueue({
+                                    "type": "action",
+                                    "function": "plan_update",
+                                    "text": "Proceeding to next step",
+                                    "call": {"steps": plan_ctx["steps"]},
+                                    "thread_id": thr.id,
+                                }, require_ack=True)
+                            except Exception:
+                                pass
+                            # Announce next step
+                            try:
+                                next_step = plan_ctx["steps"][plan_ctx["ptr"]]
+                                nfn = str(next_step.get("function") or "").strip().lower()
+                                tmpl = (examples_json.get(nfn) if isinstance(examples_json, dict) else None) or {"function": nfn, "args": {}}
+                                _enqueue({
+                                    "type": "action",
+                                    "function": "submit_step",
+                                    "text": f"Submitting Step {plan_ctx['ptr']+1}: {next_step.get('title') or nfn}",
+                                    "call": {"step": next_step, "template": {"function": tmpl.get("function"), "args": tmpl.get("args") or {}}}
+                                })
+                                messages.append({"role": "user", "content": f"Execute plan step {plan_ctx['ptr']+1} NOW. Respond with ONE function call ONLY matching this template (STRICT JSON):"})
+                                messages.append({"role": "user", "content": json.dumps({"function": tmpl.get("function"), "args": tmpl.get("args") or {}}, ensure_ascii=False)})
+                            except Exception:
+                                pass
+                        elif not bool(result.get("ok")):
+                            # Re-attempt current step with explicit template
+                            try:
+                                cur_step = plan_ctx["steps"][idx]
+                                cfn = str(cur_step.get("function") or "").strip().lower()
+                                tmpl = (examples_json.get(cfn) if isinstance(examples_json, dict) else None) or {"function": cfn, "args": {}}
+                                _enqueue({
+                                    "type": "action",
+                                    "function": "submit_step",
+                                    "text": f"Re-attempting Step {idx+1}: {cur_step.get('title') or cfn}",
+                                    "call": {"step": cur_step, "template": {"function": tmpl.get("function"), "args": tmpl.get("args") or {}}},
+                                    "thread_id": thr.id,
+                                }, require_ack=True)
+                                messages.append({"role": "user", "content": f"Re-attempt plan step {idx+1}. Respond with ONE function call ONLY matching this template (STRICT JSON):"})
+                                messages.append({"role": "user", "content": json.dumps({"function": tmpl.get("function"), "args": tmpl.get("args") or {}}, ensure_ascii=False)})
+                                forced_submit_once = False  # reset nudge/synthesize counter for this step
+                            except Exception:
+                                pass
+            except Exception:
+                pass
+
+            # Feed result back to LLM
+            messages.append({"role": "user", "content": "ToolResult:"})
+            messages.append({"role": "user", "content": json.dumps({"function": name, "result": result}, ensure_ascii=False)})
+            if final_text or question_text:
+                break
+    except Exception as e:
+        try:
+            print(f"[ws-chat-loop-error] {type(e).__name__}: {e}")
+        except Exception:
+            pass
+        try:
+            _enqueue({"type": "error", "error": f"{type(e).__name__}: {e}"})
+        except Exception:
+            pass
+        try:
+            await event_q.put(None)
+            await sender_task
+        except Exception:
+            pass
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+        return
+
+    # If the loop ended without a 'final' or 'question', nudge once more to produce a 'final'.
+    if not final_text and not question_text:
+        try:
+            messages.append({"role": "user", "content": "Respond NOW with one function call ONLY: {\"function\":\"final\",\"args\":{\"text\":\"<answer>\"}}. STRICT JSON. No prose."})
+            # Pre-final thinking (optional): reinforce that only 'final' should be returned
+            try:
+                if use_thinking:
+                    import json as _json_ff
+                    think_sys_pre_final = (
+                        "You are Cedar's planner. In 1-3 sentences, confirm that the next response must be a single {\"function\":\"final\"} call and summarize what it should contain. Output plain text."
+                    )
+                    think_msgs_pre_final = [
+                        {"role": "system", "content": think_sys_pre_final},
+                        {"role": "user", "content": "Plan state (JSON):"},
+                        {"role": "user", "content": _json_ff.dumps({"steps": plan_ctx.get("steps") or [], "ptr": plan_ctx.get("ptr")}, ensure_ascii=False)},
+                        {"role": "user", "content": "Policy: Return only the final function now."},
+                    ]
+                    _enqueue({"type": "thinking_start", "model": thinking_model, "phase": "pre_final", "thread_id": thr.id}, require_ack=True)
+                    t_prf0 = _time.time(); _txt_pf = ""
+                    try:
+                        stream_ff = client.chat.completions.create(model=thinking_model, messages=think_msgs_pre_final, stream=True)
+                        for ch in stream_ff:
+                            try:
+                                d = getattr(ch.choices[0].delta, 'content', None)
+                            except Exception:
+                                d = None
+                            if d:
+                                _txt_pf += d; _enqueue({"type": "thinking_token", "delta": d, "phase": "pre_final"})
+                    except Exception:
+                        resp_pf = client.chat.completions.create(model=thinking_model, messages=think_msgs_pre_final)
+                        _txt_pf = (resp_pf.choices[0].message.content or "").strip()
+                    t_prf1 = _time.time()
+                    _enqueue({"type": "thinking", "text": _txt_pf, "elapsed_ms": int((t_prf1 - t_prf0)*1000), "model": thinking_model, "phase": "pre_final", "thread_id": thr.id}, require_ack=True)
+                    messages.append({"role": "user", "content": "Pre-final reflection:"})
+                    messages.append({"role": "user", "content": _txt_pf})
+            except Exception:
+                pass
+            t_ff0 = _time.time()
+            resp = client.chat.completions.create(model=model, messages=messages)
+            raw2 = (resp.choices[0].message.content or "").strip()
+            t_ff1 = _time.time()
+            try:
+                _enqueue({"type": "info", "stage": "llm_call_final", "model": model, "elapsed_ms": int((t_ff1 - t_ff0)*1000)})
+            except Exception:
+                pass
+            # Post-final thinking (optional): reflect on the final call
+            try:
+                if use_thinking:
+                    think_sys_post_final = (
+                        "You are Cedar's planner (post-final reflection). In 1-2 sentences, confirm the final answer is consistent with plan and policy. Output plain text."
+                    )
+                    think_msgs_post_final = [
+                        {"role": "system", "content": think_sys_post_final},
+                        {"role": "user", "content": "Final call (raw JSON):"},
+                        {"role": "user", "content": raw2},
+                    ]
+                    _enqueue({"type": "thinking_start", "model": thinking_model, "phase": "post_final", "thread_id": thr.id}, require_ack=True)
+                    t_pff0 = _time.time(); _txt_pff = ""
+                    try:
+                        stream_pff = client.chat.completions.create(model=thinking_model, messages=think_msgs_post_final, stream=True)
+                        for ch2 in stream_pff:
+                            try:
+                                d2 = getattr(ch2.choices[0].delta, 'content', None)
+                            except Exception:
+                                d2 = None
+                            if d2:
+                                _txt_pff += d2; _enqueue({"type": "thinking_token", "delta": d2, "phase": "post_final"})
+                    except Exception:
+                        resp_pff = client.chat.completions.create(model=thinking_model, messages=think_msgs_post_final)
+                        _txt_pff = (resp_pff.choices[0].message.content or "").strip()
+                    t_pff1 = _time.time()
+                    _enqueue({"type": "thinking", "text": _txt_pff, "elapsed_ms": int((t_pff1 - t_pff0)*1000), "model": thinking_model, "phase": "post_final", "thread_id": thr.id}, require_ack=True)
+            except Exception:
+                pass
+            try:
+                obj2 = json.loads(raw2)
+            except Exception:
+                obj2 = None
+            if isinstance(obj2, dict) and str(obj2.get('function') or '').lower() == 'final':
+                a2 = obj2.get('args') or {}
+                final_text = str(a2.get('text') or obj2.get('output_to_user') or '').strip() or 'Done.'
+                final_call_obj = obj2 or final_call_obj
+                # Suppress noisy 'final-forced' from user UI; emit only when debug=true in payload
+                try:
+                    if bool(payload.get('debug')):
+                        _enqueue({"type": "info", "stage": "final-forced"})
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    # Finalize
+    try:
+        _enqueue({"type": "info", "stage": "finalizing"})
+    except Exception:
+        pass
+
+    dbf = SessionLocal()
+    try:
+        if final_text:
+            dbf.add(ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="assistant", content=final_text, display_title="Final"))
+            # Rename thread if it still has a default title and we have a session_title
+            try:
+                if session_title:
+                    thr_db = dbf.query(Thread).filter(Thread.id == thr.id, Thread.project_id == project_id).first()
+                    if thr_db and (thr_db.title in {"Ask", "New Thread"} or thr_db.title.startswith("File:") or thr_db.title.startswith("DB:")):
+                        thr_db.title = session_title[:100]
+                        dbf.commit()
+            except Exception:
+                try: dbf.rollback()
+                except Exception: pass
+        elif question_text:
+            dbf.add(ThreadMessage(project_id=project_id, branch_id=branch.id, thread_id=thr.id, role="assistant", content=question_text, display_title="Question"))
+        dbf.commit()
+        # Changelog for final or question (only for final)
+        try:
+            if final_text:
+                run_summary = None
+                try:
+                    run_summary = ((final_call_obj or {}).get("args") or {}).get("run_summary")
+                except Exception:
+                    run_summary = None
+                record_changelog(dbf, project_id, branch.id, "chat.final", {"final_call": final_call_obj}, {"text": final_text, "run_summary": run_summary})
+        except Exception:
+            pass
+    except Exception:
+        try: dbf.rollback()
+        except Exception: pass
+    finally:
+        try: dbf.close()
+        except Exception: pass
+
+    if final_text:
+        # Emit the final message along with the final function-call JSON for UI details
+        try:
+            _enqueue({"type": "final", "text": final_text, "json": final_call_obj, "prompt": messages, "thread_id": thr.id}, require_ack=True)
+        except Exception:
+            _enqueue({"type": "final", "text": final_text, "json": final_call_obj, "thread_id": thr.id}, require_ack=True)
+    elif question_text:
+        # For questions, continue to use 'final' type for compatibility with existing tests/clients
+        _enqueue({"type": "final", "text": question_text, "json": final_call_obj, "thread_id": thr.id}, require_ack=True)
+    # Stop sender and close socket
+    try:
+        await event_q.put(None)
+        await sender_task
+    except Exception:
+        pass
+    try:
+        await websocket.close()
+    except Exception:
+        pass
+
+
+def _run_tabular_import_background(project_id: int, branch_id: int, file_id: int, thread_id: int) -> None:
+    """Background worker to run tabular import without blocking the upload response.
+    See README: Tabular import via LLM codegen.
+    """
+    try:
+        from sqlalchemy.orm import sessionmaker as _sessionmaker
+        import json as _json
+    except Exception:
+        return
+
 
 def _run_langextract_ingest_background(project_id: int, branch_id: int, file_id: int, thread_id: int) -> None:
     """Background worker to build per-file chunk index using LangExtract.
