@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>CedarPy Upload Test</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        .status {
+            margin-top: 20px;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .success { background: #d4f4dd; color: #0a7c0a; }
+        .error { background: #ffe4e4; color: #c00; }
+        .info { background: #e4f0ff; color: #0066cc; }
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            margin-top: 10px;
+        }
+        pre {
+            background: #f5f5f5;
+            padding: 10px;
+            overflow: auto;
+        }
+    </style>
+</head>
+<body>
+    <h1>CedarPy File Upload Test</h1>
+    
+    <h2>1. Standard Form Upload (Browser Default)</h2>
+    <form id="form1" method="POST" action="http://localhost:49207/project/1/files/upload?branch_id=1" enctype="multipart/form-data">
+        <input type="file" name="file" required>
+        <button type="submit">Upload via Form</button>
+    </form>
+    
+    <h2>2. AJAX Upload (XMLHttpRequest)</h2>
+    <input type="file" id="file2">
+    <button onclick="uploadAjax()">Upload via AJAX</button>
+    
+    <h2>3. Fetch API Upload</h2>
+    <input type="file" id="file3">
+    <button onclick="uploadFetch()">Upload via Fetch</button>
+    
+    <div id="status"></div>
+    
+    <script>
+        function showStatus(message, type = 'info') {
+            const status = document.getElementById('status');
+            status.className = 'status ' + type;
+            status.innerHTML = `<strong>${type.toUpperCase()}:</strong> ${message}`;
+        }
+        
+        function uploadAjax() {
+            const input = document.getElementById('file2');
+            if (!input.files.length) {
+                showStatus('Please select a file first', 'error');
+                return;
+            }
+            
+            const file = input.files[0];
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            const xhr = new XMLHttpRequest();
+            
+            xhr.onreadystatechange = function() {
+                if (xhr.readyState === 4) {
+                    if (xhr.status === 200 || xhr.status === 303) {
+                        showStatus(`Success! Status: ${xhr.status}, Location: ${xhr.getResponseHeader('Location') || 'N/A'}`, 'success');
+                    } else {
+                        showStatus(`Failed with status ${xhr.status}: ${xhr.responseText}`, 'error');
+                    }
+                }
+            };
+            
+            xhr.onerror = function() {
+                showStatus('Network error occurred', 'error');
+            };
+            
+            showStatus('Uploading via AJAX...', 'info');
+            xhr.open('POST', 'http://localhost:49207/project/1/files/upload?branch_id=1');
+            xhr.send(formData);
+        }
+        
+        async function uploadFetch() {
+            const input = document.getElementById('file3');
+            if (!input.files.length) {
+                showStatus('Please select a file first', 'error');
+                return;
+            }
+            
+            const file = input.files[0];
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            showStatus('Uploading via Fetch...', 'info');
+            
+            try {
+                const response = await fetch('http://localhost:49207/project/1/files/upload?branch_id=1', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (response.ok || response.status === 303) {
+                    const location = response.headers.get('Location');
+                    showStatus(`Success! Status: ${response.status}, Location: ${location || 'N/A'}`, 'success');
+                    
+                    // Show response details
+                    const text = await response.text();
+                    if (text) {
+                        showStatus(`${showStatus.innerHTML}<pre>${text}</pre>`, 'success');
+                    }
+                } else {
+                    const text = await response.text();
+                    showStatus(`Failed with status ${response.status}: ${text}`, 'error');
+                }
+            } catch (error) {
+                showStatus(`Error: ${error.message}`, 'error');
+            }
+        }
+        
+        // Log form submission
+        document.getElementById('form1').addEventListener('submit', function(e) {
+            console.log('Form is being submitted');
+            showStatus('Form submitted, browser will handle redirect...', 'info');
+        });
+    </script>
+</body>
+</html>

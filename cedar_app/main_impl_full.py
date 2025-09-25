@@ -3346,6 +3346,7 @@ class ClientLogEntry(BaseModel):
 
 @app.post("/api/client-log")
 def api_client_log(entry: ClientLogEntry, request: Request):
+    # Keep the legacy in-memory buffer approach for compatibility
     host = (request.client.host if request and request.client else "?")
     ts = entry.when or datetime.utcnow().isoformat() + "Z"
     lvl = (entry.level or "info").upper()
@@ -3380,270 +3381,24 @@ def api_client_log(entry: ClientLogEntry, request: Request):
 # Cancellation summary API
 # Submits a special prompt to produce a user-facing summary when a chat is cancelled.
 # See README: Chat cancellation and run summaries.
-@app.post("/api/chat/cancel_summary")
+@app.post("/api/chat/cancel-summary")
 def api_chat_cancel_summary(payload: Dict[str, Any] = Body(...)):
-    try:
-        project_id = int(payload.get("project_id"))
-        branch_id = int(payload.get("branch_id"))
-        thread_id = int(payload.get("thread_id"))
-    except Exception:
-        raise HTTPException(status_code=400, detail="invalid ids")
-
-    ensure_project_initialized(project_id)
-    SessionLocal = sessionmaker(bind=_get_project_engine(project_id), autoflush=False, autocommit=False, future=True)
-    db = SessionLocal()
-    try:
-        # Collect thread history (last 20)
-        history: List[Dict[str, Any]] = []
-        try:
-            msgs = db.query(ThreadMessage).filter(ThreadMessage.project_id==project_id, ThreadMessage.thread_id==thread_id).order_by(ThreadMessage.created_at.desc()).limit(20).all()
-            for m in reversed(msgs):
-                history.append({"role": m.role, "title": (m.display_title or None), "content": (m.content or "")[:1500]})
-        except Exception:
-            history = []
-        timings = payload.get("timings") or []
-        prompt_messages = payload.get("prompt_messages") or []
-        reason = str(payload.get("reason") or "user_clicked_cancel")
-
-        # Build a concise summary via LLM (fallback to deterministic text if key missing)
-        client, model = _llm_client_config()
-        summary_text = None
-        if client:
-            try:
-                sys_prompt = (
-                    "You are Cedar's cancellation assistant. Write a concise user-facing summary (4-8 short bullet lines) of what the run did and didn't do, "
-                    "why it stopped (user cancel), and suggested next steps. Avoid secrets; include key tool steps if available."
-                )
-                import json as _json
-                messages = [
-                    {"role": "system", "content": sys_prompt},
-                    {"role": "user", "content": "Reason:"},
-                    {"role": "user", "content": reason},
-                    {"role": "user", "content": "Timings (ms):"},
-                    {"role": "user", "content": _json.dumps(timings, ensure_ascii=False)},
-                    {"role": "user", "content": "Thread history (recent):"},
-                    {"role": "user", "content": _json.dumps(history, ensure_ascii=False)},
-                    {"role": "user", "content": "Prepared prompt messages (if any):"},
-                    {"role": "user", "content": _json.dumps(prompt_messages, ensure_ascii=False)},
-                    {"role": "user", "content": "Output STRICT plain text, each bullet starting with •"},
-                ]
-                resp = client.chat.completions.create(model=(os.getenv("CEDARPY_SUMMARY_MODEL", "gpt-5-mini")), messages=messages)
-                summary_text = (resp.choices[0].message.content or "").strip()
-            except Exception as e:
-                try:
-                    print(f"[cancel-summary-error] {type(e).__name__}: {e}")
-                except Exception:
-                    pass
-        if not summary_text:
-            # Deterministic fallback (no network)
-            try:
-                bullets = [
-                    "• Run cancelled by user.",
-                    "• Partial steps may have executed before cancel.",
-                    "• See Changelog for recorded steps and timings.",
-                    "• Re-run to continue or refine your question.",
-                ]
-                summary_text = "\n".join(bullets)
-            except Exception:
-                summary_text = "Run cancelled by user."
-
-        # Persist assistant message and changelog
-        tm = ThreadMessage(project_id=project_id, branch_id=branch_id, thread_id=thread_id, role="assistant", display_title="Cancelled", content=summary_text)
-        db.add(tm); db.commit()
-        try:
-            record_changelog(db, project_id, branch_id, "chat.cancel", {"reason": reason, "timings": timings, "prompt_messages": prompt_messages}, {"text": summary_text})
-        except Exception:
-            pass
-        return {"ok": True, "text": summary_text}
-    finally:
-        try: db.close()
-        except Exception: pass
+    from cedar_app.utils.thread_management import api_chat_cancel_summary as _api_chat_cancel_summary
+    return _api_chat_cancel_summary(app, payload)
 
 # -------------------- Merge to Main (SQLite-first implementation) --------------------
 
 @app.post("/project/{project_id}/merge_to_main")
 def merge_to_main(project_id: int, request: Request, db: Session = Depends(get_project_db)):
-    ensure_project_initialized(project_id)
-    project = db.query(Project).filter(Project.id == project_id).first()
-    if not project:
-        return RedirectResponse("/", status_code=303)
-    branch_id = request.query_params.get("branch_id")
-    try:
-        branch_id = int(branch_id) if branch_id is not None else None
-    except Exception:
-        branch_id = None
-    current_b = current_branch(db, project.id, branch_id)
-    main_b = ensure_main_branch(db, project.id)
-    if current_b.id == main_b.id:
-        return RedirectResponse(f"/project/{project.id}?branch_id={main_b.id}&msg=Already+in+Main", status_code=303)
-
-    merged_counts = {"files": 0, "threads": 0, "datasets": 0, "tables": 0}
-
-    # Merge Files: copy physical files and create Main records
-    paths_files = _project_dirs(project.id)["files_root"]
-    src_dir = os.path.join(paths_files, f"branch_{current_b.name}")
-    dst_dir = os.path.join(paths_files, f"branch_{main_b.name}")
-    os.makedirs(dst_dir, exist_ok=True)
-    files = db.query(FileEntry).filter(FileEntry.project_id == project.id, FileEntry.branch_id == current_b.id).all()
-    for f in files:
-        try:
-            src_path = f.storage_path
-            base_name = os.path.basename(f.filename)
-            target_name = base_name
-            target_path = os.path.join(dst_dir, target_name)
-            # Avoid collision
-            i = 1
-            while os.path.exists(target_path):
-                name, ext = os.path.splitext(base_name)
-                target_name = f"{name}__m{i}{ext}"
-                target_path = os.path.join(dst_dir, target_name)
-                i += 1
-            shutil.copy2(src_path, target_path)
-            rec = FileEntry(
-                project_id=project.id,
-                branch_id=main_b.id,
-                filename=target_name,
-                display_name=f.display_name,
-                file_type=f.file_type,
-                structure=f.structure,
-                mime_type=f.mime_type,
-                size_bytes=f.size_bytes,
-                storage_path=os.path.abspath(target_path),
-                metadata_json=f.metadata_json,
-            )
-            db.add(rec)
-            db.commit(); db.refresh(rec)
-            add_version(db, "file", rec.id, {"merged_from_branch_id": current_b.id, "file_id": rec.id})
-            merged_counts["files"] += 1
-        except Exception:
-            db.rollback()
-
-    # Merge Threads
-    threads = db.query(Thread).filter(Thread.project_id == project.id, Thread.branch_id == current_b.id).all()
-    for t in threads:
-        nt = Thread(project_id=project.id, branch_id=main_b.id, title=t.title)
-        db.add(nt)
-        db.commit(); db.refresh(nt)
-        add_version(db, "thread", nt.id, {"merged_from_branch_id": current_b.id, "thread_id": nt.id})
-        merged_counts["threads"] += 1
-
-    # Merge Datasets
-    datasets = db.query(Dataset).filter(Dataset.project_id == project.id, Dataset.branch_id == current_b.id).all()
-    for d in datasets:
-        nd = Dataset(project_id=project.id, branch_id=main_b.id, name=d.name, description=d.description)
-        db.add(nd)
-        db.commit(); db.refresh(nd)
-        add_version(db, "dataset", nd.id, {"merged_from_branch_id": current_b.id, "dataset_id": nd.id})
-        merged_counts["datasets"] += 1
-
-    # Merge user tables (SQLite only)
-    try:
-        with _get_project_engine(project.id).begin() as conn:
-            if _dialect(_get_project_engine(project.id)) == "sqlite":
-                # Find tables excluding our internal ones
-                tbls = [r[0] for r in conn.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
-                skip = {"projects","branches","threads","files","datasets","settings","versions","sql_undo_log"}
-                for t in tbls:
-                    if t in skip:
-                        continue
-                    if not _table_has_branch_columns(conn, t):
-                        continue
-                    pk_cols = _get_pk_columns(conn, t)
-                    if not pk_cols:
-                        continue
-                    # Build column list
-                    cols_rows = conn.exec_driver_sql(f"PRAGMA table_info({t})").fetchall()
-                    cols = [r[1] for r in cols_rows]
-                    nonkey_cols = [c for c in cols if c not in set(["project_id","branch_id"]) | set(pk_cols)]
-                    # Insert missing
-                    on_clause = " AND ".join([f"m.{c} = b.{c}" for c in pk_cols]) + f" AND m.project_id = b.project_id"
-                    insert_cols = ", ".join(cols)
-                    select_cols = ", ".join([f"b.{c}" if c not in ("branch_id",) else str(main_b.id) + " as branch_id" for c in cols])
-                    conn.exec_driver_sql(f"""
-                        INSERT INTO {t} ({insert_cols})
-                        SELECT {select_cols}
-                        FROM {t} b
-                        LEFT JOIN {t} m ON {on_clause} AND m.branch_id = {main_b.id}
-                        WHERE b.project_id = {project.id} AND b.branch_id = {current_b.id} AND m.rowid IS NULL
-                    """)
-                    # Update existing
-                    if nonkey_cols:
-                        set_clause = ", ".join([f"m.{c} = b.{c}" for c in nonkey_cols])
-                        conn.exec_driver_sql(f"""
-                            UPDATE {t} AS m
-                            SET {set_clause}
-                            FROM {t} AS b
-                            WHERE m.project_id = {project.id}
-                              AND m.branch_id = {main_b.id}
-                              AND b.project_id = {project.id}
-                              AND b.branch_id = {current_b.id}
-                              AND """ + " AND ".join([f"b.{c} = m.{c}" for c in pk_cols]) + """
-                        """)
-                    merged_counts["tables"] += 1
-    except Exception:
-        pass
-
-    # After merging data rows, also adopt unique changelog entries from the branch into Main
-    try:
-        main_entries = db.query(ChangelogEntry).filter(ChangelogEntry.project_id==project.id, ChangelogEntry.branch_id==main_b.id).order_by(ChangelogEntry.created_at.desc()).limit(500).all()
-        seen = set((ce.action, _hash_payload(ce.input_json)) for ce in main_entries)
-        branch_entries = db.query(ChangelogEntry).filter(ChangelogEntry.project_id==project.id, ChangelogEntry.branch_id==current_b.id).order_by(ChangelogEntry.created_at.asc()).all()
-        adopted = 0
-        for ce in branch_entries:
-            key = (ce.action, _hash_payload(ce.input_json))
-            if key in seen:
-                continue
-            ne = ChangelogEntry(
-                project_id=project.id,
-                branch_id=main_b.id,
-                action=ce.action,
-                input_json=ce.input_json,
-                output_json={"merged_from_branch_id": current_b.id, "merged_from_branch": current_b.name, "original_output": ce.output_json},
-                summary_text=(ce.summary_text or f"Adopted from {current_b.name}: {ce.action}"),
-            )
-            db.add(ne)
-            adopted += 1
-        if adopted:
-            db.commit()
-    except Exception:
-        db.rollback()
-
-    msg = f"Merged files={merged_counts['files']}, threads={merged_counts['threads']}, datasets={merged_counts['datasets']}, tables={merged_counts['tables']}"
-    try:
-        record_changelog(db, project.id, main_b.id, "branch.merge_to_main", {"from_branch": current_b.name}, {"merged_counts": merged_counts})
-    except Exception:
-        pass
-    return RedirectResponse(f"/project/{project.id}?branch_id={main_b.id}&msg=" + html.escape(msg), status_code=303)
+    from cedar_app.utils.project_management import merge_to_main as _merge_to_main
+    return _merge_to_main(app, project_id, request, db)
 
 # -------------------- Delete all files in branch --------------------
 
 @app.post("/project/{project_id}/files/delete_all")
 def delete_all_files(project_id: int, request: Request, db: Session = Depends(get_project_db)):
-    ensure_project_initialized(project_id)
-    project = db.query(Project).filter(Project.id == project_id).first()
-    if not project:
-        return RedirectResponse("/", status_code=303)
-    branch_id = request.query_params.get("branch_id")
-    try:
-        branch_id = int(branch_id) if branch_id is not None else None
-    except Exception:
-        branch_id = None
-    current_b = current_branch(db, project.id, branch_id)
-    # Delete records and physical files
-    files = db.query(FileEntry).filter(FileEntry.project_id == project.id, FileEntry.branch_id == current_b.id).all()
-    for f in files:
-        try:
-            if f.storage_path and os.path.exists(f.storage_path):
-                os.remove(f.storage_path)
-        except Exception:
-            pass
-        db.delete(f)
-    db.commit()
-    try:
-        record_changelog(db, project.id, current_b.id, "files.delete_all", {}, {"deleted_count": len(files)})
-    except Exception:
-        pass
-    return RedirectResponse(f"/project/{project.id}?branch_id={current_b.id}&msg=Files+deleted", status_code=303)
+    from cedar_app.utils.project_management import delete_all_files as _delete_all_files
+    return _delete_all_files(app, project_id, request, db)
 
 # -------------------- Make existing table branch-aware (SQLite) --------------------
 
@@ -3724,34 +3479,8 @@ BRANCH_AWARE_SQL_DEFAULT = os.getenv("CEDARPY_SQL_BRANCH_MODE", "1") == "1"
 
 @app.post("/project/{project_id}/delete")
 def delete_project(project_id: int):
-    # Remove from central registry
-    try:
-        with RegistrySessionLocal() as reg:
-            proj = reg.query(Project).filter(Project.id == project_id).first()
-            if proj:
-                reg.delete(proj)
-                reg.commit()
-    except Exception:
-        pass
-    # Dispose cached engine if present
-    try:
-        with _project_engines_lock:
-            eng = _project_engines.pop(project_id, None)
-        if eng is not None:
-            try:
-                eng.dispose()
-            except Exception:
-                pass
-    except Exception:
-        pass
-    # Remove project storage directory (DB + files)
-    try:
-        base = _project_dirs(project_id)["base"]
-        if os.path.isdir(base):
-            shutil.rmtree(base, ignore_errors=True)
-    except Exception:
-        pass
-    return RedirectResponse("/", status_code=303)
+    from cedar_app.utils.project_management import delete_project as _delete_project
+    return _delete_project(app, project_id)
 
 # -------------------- Undo last SQL --------------------
 
@@ -3916,71 +3645,13 @@ def execute_sql(project_id: int, request: Request, sql: str = Form(...), db: Ses
 
 @app.get("/api/threads/list")
 def api_threads_list(project_id: int, branch_id: Optional[int] = None):
-    SessionLocal = sessionmaker(bind=_get_project_engine(project_id), autoflush=False, autocommit=False, future=True)
-    db = SessionLocal()
-    try:
-        q = db.query(Thread).filter(Thread.project_id==project_id)
-        if branch_id is not None:
-            try:
-                q = q.filter(Thread.branch_id==int(branch_id))
-            except Exception:
-                pass
-        threads = q.order_by(Thread.created_at.desc()).limit(200).all()
-        out = []
-        for t in threads:
-            last_at = None
-            try:
-                last = db.query(ThreadMessage).filter(ThreadMessage.project_id==project_id, ThreadMessage.thread_id==t.id).order_by(ThreadMessage.created_at.desc()).first()
-                if last and getattr(last, 'created_at', None):
-                    last_at = last.created_at.isoformat()+"Z"
-            except Exception:
-                pass
-            out.append({
-                "id": int(t.id),
-                "title": (t.title or ""),
-                "branch_id": getattr(t, 'branch_id', None),
-                "created_at": (t.created_at.isoformat()+"Z") if getattr(t, 'created_at', None) else None,
-                "last_message_at": last_at,
-            })
-        return {"ok": True, "threads": out}
-    finally:
-        try: db.close()
-        except Exception: pass
+    from cedar_app.utils.thread_management import api_threads_list as _api_threads_list
+    return _api_threads_list(app, project_id, branch_id)
 
 @app.get("/api/threads/session/{thread_id}")
 def api_threads_session(thread_id: int, project_id: int):
-    # Ensure snapshot exists; generate if missing
-    p = save_thread_snapshot(project_id, int(thread_id))
-    try:
-        if not p:
-            # Fallback: build in-memory from DB
-            SessionLocal = sessionmaker(bind=_get_project_engine(project_id), autoflush=False, autocommit=False, future=True)
-            db = SessionLocal()
-            try:
-                thr = db.query(Thread).filter(Thread.id==int(thread_id), Thread.project_id==project_id).first()
-                if not thr:
-                    raise HTTPException(status_code=404, detail="thread not found")
-                msgs = db.query(ThreadMessage).filter(ThreadMessage.project_id==project_id, ThreadMessage.thread_id==thread_id).order_by(ThreadMessage.created_at.asc()).all()
-                out = {
-                    "project_id": int(project_id),
-                    "thread_id": int(thread_id),
-                    "branch_id": getattr(thr, 'branch_id', None),
-                    "title": getattr(thr, 'title', None),
-                    "created_at": (thr.created_at.isoformat()+"Z") if getattr(thr, 'created_at', None) else None,
-                    "messages": [
-                        {"role": m.role, "title": getattr(m, 'display_title', None), "content": m.content, "payload": getattr(m, 'payload_json', None), "created_at": (m.created_at.isoformat()+"Z") if getattr(m, 'created_at', None) else None}
-                        for m in msgs
-                    ]
-                }
-                return out
-            finally:
-                try: db.close()
-                except Exception: pass
-        else:
-            with open(p, "r", encoding="utf-8") as f:
-                return json.load(f)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
+    from cedar_app.utils.thread_management import api_threads_session as _api_threads_session
+    return _api_threads_session(app, thread_id, project_id)
 
 @app.get("/log", response_class=HTMLResponse)
 def view_logs(project_id: Optional[int] = None, branch_id: Optional[int] = None):
@@ -4174,14 +3845,8 @@ def merge_index_html(projects: List[Project]) -> str:
     return body
 
 
-def _hash_payload(obj: Any) -> str:
-    try:
-        import json as _json
-        s = _json.dumps(obj, ensure_ascii=False, sort_keys=True)
-    except Exception:
-        s = str(obj)
-    h = hashlib.sha256(s.encode('utf-8', errors='ignore')).hexdigest()
-    return h
+# _hash_payload moved to utils/project_management.py
+from cedar_app.utils.project_management import _hash_payload
 
 
 @app.get("/merge", response_class=HTMLResponse)
