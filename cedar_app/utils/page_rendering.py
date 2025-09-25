@@ -787,7 +787,8 @@ SELECT * FROM demo LIMIT 10;""")
         } else if (m.type === 'message') { try { if (m.thread_id) { upsertAllChatsItem(m.thread_id, null, String(m.text||'')); } } catch(_){ } ackEvent(m);
           try {
             var r = String(m.role||'assistant');
-            if (r === 'user') {
+            var rLower = r.toLowerCase();
+            if (rLower === 'user') {
               // If we optimistically echoed a user bubble, reconcile it with the backend event
               try {
                 var tempU = document.querySelector('#msgs .msg.user[data-temp="1"]');
@@ -799,13 +800,43 @@ SELECT * FROM demo LIMIT 10;""")
                 }
               } catch(_){ }
             }
-            var wrapM = document.createElement('div'); wrapM.className = 'msg ' + (r==='user'?'user':(r==='system'?'system':'assistant'));
-            var metaM = document.createElement('div'); metaM.className = 'meta small'; metaM.innerHTML = "<span class='pill'>" + (r||'assistant') + "</span> <span class='title' style='font-weight:600'>" + (r.toUpperCase()) + "</span>";
-            var bubM = document.createElement('div'); bubM.className = 'bubble ' + (r==='user'?'user':(r==='system'?'system':'assistant'));
-            var contM = document.createElement('div'); contM.className='content'; contM.style.whiteSpace='pre-wrap'; contM.textContent = String(m.text||'');
-            bubM.appendChild(contM); wrapM.appendChild(metaM); wrapM.appendChild(bubM);
+            // Determine CSS class: user, system, or assistant (default for agents)
+            var roleClass = 'assistant';  // Default for all agents
+            if (rLower === 'user') roleClass = 'user';
+            else if (rLower === 'system') roleClass = 'system';
+            
+            // For display, show the actual role/agent name
+            var displayRole = r;
+            var pillText = rLower.includes('agent') || rLower.includes('executor') || rLower.includes('reasoner') ? 'agent' : rLower;
+            
+            var wrapM = document.createElement('div'); 
+            wrapM.className = 'msg ' + roleClass;
+            var metaM = document.createElement('div'); 
+            metaM.className = 'meta small'; 
+            metaM.innerHTML = "<span class='pill'>" + pillText + "</span> <span class='title' style='font-weight:600'>" + displayRole + "</span>";
+            var bubM = document.createElement('div'); 
+            bubM.className = 'bubble ' + roleClass;
+            var contM = document.createElement('div'); 
+            contM.className='content'; 
+            contM.style.whiteSpace='pre-wrap';
+            
+            // Parse markdown formatting if present
+            var textContent = String(m.text||'');
+            // Convert **text** to bold for better display
+            if (textContent.includes('**')) {
+              contM.innerHTML = textContent
+                .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+                .replace(/_([^_]+)_/g, '<em>$1</em>')
+                .replace(/\n/g, '<br>');
+            } else {
+              contM.textContent = textContent;
+            }
+            
+            bubM.appendChild(contM); 
+            wrapM.appendChild(metaM); 
+            wrapM.appendChild(bubM);
             if (msgs) msgs.appendChild(wrapM);
-            stepAdvance(r, wrapM);
+            stepAdvance(roleClass, wrapM);
           } catch(_) { }
         } else if (m.type === 'prompt') {
           try {
