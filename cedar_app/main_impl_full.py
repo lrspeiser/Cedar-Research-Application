@@ -188,11 +188,7 @@ from cedar_app.ui_utils import (
     layout,
 )
 
-# Import changelog utilities
-from cedar_app.changelog_utils import (
-    record_changelog as _record_changelog_base,
-    add_version as _add_version_base,
-)
+# Changelog utilities removed - focusing on WebSocket chat only
 
 # Import route handlers
 from cedar_app.api_routes import (
@@ -253,20 +249,13 @@ import cedar_tools as ct
 
 
 def record_changelog(db: Session, project_id: int, branch_id: int, action: str, input_payload: Dict[str, Any], output_payload: Dict[str, Any]):
-    """Wrapper for record_changelog that passes our local dependencies."""
-    return _record_changelog_base(
-        db, project_id, branch_id, action, input_payload, output_payload,
-        ChangelogEntry=ChangelogEntry,
-        llm_summarize_action_fn=_llm_summarize_action
-    )
+    """Stub for record_changelog - changelog functionality removed."""
+    pass  # Changelog disabled - focusing on WebSocket chat only
 
 def add_version(db: Session, project_id: int, branch_id: int, table_name: str,
                 row_id: int, column_name: str, old_value, new_value):
-    """Wrapper for add_version that passes our local dependencies."""
-    return _add_version_base(
-        db, project_id, branch_id, table_name, row_id, column_name,
-        old_value, new_value, Version=Version
-    )
+    """Stub for add_version - changelog functionality removed."""
+    pass  # Changelog disabled - focusing on WebSocket chat only
 
 # Shell wrapper functions for backwards compatibility
 def start_shell_job(script: str, shell_path: Optional[str] = None, trace_x: bool = False, workdir: Optional[str] = None) -> ShellJob:
@@ -578,7 +567,7 @@ def serve_project_upload(project_id: int, path: str):
       try {
         var sp = new URLSearchParams(location.search || '');
         var msg = sp.get('msg');
-        var decoded = msg ? msg.replace(/\+/g, ' ') : '';
+  var decoded = msg ? msg.replace(/\\+/g, ' ') : '';
         if (decoded === 'File uploaded') {
           var panelsFx = document.querySelectorAll(".pane.right .tab-panels .panel");
           panelsFx.forEach(function(p){ p.classList.add('hidden'); });
@@ -1067,113 +1056,7 @@ def view_logs(project_id: Optional[int] = None, branch_id: Optional[int] = None)
     return layout("Log", body, header_label=header_lbl, header_link=header_lnk, nav_query=nav_q)
 
 
-@app.get("/changelog", response_class=HTMLResponse)
-def view_changelog(request: Request, project_id: Optional[int] = None, branch_id: Optional[int] = None):
-    # Prefer project-specific context. If missing, try to infer from Referer header.
-    if project_id is None:
-        try:
-            ref = request.headers.get("referer") or ""
-            if ref:
-                from urllib.parse import urlparse, parse_qs
-                u = urlparse(ref)
-                pid = None
-                try:
-                    parts = [p for p in u.path.split("/") if p]
-                    if len(parts) >= 2 and parts[0] == "project":
-                        pid = int(parts[1])
-                except Exception:
-                    pid = None
-                bid = None
-                try:
-                    bvals = parse_qs(u.query).get("branch_id")
-                    if bvals:
-                        bid = int(bvals[0])
-                except Exception:
-                    bid = None
-                if pid is not None:
-                    return RedirectResponse(f"/changelog?project_id={pid}" + (f"&branch_id={bid}" if bid is not None else ""), status_code=303)
-        except Exception:
-            pass
-    # Global index (no project selected): list projects with links to their changelog
-    if project_id is None:
-        try:
-            with RegistrySessionLocal() as reg:
-                projects = reg.query(Project).order_by(Project.created_at.desc()).all()
-        except Exception:
-            projects = []
-        rows = []
-        for p in projects:
-            rows.append(f"<tr><td>{escape(p.title)}</td><td><a class='pill' href='/changelog?project_id={p.id}'>Open</a></td></tr>")
-        body = f"""
-          <h1>Changelog</h1>
-          <div class='card' style='max-width:720px'>
-            <h3>Projects</h3>
-            <table class='table'>
-              <thead><tr><th>Title</th><th>Actions</th></tr></thead>
-              <tbody>{''.join(rows) or '<tr><td colspan="2" class="muted">No projects yet.</td></tr>'}</tbody>
-            </table>
-          </div>
-        """
-        return layout("Changelog", body)
-
-    # Project context: show branch toggles and entries for selected branch (default Main)
-    ensure_project_initialized(project_id)
-    # Load branches from per-project DB
-    SessionLocal = sessionmaker(bind=_get_project_engine(project_id), autoflush=False, autocommit=False, future=True)
-    with SessionLocal() as db:
-        project = db.query(Project).filter(Project.id == project_id).first()
-        if not project:
-            return layout("Not found", "<h1>Project not found</h1>")
-        branches = db.query(Branch).filter(Branch.project_id == project.id).order_by(Branch.created_at.asc()).all()
-        if not branches:
-            ensure_main_branch(db, project.id)
-            branches = db.query(Branch).filter(Branch.project_id == project.id).order_by(Branch.created_at.asc()).all()
-        main_b = ensure_main_branch(db, project.id)
-        try:
-            branch_id_eff = int(branch_id) if branch_id is not None else main_b.id
-        except Exception:
-            branch_id_eff = main_b.id
-        # Build branch toggle pills
-        pills = []
-        for b in branches:
-            selected = "style='font-weight:600'" if b.id == branch_id_eff else ""
-            pills.append(f"<a {selected} href='/changelog?project_id={project.id}&branch_id={b.id}' class='pill'>{escape(b.name)}</a>")
-        pills_html = " ".join(pills)
-        # Query entries for selected branch
-        entries = db.query(ChangelogEntry).filter(ChangelogEntry.project_id==project.id, ChangelogEntry.branch_id==branch_id_eff).order_by(ChangelogEntry.created_at.desc(), ChangelogEntry.id.desc()).limit(500).all()
-        rows = []
-        idx = 0
-        for ce in entries:
-            idx += 1
-            did = f"chg_{idx}"
-            when = escape(ce.created_at.strftime("%Y-%m-%d %H:%M:%S")) + " UTC" if getattr(ce, 'created_at', None) else ""
-            action = escape(ce.action or '')
-            summ = escape((ce.summary_text or '').strip() or action)
-            # Details: pretty-print input/output JSON
-            try:
-                import json as _json
-                inp = _json.dumps(ce.input_json, ensure_ascii=False, indent=2) if ce.input_json is not None else "{}"
-                out = _json.dumps(ce.output_json, ensure_ascii=False, indent=2) if ce.output_json is not None else "{}"
-            except Exception:
-                inp = escape(str(ce.input_json))
-                out = escape(str(ce.output_json))
-            details = (
-                f"<div id='{did}' style='display:none'><pre class='small' style='white-space:pre-wrap; background:#f8fafc; padding:8px; border-radius:6px'>"
-                f"Input:\n{escape(inp)}\n\nOutput:\n{escape(out)}</pre></div>"
-            )
-            toggle = f"<a href='#' class='small' onclick=\"var e=document.getElementById('{did}'); if(e){{ e.style.display=(e.style.display==='none'?'block':'none'); }} return false;\">details</a>"
-            rows.append(f"<tr><td class='small'>{when}</td><td class='small'>{action}</td><td>{summ} <span class='muted small'>[{toggle}]</span>{details}</td></tr>")
-        body = f"""
-          <h1>Changelog: {escape(project.title)}</h1>
-          <div class='small muted'>Branch: {pills_html}</div>
-          <div class='card' style='margin-top:8px'>
-            <table class='table'>
-              <thead><tr><th>When</th><th>Action</th><th>Summary</th></tr></thead>
-              <tbody>{''.join(rows) or '<tr><td colspan="3" class="muted">(no entries)</td></tr>'}</tbody>
-            </table>
-          </div>
-        """
-        return layout(f"Changelog • {project.title}", body, header_label=project.title, header_link=f"/project/{project.id}?branch_id={branch_id_eff}", nav_query=f"project_id={project.id}&branch_id={branch_id_eff}")
+# Changelog route removed - focusing on WebSocket chat only
 
 # ----------------------------------------------------------------------------------
 # Merge dashboard pages
@@ -1656,24 +1539,7 @@ async def _ws_send_safe(ws: WebSocket, text: str) -> bool:
     except Exception:
         return False
 
-@app.websocket("/ws/chat_legacy/{project_id}")
-async def ws_chat_stream(websocket: WebSocket, project_id: int):
-    """Legacy WebSocket chat endpoint - redirects to new orchestrator.
-    The implementation has been moved to cedar_orchestrator.ws_chat module.
-    This endpoint is kept for backwards compatibility only.
-    """
-    await websocket.accept()
-    try:
-        await websocket.send_text(json.dumps({
-            "type": "error", 
-            "error": "This legacy endpoint is deprecated. Please use /ws/chat/{project_id} instead."
-        }))
-    except Exception:
-        pass
-    try:
-        await websocket.close()
-    except Exception:
-        pass
+# Legacy WebSocket endpoint removed - using only /ws/chat/{project_id}
 
 
 

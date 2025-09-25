@@ -390,64 +390,7 @@ SELECT * FROM demo LIMIT 10;""")
     except Exception:
         code_details_html = ""
 
-    # Thread tabs removed per new design — switching threads happens via the "All Chats" tab.
-
-    # Build "All Chats" list panel (thread previews)
-    all_chats_items = []
-    try:
-        lm = last_msgs_map or {}
-        for t in threads:
-            try:
-                previews = lm.get(t.id) or []
-            except Exception:
-                previews = []
-            # Render up to 3 small bubbles as a preview
-            bub_html_parts = []
-            idxp = 0
-            for m in previews[-3:]:
-                idxp += 1
-                try:
-                    role_raw = (getattr(m, 'role', '') or '').strip().lower()
-                    role_css = 'user' if role_raw == 'user' else ('assistant' if role_raw == 'assistant' else 'system')
-                except Exception:
-                    role_css = 'assistant'
-                try:
-                    txt = (getattr(m, 'content', '') or '')
-                    # Prefer display_title when present
-                    title_txt = getattr(m, 'display_title', None)
-                    if title_txt:
-                        txt = f"{title_txt}: " + txt
-                    preview = (txt[:140] + ('…' if len(txt) > 140 else ''))
-                except Exception:
-                    preview = ''
-                bub_html_parts.append(
-                    f"<div class='bubble {role_css}' style='font-size:12px; padding:6px 8px; border-radius:12px; max-width:360px;'><div class='content' style='white-space:pre-wrap'>{escape(preview)}</div></div>"
-                )
-            bub_html = "".join(bub_html_parts) or "<div class='muted small'>(No messages)</div>"
-            branch_name = ''
-            try:
-                branch_name = t.branch.name if t.branch else ''
-            except Exception:
-                branch_name = ''
-            active_style = " style='background:#eef2ff'" if (selected_thread and t.id == selected_thread.id) else ""
-            link = f"/project/{project.id}?branch_id={current.id}&thread_id={t.id}"
-            all_chats_items.append(
-                f"<div class='thread-item' style='border-bottom:1px solid var(--border); padding:10px 0'{active_style}>"
-                f"  <div style='display:flex; align-items:center; gap:8px; justify-content:space-between'>"
-                f"    <div style='font-weight:600'><a href='{link}' style='text-decoration:none; color:inherit'>{escape(t.title)}</a></div>"
-                f"    <div class='small muted'>{escape(branch_name)}</div>"
-                f"  </div>"
-                f"  <div class='bubbles' style='display:flex; gap:6px; flex-wrap:wrap; margin-top:6px'>{bub_html}</div>"
-                f"</div>"
-            )
-    except Exception:
-        pass
-    all_chats_panel_html = (
-        "<div id='allchats-panel' class='card' style='padding:12px'>"
-        "  <h3 style='margin-bottom:6px'>All Chats</h3>"
-        + ("".join(all_chats_items) or "<div class='muted small' id='allchats-empty'>(No threads yet)</div>")
-        + "</div>"
-    )
+    # Thread tabs and All Chats panel removed - using single WebSocket chat interface
 
     # Build Notes list panel (LLM-generated notes)
     notes_items_html: List[str] = []
@@ -757,25 +700,7 @@ SELECT * FROM demo LIMIT 10;""")
           fetch('/api/chat/ack', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project_id: PROJECT_ID, branch_id: BRANCH_ID, thread_id: (m.thread_id||threadId||null), eid: m.eid, type: m.type, fn: m.function||null }) }).catch(function(_){})
         } catch(_){}
       }
-      function upsertAllChatsItem(tid, title, preview){
-        try {
-          var panel = document.getElementById('allchats-panel'); if (!panel) return;
-          var empty = document.getElementById('allchats-empty'); if (empty) { try { empty.remove(); } catch(_){} }
-          var link = `/project/${PROJECT_ID}?branch_id=${BRANCH_ID}&thread_id=${encodeURIComponent(String(tid))}`;
-          var items = panel.querySelectorAll('.thread-item');
-          var found = null;
-          items.forEach(function(it){ var a=it.querySelector('a'); if (a && a.getAttribute('href')===link) { found = it; } });
-          var html = "<div class='thread-item' style='border-bottom:1px solid var(--border); padding:10px 0'>"
-                   + "  <div style='display:flex; align-items:center; gap:8px; justify-content:space-between'>"
-                   + "    <div style='font-weight:600'><a href='"+link+"' style='text-decoration:none; color:inherit'>"+(title||'New Thread')+"</a></div>"
-                   + "    <div class='small muted'></div>"
-                   + "  </div>"
-                   + "  <div class='bubbles' style='display:flex; gap:6px; flex-wrap:wrap; margin-top:6px'>" + (preview? ("<div class='bubble user' style='font-size:12px; padding:6px 8px; border-radius:12px; max-width:360px;'><div class='content' style='white-space:pre-wrap'>"+ (preview||'') +"</div></div>") : "") + "</div>"
-                   + "</div>";
-          if (found) { found.outerHTML = html; }
-          else { var div = document.createElement('div'); div.innerHTML = html; panel.appendChild(div.firstChild); }
-        } catch(_){}
-      }
+      // All Chats functionality removed
       function handleEvent(m){
         if (!m) return;
         if (m.type === 'stream') {
@@ -784,7 +709,7 @@ SELECT * FROM demo LIMIT 10;""")
             streamText.textContent = m.text || '';
           }
           refreshTimeout();
-        } else if (m.type === 'message') { try { if (m.thread_id) { upsertAllChatsItem(m.thread_id, null, String(m.text||'')); } } catch(_){ } ackEvent(m);
+        } else if (m.type === 'message') { ackEvent(m);
           try {
             var r = String(m.role||'assistant');
             var rLower = r.toLowerCase();
@@ -825,7 +750,7 @@ SELECT * FROM demo LIMIT 10;""")
             // Convert **text** to bold for better display
             if (textContent.includes('**')) {
               contM.innerHTML = textContent
-                .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+                .replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>')
                 .replace(/_([^_]+)_/g, '<em>$1</em>')
                 .replace(/\\n/g, '<br>');
             } else {
@@ -1063,8 +988,8 @@ SELECT * FROM demo LIMIT 10;""")
             var cont = document.createElement('div'); cont.className='content'; cont.style.whiteSpace='pre-wrap';
             if (fn === 'plan' && m.call && m.call.steps && Array.isArray(m.call.steps)) {
               try {
-                var rows = m.call.steps.map(function(st){ var f=String(st.function||''); var ti=String(st.title||''); var de=String(st.description||''); var stS=String(st.status||'in queue'); return "- ["+stS+"] "+f+": "+ti+ (de? (" — "+de):''); }).join('\\n');
-                cont.textContent = 'Plan:\\n' + rows;
+                var rows = m.call.steps.map(function(st){ var f=String(st.function||''); var ti=String(st.title||''); var de=String(st.description||''); var stS=String(st.status||'in queue'); return "- ["+stS+"] "+f+": "+ti+ (de? (" — "+de):''); }).join('\\\\n');
+                cont.textContent = 'Plan:\\\\n' + rows;
               } catch(_){ }
             } else if (fn === 'submit_step' || fn === 'tool_result') {
               cont.textContent = text;
@@ -1364,7 +1289,6 @@ SELECT * FROM demo LIMIT 10;""")
         }
       }
       ws.onmessage = function(ev){
-        if (SSE_ACTIVE) return; // prefer SSE delivery to avoid duplicate bubbles
         refreshTimeout();
         var m = null; try { m = JSON.parse(ev.data); } catch(_){ return; }
         handleEvent(m);
@@ -1374,28 +1298,7 @@ SELECT * FROM demo LIMIT 10;""")
     } catch(e) {}
   }
 
-  function startSSE(threadId){
-    try {
-      if (!threadId) return;
-      try { if (window.__cedar_es) { try { window.__cedar_es.close(); } catch(_){} } } catch(_){ }
-      var base = (window.CEDAR_RELAY_URL || (location.protocol + '//' + location.hostname + ':8808'));
-      var url = base.replace(/\/$/, '') + '/sse/' + encodeURIComponent(String(threadId));
-      var es = new EventSource(url);
-      window.__cedar_es = es;
-      var gotMsg = false;
-      es.onmessage = function(e){
-        try { var m = JSON.parse(e.data); gotMsg = true; SSE_ACTIVE = true; handleEvent(m); } catch(_){}
-      };
-      es.onerror = function(){
-        try { console.warn('[sse-error]'); } catch(_){}
-        // If we haven't received any messages yet, disable SSE preference so WS can deliver
-        if (!gotMsg) {
-          try { es.close(); } catch(_){}
-          SSE_ACTIVE = false;
-        }
-      };
-    } catch(e) { try { console.warn('[sse-init-error]', e); } catch(_){} }
-  }
+  // Using WebSocket for all communication
   document.addEventListener('DOMContentLoaded', function(){
     try {
       var chatForm = document.getElementById('chatForm');
@@ -1435,7 +1338,6 @@ SELECT * FROM demo LIMIT 10;""")
               try { localStorage.setItem('cedar:lastProject', String(PROJECT_ID||'')); } catch(_){}
               try { localStorage.setItem('cedar:lastBranch', String(BRANCH_ID||'')); } catch(_){}
               try { localStorage.setItem('cedar:lastThread', String(tidNow||'')); } catch(_){}
-              try { startSSE(tidNow); } catch(_){ }
             }
           } catch(_){ }
         }
@@ -1453,7 +1355,6 @@ SELECT * FROM demo LIMIT 10;""")
           var dsid0 = sp.get('dataset_id') || (chatForm && chatForm.getAttribute('data-dataset-id')) || null;
           if (msg === 'File uploaded' && (tid0 || fid0)) {
             window.__uploadAutoChatStarted = true;
-            if (tid0) { startSSE(tid0); }
             startWS('The user uploaded this file to the system', tid0, fid0, dsid0);
           }
         }
@@ -1489,25 +1390,13 @@ SELECT * FROM demo LIMIT 10;""")
 
       if (chatForm) {
         chatForm.addEventListener('submit', async function(ev){
-          // Ensure a thread id exists so All Chats can render immediately
-          try {
-            var tid0 = chatForm.getAttribute('data-thread-id');
-            if (!tid0) {
-              var fid0 = chatForm.getAttribute('data-file-id') || null;
-              var dsid0 = chatForm.getAttribute('data-dataset-id') || null;
-              var newTid0 = await ensureThreadId(null, fid0, dsid0);
-              if (newTid0) { tid0 = newTid0; }
-            }
-          } catch(_){}
-          // Do not force-switch tabs; keep the UI interactive while streaming
           try { ev.preventDefault(); } catch(_){ }
           var t = document.getElementById('chatInput');
           var text = (t && t.value || '').trim(); if (!text) return;
           var tid = chatForm.getAttribute('data-thread-id') || null;
           var fid = chatForm.getAttribute('data-file-id') || null;
           var dsid = chatForm.getAttribute('data-dataset-id') || null;
-          // Start streaming immediately; prefer SSE (Node relay) for events; WS remains for control/fallback
-          if (tid) { startSSE(tid); }
+          // Start streaming immediately via WebSocket
           startWS(text, tid, fid, dsid); try { t.value=''; } catch(_){ }
         });
       }
@@ -1573,21 +1462,7 @@ SELECT * FROM demo LIMIT 10;""")
         })();
       }, true);
 
-      // Make All Chats items (entire row) clickable to open the full thread in the main Chat view
-      document.addEventListener('click', function(ev){
-        try {
-          var item = ev.target && ev.target.closest ? ev.target.closest('#left-allchats .thread-item') : null;
-          if (!item) return;
-          var a = item.querySelector('a[href]');
-          if (!a) return;
-          ev.preventDefault();
-          var url = a.getAttribute('href');
-          if (!url) return;
-          try { console.log('[ui] open-thread ' + url); } catch(_){ }
-          // Navigate to the thread URL so the server renders the full history
-          try { window.location.href = url; } catch(_) { try { window.location.assign(url); } catch(_){ } }
-        } catch(_) { }
-      }, true);
+      // Thread selection removed - using single chat interface
 
     } catch(_) {}
   }, { once: true });
@@ -1620,7 +1495,6 @@ SELECT * FROM demo LIMIT 10;""")
           <div class="pane" style="display:flex; flex-direction:column; min-height:0">
             <div class="tabs" data-pane="left">
               <a href="#" class="tab active" data-target="left-chat">Chat</a>
-              <a href="#" class="tab" data-target="left-allchats">All Chats</a>
               <a href="#" class="tab" data-target="left-notes">Notes</a>
             </div>
             <div class="tab-panels" style="flex:1; min-height:0">
@@ -1647,9 +1521,6 @@ SELECT * FROM demo LIMIT 10;""")
                 {script_js}
                 { ("<div class='card' style='margin-top:8px; padding:12px'><h3>File Details</h3>" + left_details + "</div>") if selected_file else "" }
                 {code_details_html}
-              </div>
-              <div id="left-allchats" class="panel hidden">
-                {all_chats_panel_html}
               </div>
               <div id="left-notes" class="panel hidden">
                 {notes_panel_html}
