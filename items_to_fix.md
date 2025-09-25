@@ -45,13 +45,25 @@ This document lists missing or inconsistent frontend functions and routes discov
 
 ## Low (Docs/UX)
 
-9. README vs Implementation
-- README mentions root route and projects list, but route missing in current impl
-- Action: Keep README aligned or restore routes
+9. ✅ FIXED: README vs Implementation
+- README mentions root route and projects list, route was missing
+- FIXED: Added routes to main_impl_full.py
 
 10. UI Instrumentation JS Warning
 - Warning: SyntaxWarning invalid escape sequence for "+" replacement in JS regex in main_impl_full.py
 - Action: Escape string properly or mark as r"" string
+
+## Additional Fixes Applied (2025-09-25 13:45)
+
+12. ✅ FIXED: ClientLogEntry Import Missing
+- Location: cedar_app/main_impl_full.py line 850
+- Issue: ClientLogEntry was used but not imported, causing NameError
+- Fix: Added import from cedar_app.utils.logging
+
+13. ✅ FIXED: web_ui.py Missing Routes
+- Added GET / route to web_ui.py (though app currently uses main_impl_full.py)
+- Updated POST /projects/create in web_ui.py with correct implementation
+- Note: App still uses main_impl_full.py; web_ui.py is backup/future migration target
 
 11. Legacy Endpoints
 - /ws/chat_legacy/{project_id}
