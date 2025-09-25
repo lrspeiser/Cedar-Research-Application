@@ -365,9 +365,8 @@ def layout(title: str, body: str, header_label: Optional[str] = None,
 
     nav_html = (
         f"<a href='/'>&#8203;Projects</a> | "
-        f"<a href='/shell{nav_qs}'>Shell</a> | "
+        f"<a href='/agents'>Agents</a> | "
         f"<a href='/merge{nav_qs}'>Merge</a> | "
-        f"<a href='/changelog{nav_qs}'>Changelog</a> | "
         f"<a href='/log{nav_qs}' target='_blank' rel='noopener'>Log</a> | "
         f"<a href='/settings'>Settings</a>"
     )

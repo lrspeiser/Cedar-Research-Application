@@ -343,6 +343,14 @@ except Exception as e:
 # Import SQL routes
 from cedar_app.routes import sql_routes
 
+# Register Agents route
+try:
+    from cedar_app.routes.agents_route import register_agents_route
+    register_agents_route(app)
+    print("[startup] Agents route registered")
+except Exception as e:
+    print(f"[startup] Could not register agents route: {e}")
+
 @app.post("/api/chat/ack")
 def api_chat_ack(payload: Dict[str, Any]):
     return _api_chat_ack(payload=payload, ack_store=_ack_store)
