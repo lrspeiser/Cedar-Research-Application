@@ -300,6 +300,19 @@ def require_shell_enabled_and_auth(request: Request, x_api_token: Optional[str] 
 
 app = FastAPI(title="Cedar")
 
+# Add error logging middleware
+@app.middleware("http")
+async def catch_exceptions_middleware(request: Request, call_next):
+    try:
+        return await call_next(request)
+    except Exception as e:
+        import traceback
+        print(f"[ERROR-MIDDLEWARE] Unhandled exception on {request.method} {request.url.path}")
+        print(f"[ERROR-MIDDLEWARE] Exception: {e}")
+        traceback.print_exc()
+        # Re-raise to let FastAPI handle it
+        raise
+
 # Register file upload routes
 try:
     from cedar_app.file_upload_handler import register_file_upload_routes
