@@ -18,13 +18,14 @@
 
 ## Remaining Routes & Functions to Extract
 
-### 1. Shell Routes Integration (~950 lines) 🚧
-**Target: Integrate shell_utils.py**
-- [ ] Shell UI route (lines ~2641-2925)
-- [ ] Shell API routes (lines ~2926-3108)
-- [ ] Shell WebSocket routes (lines ~2965-3108)
-- [ ] Shell stop/status routes (lines ~3359-3395)
-- [ ] Remove ShellJob class and related functions
+### 1. Shell Routes Integration (~950 lines) ✅ COMPLETE
+**Target: Integrated shell_utils.py**
+- [x] Shell UI route (lines ~2641-2925)
+- [x] Shell API routes (lines ~2926-3108) 
+- [x] Shell WebSocket routes (lines ~2965-3108)
+- [x] Shell stop/status routes (lines ~3359-3395)
+- [x] Remove ShellJob class and related functions
+- **Result: Removed 1100+ lines, file now 7894 lines**
 
 ### 2. SQL/Database Operations (~600 lines)
 **Target: cedar_app/sql_operations.py**
