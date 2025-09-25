@@ -350,10 +350,6 @@ except Exception as e:
 
 # WS ack handshake endpoint (must be defined after `app` is created)
 # See README: "WebSocket handshake and client acks"
-
-# Import SQL routes
-from cedar_app.routes import sql_routes
-
 @app.post("/api/chat/ack")
 def api_chat_ack(payload: Dict[str, Any]):
     return _api_chat_ack(payload=payload, ack_store=_ack_store)
@@ -421,6 +417,24 @@ try:
 except Exception as e:
     print(f"[cedarpy] Skipping /uploads-legacy mount due to error: {e}")
 
+
+
+# ====== Extracted Modules ======
+# Code collection utilities
+from cedar_app.utils.code_collection import collect_code_items as _collect_code_items
+
+# UI view rendering
+from cedar_app.utils.ui_views import (
+    view_logs as view_logs_impl,
+    view_changelog as view_changelog_impl,
+    render_project_view
+)
+
+# Project and thread management
+from cedar_app.routes.project_thread_routes import (
+    create_project as create_project_impl,
+    create_thread as create_thread_impl
+)
 
 @app.get("/uploads/{project_id}/{path:path}")
 def serve_project_upload(project_id: int, path: str):
@@ -838,6 +852,183 @@ async def ws_sql(websocket: WebSocket, project_id: int):
 # Message format:
 #  - { "action": "exec", "sql": "...", "branch_id": 2 | null, "branch_name": "Main" | null, "max_rows": 200 }
 #  - { "action": "undo_last", "branch_id": 2 | null, "branch_name": "Main" | null }
+
+# SQL route handlers moved to routes/sql_routes.py
+from cedar_app.routes.sql_routes import (
+    ws_sqlx as ws_sqlx_impl,
+    make_table_branch_aware as make_table_branch_aware_impl,
+    undo_last_sql as undo_last_sql_impl,
+    execute_sql as execute_sql_impl
+)
+
+@app.websocket("/ws/sqlx/{project_id}")
+async def ws_sqlx(websocket: WebSocket, project_id: int):
+    """WebSocket SQL endpoint. Delegates to extracted module."""
+    await ws_sqlx_impl(websocket, project_id)
+def api_shell_stop(job_id: str, request: Request, x_api_token: Optional[str] = Header(default=None)):
+    require_shell_enabled_and_auth(request, x_api_token)
+    job = get_shell_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job not found")
+    job.kill()
+    return {"ok": True}
+
+
+@app.get("/api/shell/status/{job_id}")
+def api_shell_status(job_id: str, request: Request, x_api_token: Optional[str] = Header(default=None)):
+    require_shell_enabled_and_auth(request, x_api_token)
+    job = get_shell_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job not found")
+    return {
+        "job_id": job.id,
+        "status": job.status,
+        "return_code": job.return_code,
+        "started_at": job.start_time.isoformat() + "Z",
+        "ended_at": job.end_time.isoformat() + "Z" if job.end_time else None,
+        "log_path": job.log_path,
+    }
+
+
+# ----------------------------------------------------------------------------------
+# Routes
+# ----------------------------------------------------------------------------------
+
+# Test-only tool execution API (local + CEDARPY_TEST_MODE only)
+
+# Testing tools moved to utils/dev_tools.py
+from cedar_app.utils.dev_tools import (
+    ToolExecRequest,
+    api_test_tool_exec as api_test_tool_exec_impl
+)
+
+@app.post("/api/test/tool")
+def api_test_tool_exec(body: ToolExecRequest, request: Request):
+    """Tool execution endpoint for testing. Delegates to extracted module."""
+    return api_test_tool_exec_impl(body, request)
+class CedarBufferHandler(_logging.Handler):
+    def emit(self, record: _logging.LogRecord) -> None:  # type: ignore[name-defined]
+        try:
+            ts = datetime.utcnow().isoformat() + "Z"
+            lvl = record.levelname.upper()
+            msg = record.getMessage()
+            url = ""  # HTTP middleware sets current path for logs during requests
+            try:
+                url = _current_path.get() or ""
+            except Exception:
+                url = ""
+            loc = f"{record.module}:{record.lineno}"
+            origin = f"server:{record.name}"
+            _SERVER_LOG_BUFFER.append({
+                "ts": ts,
+                "level": lvl,
+                "host": "127.0.0.1",  # local app
+                "origin": origin,
+                "url": url,
+                "loc": loc,
+                "ua": None,
+                "message": msg,
+                "stack": None,
+            })
+        except Exception:
+            # Never raise from handler
+            pass
+
+def _install_unified_logging() -> None:
+    try:
+        # Attach handler to root and common app servers
+        h = CedarBufferHandler()
+        h.setLevel(_logging.DEBUG)
+        root = _logging.getLogger()
+        root.addHandler(h)
+        root.setLevel(_logging.DEBUG)
+        for name in ("uvicorn", "uvicorn.error", "uvicorn.access", "fastapi", "starlette"):
+            lg = _logging.getLogger(name)
+            lg.addHandler(h)
+            lg.setLevel(_logging.DEBUG)
+        # Optionally patch print to also append to buffer (enabled by default; set CEDARPY_PATCH_PRINT=0 to disable)
+        if str(os.getenv("CEDARPY_PATCH_PRINT", "1")).strip().lower() not in {"0", "false", "no"}:
+            try:
+                _orig_print = _bi.print
+                def _cedar_print(*args, **kwargs):  # type: ignore[override]
+                    try:
+                        _orig_print(*args, **kwargs)
+                    finally:
+                        try:
+                            msg = " ".join([str(a) for a in args])
+                            loc = None
+                            # Best-effort caller info
+                            try:
+                                import inspect as _inspect
+                                fr = _inspect.currentframe()
+                                if fr and fr.f_back and fr.f_back.f_back:
+                                    co = fr.f_back.f_back.f_code
+                                    loc = f"{os.path.basename(co.co_filename)}:{co.co_firstlineno}"
+                            except Exception:
+                                loc = None
+                            _SERVER_LOG_BUFFER.append({
+                                "ts": datetime.utcnow().isoformat()+"Z",
+                                "level": "INFO",
+                                "host": "127.0.0.1",
+                                "origin": "server:print",
+                                "url": _current_path.get() if _current_path else "",
+                                "loc": loc or "print",
+                                "ua": None,
+                                "message": msg,
+                                "stack": None,
+                            })
+                        except Exception:
+                            pass
+                _bi.print = _cedar_print  # type: ignore[assignment]
+            except Exception:
+                pass
+        # Register HTTP middleware for request logs
+        @app.middleware("http")
+        async def _cedar_logging_mw(request: Request, call_next):
+            path = str(getattr(request, "url", "") or "")
+            token = None
+            try:
+                token = _current_path.set(path)
+            except Exception:
+                token = None
+            start = _time.time()
+            try:
+                _logging.getLogger("cedarpy").debug(f"request.start {request.method} {request.url.path}")
+                resp = await call_next(request)
+                dur_ms = int((_time.time() - start) * 1000)
+                _logging.getLogger("cedarpy").debug(f"request.end {request.method} {request.url.path} status={getattr(resp,'status_code',None)} dur_ms={dur_ms}")
+                return resp
+            except Exception as e:
+                dur_ms = int((_time.time() - start) * 1000)
+                _logging.getLogger("cedarpy").exception(f"request.error {request.method} {request.url.path} dur_ms={dur_ms} error={type(e).__name__}: {e}")
+                raise
+            finally:
+                try:
+                    if token is not None:
+                        _current_path.reset(token)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+# Install unified logging immediately at import time
+_install_unified_logging()
+
+# Client log ingestion API (merges into _LOG_BUFFER)
+# This endpoint receives client-side console/error logs sent by the injected script in layout().
+# See README.md (section "Client-side logging") for details and troubleshooting.
+
+class ClientLogEntry(BaseModel):
+    when: Optional[str] = None
+    level: str
+    message: str
+    url: Optional[str] = None
+    line: Optional[int] = None
+    column: Optional[int] = None
+    stack: Optional[str] = None
+    userAgent: Optional[str] = None
+    origin: Optional[str] = None
+
 @app.post("/api/client-log")
 def api_client_log(entry: ClientLogEntry, request: Request):
     # Keep the legacy in-memory buffer approach for compatibility
@@ -995,68 +1186,9 @@ def api_threads_session(thread_id: int, project_id: int):
 
 @app.get("/log", response_class=HTMLResponse)
 def view_logs(project_id: Optional[int] = None, branch_id: Optional[int] = None):
-    # Render recent client + server logs (newest last for readability)
-    rows = []
-    try:
-        logs = list(_LOG_BUFFER)
-    except Exception:
-        logs = []
-    if logs:
-        for e in logs:
-            ts = escape(str(e.get("ts") or ""))
-            lvl = escape(str(e.get("level") or ""))
-            url = escape(str(e.get("url") or ""))
-            origin = escape(str(e.get("origin") or ""))
-            msg = escape(str(e.get("message") or ""))
-            loc = escape(str(e.get("loc") or ""))
-            stack = escape(str(e.get("stack") or ""))
-            ua = escape(str(e.get("ua") or ""))
-            rows.append(f"<tr><td class='small'>{ts}</td><td class='small'>{lvl}</td><td class='small'>{origin}</td><td class='small'>{loc}</td><td>{msg}</td><td class='small'>{url}</td></tr>" + (f"<tr><td colspan='6'><pre class='small' style='white-space:pre-wrap'>{stack}</pre></td></tr>" if stack else ""))
-    body = f"""
-      <h1>Client Log</h1>
-      <div class='card'>
-        <div class='small muted'>Most recent {len(logs)} entries.</div>
-        <table class='table'>
-          <thead><tr><th>When</th><th>Level</th><th>Origin</th><th>Loc</th><th>Message</th><th>URL</th></tr></thead>
-          <tbody>{''.join(rows) or "<tr><td colspan='6' class='muted'>(no entries)</td></tr>"}</tbody>
-        </table>
-      </div>
-    """
-    # Optional project context in header
-    header_lbl = None
-    header_lnk = None
-    nav_q = None
-    try:
-        if project_id is not None:
-            pid = int(project_id)
-            try:
-                with RegistrySessionLocal() as reg:
-                    p = reg.query(Project).filter(Project.id == pid).first()
-                    if p:
-                        header_lbl = p.title
-            except Exception:
-                pass
-            bid = None
-            try:
-                bid = int(branch_id) if branch_id is not None else None
-            except Exception:
-                bid = None
-            if bid is None:
-                try:
-                    SessionLocal = sessionmaker(bind=_get_project_engine(pid), autoflush=False, autocommit=False, future=True)
-                    with SessionLocal() as pdb:
-                        mb = ensure_main_branch(pdb, pid)
-                        bid = mb.id
-                except Exception:
-                    bid = 1
-            header_lnk = f"/project/{pid}?branch_id={bid}"
-            nav_q = f"project_id={pid}&branch_id={bid}"
-    except Exception:
-        pass
-    return layout("Log", body, header_label=header_lbl, header_link=header_lnk, nav_query=nav_q)
+    """View application logs."""
+    return view_logs_impl(project_id, branch_id)
 
-
-@app.get("/changelog", response_class=HTMLResponse)
 def view_changelog(request: Request, project_id: Optional[int] = None, branch_id: Optional[int] = None):
     # Prefer project-specific context. If missing, try to infer from Referer header.
     if project_id is None:
@@ -1292,140 +1424,157 @@ def merge_project_view(project_id: int, db: Session = Depends(get_project_db)):
     return layout(f"Merge • {project.title}", body, header_label=project.title, header_link=f"/project/{project.id}?branch_id={main_b.id}", nav_query=f"project_id={project.id}&branch_id={main_b.id}")
 
 
-@app.get("/project/{project_id}", response_class=HTMLResponse)
-def view_project(project_id: int, branch_id: Optional[int] = None, msg: Optional[str] = None, file_id: Optional[int] = None, dataset_id: Optional[int] = None, thread_id: Optional[int] = None, code_mid: Optional[int] = None, code_idx: Optional[int] = None, db: Session = Depends(get_project_db)):
+def get_or_create_project_registry(db: Session, title: str) -> Project:
+    """Idempotent create by title.
+    - SQLite: use INSERT .. ON CONFLICT DO NOTHING, then SELECT
+    - Fallback: SELECT first, else create
+    """
+    t = (title or "").strip()
+    if not t:
+        raise ValueError("empty title")
+    # Try SQLite upsert
     try:
-        ensure_project_initialized(project_id)
-    except Exception as e:
-        print(f"[view-project-error] Failed to ensure project {project_id} initialized: {e}")
-        return layout("Error", f"<h1>Project Initialization Error</h1><p class='muted'>Failed to initialize project database: {html.escape(str(e))}</p><p><a href='/'>Return to Projects</a></p>")
+        if _dialect(registry_engine) == "sqlite":
+            try:
+                from sqlalchemy.dialects.sqlite import insert as sqlite_insert  # type: ignore
+            except Exception:
+                sqlite_insert = None  # type: ignore
+            if sqlite_insert is not None:
+                stmt = sqlite_insert(Project).values(title=t)
+                stmt = stmt.on_conflict_do_nothing(index_elements=[Project.title])
+                db.execute(stmt)
+                db.commit()
+                existing = db.query(Project).filter(Project.title == t).first()
+                if existing:
+                    return existing
+    except Exception:
+        pass
+    # Generic fallback (race-safe enough for CI; on conflict we query after rollback)
+    existing = db.query(Project).filter(Project.title == t).first()
+    if existing:
+        return existing
+    p = Project(title=t)
+    db.add(p)
+    try:
+        db.commit(); db.refresh(p)
+        return p
+    except Exception:
+        db.rollback()
+        existing = db.query(Project).filter(Project.title == t).first()
+        if existing:
+            return existing
+        raise
+
+
+@app.post("/projects/create")
+def create_project(title: str = Form(...), db: Session = Depends(get_registry_db)):
+    """Create a new project."""
+    return create_project_impl(title, db)
+
+@app.get("/threads", response_class=HTMLResponse)
+def threads_index(project_id: Optional[int] = None, branch_id: Optional[int] = None):
+    title = "Threads"
+    if not project_id:
+        body = """
+        <h1>Threads</h1>
+        <p class='muted'>Open a project first to view its threads.</p>
+        """
+        return layout(title, body)
+    ensure_project_initialized(project_id)
+    SessionLocal = sessionmaker(bind=_get_project_engine(project_id), autoflush=False, autocommit=False, future=True)
+    with SessionLocal() as db:
+        recs = db.query(Thread).filter(Thread.project_id == project_id).order_by(Thread.created_at.desc()).limit(200).all()
+        rows = []
+        for t in recs:
+            try:
+                bname = t.branch.name if t.branch else ""
+            except Exception:
+                bname = ""
+            link = f"/project/{project_id}?branch_id={branch_id or (t.branch_id or 1)}&thread_id={t.id}"
+            rows.append(f"<tr><td><a href='{link}'>{escape(t.title)}</a></td><td class='small muted'>{escape(bname)}</td><td class='small muted'>{t.created_at:%Y-%m-%d %H:%M:%S} UTC</td></tr>")
+        tbody = "".join(rows) if rows else "<tr><td colspan='3' class='muted small'>(No threads yet)</td></tr>"
+        body = f"""
+        <h1>Threads</h1>
+        <div class='card'>
+          <table class='table'>
+            <thead><tr><th>Title</th><th>Branch</th><th>Created</th></tr></thead>
+            <tbody>{tbody}</tbody>
+          </table>
+        </div>
+        """
+        return layout(title, body, nav_query=f"project_id={project_id}&branch_id={(branch_id or 1)}")
+
+# ----------------------------------------------------------------------------------
+# Code collection helpers for right-side "Code" tab
+# ----------------------------------------------------------------------------------
+
+def _guess_language_from_path(path: str) -> str:
+    try:
+        p = (path or '').lower()
+    except Exception:
+        p = ''
+    mapping = {
+        '.py': 'python', '.js': 'javascript', '.ts': 'typescript', '.tsx': 'tsx', '.jsx': 'jsx',
+        '.sh': 'bash', '.bash': 'bash', '.zsh': 'bash', '.sql': 'sql', '.json': 'json',
+        '.yaml': 'yaml', '.yml': 'yaml', '.md': 'markdown', '.html': 'html', '.css': 'css',
+        '.go': 'go', '.rs': 'rust', '.java': 'java', '.rb': 'ruby', '.php': 'php',
+        '.c': 'c', '.h': 'c', '.cc': 'cpp', '.hpp': 'cpp', '.cpp': 'cpp', '.cs': 'csharp', '.swift': 'swift',
+    }
+    try:
+        import os as _os
+        _, ext = _os.path.splitext(p)
+        return mapping.get(ext, '')
+    except Exception:
+        return ''
+
+
+@app.get("/project/{project_id}", response_class=HTMLResponse)
+def view_project(project_id: int, branch_id: Optional[int] = None, msg: Optional[str] = None,
+                file_id: Optional[int] = None, dataset_id: Optional[int] = None,
+                thread_id: Optional[int] = None, code_mid: Optional[int] = None,
+                code_idx: Optional[int] = None, db: Session = Depends(get_project_db)):
+    """Main project view."""
+    from main_models import FileEntry, Dataset, Thread, Note
+    from main_helpers import branch_filter_ids
+    
+    ensure_project_initialized(project_id)
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
-        return layout("Not found", "<h1>Project not found</h1>")
-
-    branches = db.query(Branch).filter(Branch.project_id == project.id).order_by(Branch.created_at.asc()).all()
-    if not branches:
-        ensure_main_branch(db, project.id)
-        branches = db.query(Branch).filter(Branch.project_id == project.id).order_by(Branch.created_at.asc()).all()
-
-    current = current_branch(db, project.id, branch_id)
-
-    # which branches to show (roll-up logic)
-    show_branch_ids = branch_filter_ids(db, project.id, current.id)
-
-    files = db.query(FileEntry)\
-        .filter(FileEntry.project_id == project.id, FileEntry.branch_id.in_(show_branch_ids))\
-        .order_by(FileEntry.created_at.desc())\
-        .all()
-
-    threads = db.query(Thread)\
-        .filter(Thread.project_id == project.id, Thread.branch_id.in_(show_branch_ids))\
-        .order_by(Thread.created_at.desc())\
-        .all()
-
-    datasets = db.query(Dataset)\
-        .filter(Dataset.project_id == project.id, Dataset.branch_id.in_(show_branch_ids))\
-        .order_by(Dataset.created_at.desc())\
-        .all()
-
-    # resolve selected file if provided
-    selected_file = None
-    try:
-        if file_id is not None:
-            selected_file = db.query(FileEntry).filter(
-                FileEntry.id == int(file_id),
-                FileEntry.project_id == project.id,
-                FileEntry.branch_id.in_(show_branch_ids)
-            ).first()
-    except Exception:
-        selected_file = None
-
-    # resolve selected dataset if provided
-    selected_dataset = None
-    try:
-        if dataset_id is not None:
-            selected_dataset = db.query(Dataset).filter(
-                Dataset.id == int(dataset_id),
-                Dataset.project_id == project.id,
-                Dataset.branch_id.in_(show_branch_ids)
-            ).first()
-    except Exception:
-        selected_dataset = None
-
-    # resolve selected thread and messages
-    selected_thread = None
-    thread_messages: List[ThreadMessage] = []
-    try:
-        if thread_id is not None:
-            selected_thread = db.query(Thread).filter(Thread.id == int(thread_id), Thread.project_id == project.id, Thread.branch_id.in_(show_branch_ids)).first()
-            if selected_thread:
-                thread_messages = db.query(ThreadMessage).filter(ThreadMessage.project_id==project.id, ThreadMessage.thread_id==selected_thread.id).order_by(ThreadMessage.created_at.asc()).all()
-    except Exception:
-        selected_thread = None
-
-    # Build per-thread recent messages for the All Chats panel (last 3 messages each)
-    last_msgs_map: Dict[int, List[ThreadMessage]] = {}
-    try:
-        for t in threads:
-            try:
-                recs = db.query(ThreadMessage).filter(ThreadMessage.project_id == project.id, ThreadMessage.thread_id == t.id).order_by(ThreadMessage.created_at.desc()).limit(3).all()
-                last_msgs_map[t.id] = list(reversed(recs))
-            except Exception:
-                last_msgs_map[t.id] = []
-    except Exception:
-        last_msgs_map = {}
-
-    # Fetch recent notes for left-pane Notes tab (roll-up across visible branches)
-    try:
-        notes = db.query(Note).filter(Note.project_id == project.id, Note.branch_id.in_(show_branch_ids)).order_by(Note.created_at.desc()).limit(200).all()
-    except Exception:
-        notes = []
-
-    # Build Code items across visible threads
-    try:
-        code_items = _collect_code_items(db, project.id, threads)
-    except Exception:
-        code_items = []
-    # Resolve selected code item if query params provided
-    selected_code = None
-    try:
-        if code_mid is not None:
-            cmid = int(code_mid)
-            cidx = int(code_idx) if code_idx is not None else 0
-            for ci in code_items:
-                try:
-                    if int(ci.get('mid')) == cmid and int(ci.get('idx', 0)) == cidx:
-                        selected_code = ci
-                        break
-                except Exception:
-                    pass
-    except Exception:
-        selected_code = None
-
-    return layout(
-        project.title,
-        project_page_html(
-            project,
-            branches,
-            current,
-            files,
-            threads,
-            datasets,
-            selected_file=selected_file,
-            selected_dataset=selected_dataset,
-            selected_thread=selected_thread,
-            thread_messages=thread_messages,
-            msg=msg,
-            last_msgs_map=last_msgs_map,
-            notes=notes,
-            code_items=code_items,
-            selected_code=selected_code,
-        ),
-        header_label=project.title,
-        header_link=f"/project/{project.id}?branch_id={current.id}",
-        nav_query=f"project_id={project.id}&branch_id={current.id}"
+        return RedirectResponse('/', status_code=303)
+    
+    branch = current_branch(db, project.id, branch_id)
+    ids = branch_filter_ids(db, project.id, branch.id)
+    
+    # Query all needed data
+    files = db.query(FileEntry).filter(
+        FileEntry.project_id == project.id,
+        FileEntry.branch_id.in_(ids)
+    ).order_by(FileEntry.created_at.desc()).all()
+    
+    datasets = db.query(Dataset).filter(
+        Dataset.project_id == project.id,
+        Dataset.branch_id.in_(ids)
+    ).order_by(Dataset.created_at.desc()).all()
+    
+    threads = db.query(Thread).filter(
+        Thread.project_id == project.id,
+        Thread.branch_id.in_(ids)
+    ).order_by(Thread.created_at.desc()).all()
+    
+    notes = db.query(Note).filter(
+        Note.project_id == project.id,
+        Note.branch_id.in_(ids)
+    ).order_by(Note.created_at.desc()).all()
+    
+    # Collect code items
+    code_items = _collect_code_items(db, project.id, threads)
+    
+    # Render HTML
+    html = render_project_view(
+        project, branch, threads, files, datasets, notes, code_items,
+        msg, file_id, dataset_id, thread_id, code_mid, code_idx
     )
-
+    return HTMLResponse(html)
 
 @app.post("/project/{project_id}/branches/create")
 def create_branch(project_id: int, name: str = Form(...), db: Session = Depends(get_project_db)):
@@ -1457,63 +1606,8 @@ def create_branch(project_id: int, name: str = Form(...), db: Session = Depends(
 # LLM chat uses threads. If using the GET '/threads/new', a default title 'New Thread' is created
 # and the user is redirected to the project page focusing the new tab. See README for LLM setup.
 def create_thread(project_id: int, request: Request, title: Optional[str] = Form(None), db: Session = Depends(get_project_db)):
-    ensure_project_initialized(project_id)
-    # branch selected via query parameter
-    branch_id = request.query_params.get("branch_id")
-    try:
-        branch_id = int(branch_id) if branch_id is not None else None
-    except Exception:
-        branch_id = None
-
-    file_q = request.query_params.get("file_id")
-    dataset_q = request.query_params.get("dataset_id")
-    json_q = request.query_params.get("json")
-
-    project = db.query(Project).filter(Project.id == project_id).first()
-    if not project:
-        return RedirectResponse("/", status_code=303)
-
-    branch = current_branch(db, project.id, branch_id)
-
-    # Derive a default title from file/dataset context when GET and no explicit title
-    file_obj = None
-    dataset_obj = None
-    try:
-        if file_q is not None:
-            file_obj = db.query(FileEntry).filter(FileEntry.id == int(file_q), FileEntry.project_id == project.id).first()
-    except Exception:
-        file_obj = None
-    try:
-        if dataset_q is not None:
-            dataset_obj = db.query(Dataset).filter(Dataset.id == int(dataset_q), Dataset.project_id == project.id).first()
-    except Exception:
-        dataset_obj = None
-
-    if request.method.upper() == 'GET' and (title is None or not str(title).strip()):
-        if file_obj:
-            label = (file_obj.ai_title or file_obj.display_name or '').strip() or f"File {file_obj.id}"
-            title = f"File: {label}"
-        elif dataset_obj:
-            title = f"DB: {dataset_obj.name}"
-        else:
-            title = "New Thread"
-    title = (title or "New Thread").strip()
-
-    t = Thread(project_id=project.id, branch_id=branch.id, title=title)
-    db.add(t)
-    db.commit()
-    db.refresh(t)
-    add_version(db, "thread", t.id, {"project_id": project.id, "branch_id": branch.id, "title": t.title})
-
-    redirect_url = f"/project/{project.id}?branch_id={branch.id}&thread_id={t.id}" + (f"&file_id={file_obj.id}" if file_obj else "") + (f"&dataset_id={dataset_obj.id}" if dataset_obj else "") + "&msg=Thread+created"
-
-    # Optional JSON response for client-side creation
-    if json_q is not None and str(json_q).strip() not in {"", "0", "false", "False", "no"}:
-        return JSONResponse({"thread_id": t.id, "branch_id": branch.id, "redirect": redirect_url, "title": t.title})
-
-    # Redirect to focus the newly created thread
-    return RedirectResponse(redirect_url, status_code=303)
-
+    """Create a new thread."""
+    return create_thread_impl(project_id, request, title, db)
 
 @app.post("/project/{project_id}/ask")
 def ask_endpoint(project_id: int, request: Request, query: str = Form(...), db: Session = Depends(get_project_db)):
