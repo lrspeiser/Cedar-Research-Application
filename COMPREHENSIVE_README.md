@@ -56,6 +56,194 @@ Cedar Research Application (CedarPy) is a FastAPI-based research and data manage
 └─────────────────────────────────────────────────────┘
 ```
 
+## Frontend Functions & User Flows
+
+### 1. Application Boot Process
+
+**Entry Points**:
+- **Web Server**: `python run_cedarpy.py` → loads `main.py` → imports `cedar_app/main_impl_full.py`
+- **Desktop App**: `python cedarqt.py` → Qt wrapper → embeds web server
+- **Production**: `uvicorn main:app` → FastAPI application
+
+**Boot Sequence**:
+```python
+run_cedarpy.py
+├── Initialize logging (_init_logging)
+├── Choose port (_choose_listen_port)
+├── Kill other instances (_kill_other_instances)
+├── Load environment variables
+├── Import main:app (FastAPI)
+├── Start uvicorn server
+└── Open browser (if CEDARPY_OPEN_BROWSER=1)
+```
+
+### 2. Home Page & Project List
+
+**Route**: `GET /` (MISSING IN CURRENT main_impl_full.py! ⚠️)
+- **Expected**: Should display project list
+- **Current**: Route not defined in main_impl_full.py
+- **Backup Location**: Was in `@app.get("/")` calling `projects_list_html()`
+
+**Code Flow**:
+```python
+home() → get_registry_db() → query(Project) → projects_list_html() → layout()
+```
+
+### 3. Project Creation
+
+**Route**: `POST /projects/create` (MISSING! ⚠️)
+- **Form Fields**: `title` (required)
+- **Code Flow**:
+```python
+create_project()
+├── get_or_create_project_registry() # Idempotent creation
+├── _get_project_engine() # Create project DB
+├── Base.metadata.create_all() # Initialize schema
+├── ensure_main_branch() # Create Main branch
+├── _ensure_project_storage() # Create directories
+└── RedirectResponse(/project/{id})
+```
+
+### 4. File Upload
+
+**Route**: `POST /project/{project_id}/files/upload`
+**UI Elements**: 
+- File input: `data-testid="upload-input"`
+- Submit button: `data-testid="upload-submit"`
+- Form: `data-testid="upload-form"`
+
+**Code Flow**:
+```python
+upload_file() [main_impl_full.py:1588]
+├── upload_file_impl() [utils/file_operations.py]
+├── Save file to disk
+├── Create FileEntry record
+├── Background: _run_upload_postprocess_background()
+│   ├── _llm_classify_file() # 🤖 AI classification
+│   ├── _tabular_import_via_llm() # 🤖 For CSV/Excel
+│   └── record_changelog()
+├── Background: _run_langextract_ingest_background()
+│   └── cedar_langextract.py # 🤖 Code extraction
+└── RedirectResponse with auto-chat trigger
+```
+
+### 5. Chat/Prompt Submission
+
+**Routes**: 
+- WebSocket: `/ws/chat/{project_id}` (Main chat endpoint)
+- Legacy: `/ws/chat_legacy/{project_id}` (Deprecated)
+- Form: `POST /project/{project_id}/ask` (Ask orchestrator)
+
+**UI Elements**:
+- Ask form: `id="askForm"`
+- Query input: `name="query"`
+
+**Code Flow**:
+```python
+ws_chat() [cedar_orchestrator/ws_chat.py]
+├── Accept WebSocket connection
+├── Receive user message
+├── ThinkerOrchestrator.process() # 🤖
+│   ├── Generate system prompt
+│   ├── Call OpenAI API
+│   ├── Parse tool calls
+│   └── Execute tools (code, db, web, etc.)
+├── Stream response tokens
+└── Save ThreadMessage records
+```
+
+### 6. Shell Command Execution
+
+**Routes**:
+- `POST /api/shell/run` - Start shell job
+- `WS /ws/shell/{job_id}` - Stream output
+- `GET /api/shell/status/{job_id}` - Check status
+
+**UI Elements**:
+- Shell panel in project view
+- Run button triggers POST
+
+**Code Flow**:
+```python
+api_shell_run()
+├── require_shell_enabled_and_auth()
+├── start_shell_job()
+│   ├── Create ShellJob instance
+│   ├── subprocess.Popen()
+│   └── Start output reader thread
+├── Return job_id
+└── Client connects to WebSocket for streaming
+```
+
+### 7. Branch Operations
+
+**Routes**:
+- `POST /project/{project_id}/branches/create`
+- Branch switching via query param: `?branch_id=X`
+
+**Code Flow**:
+```python
+create_branch()
+├── Validate name (not "main")
+├── Create Branch record
+├── add_version() for audit
+└── RedirectResponse to branch view
+```
+
+### 8. Merge Operations
+
+**Routes**:
+- `GET /merge` - Merge landing page
+- `GET /merge/{project_id}` - Project merge view
+- `POST /project/{project_id}/merge_to_main` - Execute merge
+
+**UI Elements**:
+- Merge button: `data-testid="merge-branch-{id}"`
+- Shows unique changelog entries per branch
+
+**Code Flow**:
+```python
+merge_to_main() [utils/project_management.py]
+├── Get source and target branches
+├── Copy FileEntry records
+├── Copy Dataset records  
+├── Copy Thread records
+├── Copy Note records
+├── record_changelog("merge")
+└── RedirectResponse to Main branch
+```
+
+### 9. Thread Creation
+
+**Routes**:
+- `POST /project/{project_id}/threads/create`
+- `GET /project/{project_id}/threads/new`
+
+**Code Flow**:
+```python
+create_thread()
+├── Derive title from context (file/dataset)
+├── Create Thread record
+├── add_version() for audit
+├── Optional: Return JSON for API
+└── RedirectResponse to thread view
+```
+
+### 10. Navigation & UI State
+
+**Tab System**:
+- Left pane tabs: Branches, Threads, Files, Databases, Notes
+- Right pane tabs: Upload, Files, All Chats, Code
+- Tab activation via JavaScript: `activateTab()`
+
+**Query Parameters**:
+- `project_id` - Current project
+- `branch_id` - Current branch
+- `thread_id` - Selected thread
+- `file_id` - Selected file
+- `dataset_id` - Selected dataset
+- `msg` - Status message
+
 ## Complete Directory Structure
 
 ### Root Level Files
