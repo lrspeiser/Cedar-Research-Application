@@ -15,12 +15,12 @@ from fastapi import Request, Depends
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
-from ..db_utils import ensure_project_initialized, _get_project_engine
+from ..db_utils import ensure_project_initialized, _get_project_engine, get_project_db
 from main_models import (
     Project, Branch, FileEntry, Note
 )
 from main_helpers import (
-    current_branch, branch_filter_ids, get_project_db
+    current_branch, branch_filter_ids
 )
 
 

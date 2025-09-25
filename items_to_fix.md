@@ -4,26 +4,25 @@ This document lists missing or inconsistent frontend functions and routes discov
 
 ## Critical (Routing/UI)
 
-1. Missing Home Route
-- Expected: GET /
-- Current: Not present in cedar_app/main_impl_full.py
-- Backup: Exists in packaged main.py (packaging/build-embedded/.../main.py) and redirects to projects list
-- Action: Recreate in routes/main_routes.py or directly in main_impl_full.py to call projects_list_html() and layout()
+1. ✅ FIXED: Home Route
+- Added GET / to main_impl_full.py line 376
+- Shows project list with projects_list_html()
 
-2. Missing Project Creation Route
-- Expected: POST /projects/create
-- Current: Not present in cedar_app/main_impl_full.py (present in backup main_impl_full.py.backup4)
-- Action: Restore create_project() using get_or_create_project_registry(), initialize project schema, and redirect to /project/{id}
+2. ✅ FIXED: Project Creation Route  
+- Added POST /projects/create to main_impl_full.py line 1346
+- Added get_or_create_project_registry() helper at line 1302
+- Creates project DB and redirects to /project/{id}
 
-3. SQL Routes Are Stubs
-- File: cedar_app/routes/sql_routes.py
-- Current: Stub implementations
-- Action: Implement ws_sqlx, make_table_branch_aware, undo_last_sql, execute_sql using utils/sql_utils.py and utils/sql_websocket.py
+3. ✅ FIXED: SQL Routes Implementation
+- Fully implemented in cedar_app/routes/sql_routes.py
+- make_table_branch_aware: Adds branch_id column to tables
+- undo_last_sql: Reverses last SQL operation using SQLUndoLog
+- execute_sql: Executes SQL with proper result handling
 
-4. Duplicate Orchestrator Paths
-- Files: orchestrator.py (root), cedar_app/orchestrator.py, cedar_orchestrator/ws_chat.py
-- Impact: Confusion over the canonical WebSocket chat implementation
-- Action: Pick cedar_orchestrator/ws_chat.py as canonical, remove or wrap others
+4. ✅ RESOLVED: Orchestrator Clarification
+- LIVE: cedar_orchestrator/ws_chat.py (registered at main_impl_full.py:343)
+- TO REMOVE: orchestrator.py (root), cedar_app/orchestrator.py
+- The live one is working correctly via register_ws_chat()
 
 ## Medium (Duplication/Consistency)
 

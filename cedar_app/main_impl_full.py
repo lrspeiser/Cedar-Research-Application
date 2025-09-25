@@ -373,6 +373,13 @@ def _cedarpy_startup_llm_probe():
 
 
 
+@app.get("/", response_class=HTMLResponse)
+def home(request: Request, db: Session = Depends(get_registry_db)):
+    """Home page showing list of all projects."""
+    projects = db.query(Project).order_by(Project.created_at.desc()).all()
+    return layout("Cedar", projects_list_html(projects), header_label="All Projects")
+
+
 @app.get("/settings", response_class=HTMLResponse)
 def settings_page(msg: Optional[str] = None):
     return _settings_page(
@@ -1290,6 +1297,95 @@ def merge_project_view(project_id: int, db: Session = Depends(get_project_db)):
       </div>
     """
     return layout(f"Merge • {project.title}", body, header_label=project.title, header_link=f"/project/{project.id}?branch_id={main_b.id}", nav_query=f"project_id={project.id}&branch_id={main_b.id}")
+
+
+def get_or_create_project_registry(db: Session, title: str) -> Project:
+    """Idempotent create by title.
+    - SQLite: use INSERT .. ON CONFLICT DO NOTHING, then SELECT
+    - Fallback: SELECT first, else create
+    """
+    from main_helpers import ensure_main_branch
+    t = (title or "").strip()
+    if not t:
+        raise ValueError("empty title")
+    # Try SQLite upsert
+    try:
+        if registry_engine.dialect.name == "sqlite":
+            try:
+                from sqlalchemy.dialects.sqlite import insert as sqlite_insert  # type: ignore
+            except Exception:
+                sqlite_insert = None  # type: ignore
+            if sqlite_insert is not None:
+                stmt = sqlite_insert(Project).values(title=t)
+                stmt = stmt.on_conflict_do_nothing(index_elements=[Project.title])
+                db.execute(stmt)
+                db.commit()
+                existing = db.query(Project).filter(Project.title == t).first()
+                if existing:
+                    return existing
+    except Exception:
+        pass
+    # Generic fallback (race-safe enough for CI; on conflict we query after rollback)
+    existing = db.query(Project).filter(Project.title == t).first()
+    if existing:
+        return existing
+    p = Project(title=t)
+    db.add(p)
+    try:
+        db.commit()
+        db.refresh(p)
+        return p
+    except Exception:
+        db.rollback()
+        existing = db.query(Project).filter(Project.title == t).first()
+        if existing:
+            return existing
+        raise
+
+
+@app.post("/projects/create")
+def create_project(title: str = Form(...), db: Session = Depends(get_registry_db)):
+    """Create a new project."""
+    from main_helpers import ensure_main_branch, add_version
+    title = title.strip()
+    if not title:
+        return RedirectResponse("/", status_code=303)
+    # create or get existing project in registry
+    p = get_or_create_project_registry(db, title)
+    add_version(db, "project", p.id, {"title": p.title})
+
+    # Initialize per-project DB schema and seed project + Main branch
+    try:
+        eng = _get_project_engine(p.id)
+        Base.metadata.create_all(eng)
+        SessionLocal = sessionmaker(bind=eng, autoflush=False, autocommit=False, future=True)
+        pdb = SessionLocal()
+        try:
+            # Insert the project row in the project DB with the same ID
+            if not pdb.query(Project).filter(Project.id == p.id).first():
+                pdb.add(Project(id=p.id, title=p.title))
+                pdb.commit()
+            ensure_main_branch(pdb, p.id)
+        finally:
+            pdb.close()
+        _ensure_project_storage(p.id)
+        print(f"[create-project] Successfully initialized project {p.id} DB with tables")
+    except Exception as e:
+        print(f"[create-project-error] Failed to initialize project {p.id} DB: {type(e).__name__}: {e}")
+        # Still redirect but project may be broken
+        pass
+
+    # Redirect into the new project's Main branch
+    # Open per-project DB to get Main ID again (safe)
+    try:
+        eng = _get_project_engine(p.id)
+        SessionLocal = sessionmaker(bind=eng, autoflush=False, autocommit=False, future=True)
+        with SessionLocal() as pdb:
+            main = ensure_main_branch(pdb, p.id)
+            main_id = main.id
+    except Exception:
+        main_id = 1
+    return RedirectResponse(f"/project/{p.id}?branch_id={main_id}", status_code=303)
 
 
 @app.get("/project/{project_id}", response_class=HTMLResponse)
