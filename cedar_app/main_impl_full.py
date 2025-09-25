@@ -195,7 +195,7 @@ from cedar_app.changelog_utils import (
 )
 
 # Import route handlers
-from cedar_app.routes import (
+from cedar_app.api_routes import (
     settings_page as _settings_page,
     settings_save as _settings_save,
     api_model_change as _api_model_change,
