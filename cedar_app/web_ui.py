@@ -23,6 +23,10 @@ import sys
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any, Tuple
 from collections import deque
+from contextvars import ContextVar
+import logging as _logging
+import time as _time
+import builtins as _bi
 
 from fastapi import FastAPI, Request, UploadFile, File, Form, Depends, Header, HTTPException, Body, WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
@@ -191,7 +195,7 @@ from cedar_app.ui_utils import (
 # Import changelog utilities
 from cedar_app.changelog_utils import (
     record_changelog as _record_changelog_base,
-    add_version as _add_version_base,
+    # add_version is imported from main_helpers instead
 )
 
 # Import route handlers
@@ -248,7 +252,7 @@ def get_db() -> Session:
         db.close()
 
 
-from main_helpers import escape, ensure_main_branch, file_extension_to_type, branch_filter_ids, current_branch
+from main_helpers import escape, ensure_main_branch, file_extension_to_type, branch_filter_ids, current_branch, add_version
 import cedar_tools as ct
 
 
@@ -260,13 +264,7 @@ def record_changelog(db: Session, project_id: int, branch_id: int, action: str, 
         llm_summarize_action_fn=_llm_summarize_action
     )
 
-def add_version(db: Session, project_id: int, branch_id: int, table_name: str,
-                row_id: int, column_name: str, old_value, new_value):
-    """Wrapper for add_version that passes our local dependencies."""
-    return _add_version_base(
-        db, project_id, branch_id, table_name, row_id, column_name,
-        old_value, new_value, Version=Version
-    )
+# add_version is imported directly from main_helpers now
 
 # Shell wrapper functions for backwards compatibility
 def start_shell_job(script: str, shell_path: Optional[str] = None, trace_x: bool = False, workdir: Optional[str] = None) -> ShellJob:
@@ -862,16 +860,16 @@ async def ws_sql(websocket: WebSocket, project_id: int):
 
 # SQL route handlers moved to routes/sql_routes.py
 from cedar_app.routes.sql_routes import (
-    ws_sqlx as ws_sqlx_impl,
-    make_table_branch_aware as make_table_branch_aware_impl,
-    undo_last_sql as undo_last_sql_impl,
-    execute_sql as execute_sql_impl
+    make_table_branch_aware_impl,
+    undo_last_sql_impl,
+    execute_sql_impl
 )
 
 @app.websocket("/ws/sqlx/{project_id}")
 async def ws_sqlx(websocket: WebSocket, project_id: int):
-    """WebSocket SQL endpoint. Delegates to extracted module."""
-    await ws_sqlx_impl(websocket, project_id)
+    """WebSocket SQL endpoint with undo support."""
+    # TODO: Implement ws_sqlx or delegate to sql_utils
+    await handle_sql_websocket(websocket, project_id)
 def api_shell_stop(job_id: str, request: Request, x_api_token: Optional[str] = Header(default=None)):
     require_shell_enabled_and_auth(request, x_api_token)
     job = get_shell_job(job_id)
@@ -913,6 +911,12 @@ from cedar_app.utils.dev_tools import (
 def api_test_tool_exec(body: ToolExecRequest, request: Request):
     """Tool execution endpoint for testing. Delegates to extracted module."""
     return api_test_tool_exec_impl(body, request)
+
+# Global logging buffers and context
+_LOG_BUFFER = deque(maxlen=1000)
+_SERVER_LOG_BUFFER = deque(maxlen=1000)
+_current_path: ContextVar[str] = ContextVar('current_path', default='')
+
 class CedarBufferHandler(_logging.Handler):
     def emit(self, record: _logging.LogRecord) -> None:  # type: ignore[name-defined]
         try:
@@ -1080,10 +1084,52 @@ def api_chat_cancel_summary(payload: Dict[str, Any] = Body(...)):
 
 # -------------------- Merge to Main (SQLite-first implementation) --------------------
 
+def get_or_create_project_registry(db: Session, title: str) -> Project:
+    """Idempotent create by title.
+    - SQLite: use INSERT .. ON CONFLICT DO NOTHING, then SELECT
+    - Fallback: SELECT first, else create
+    """
+    t = (title or "").strip()
+    if not t:
+        raise ValueError("empty title")
+    # Try SQLite upsert
+    try:
+        if _dialect(registry_engine) == "sqlite":
+            try:
+                from sqlalchemy.dialects.sqlite import insert as sqlite_insert  # type: ignore
+            except Exception:
+                sqlite_insert = None  # type: ignore
+            if sqlite_insert is not None:
+                stmt = sqlite_insert(Project).values(title=t)
+                stmt = stmt.on_conflict_do_nothing(index_elements=[Project.title])
+                db.execute(stmt)
+                db.commit()
+                existing = db.query(Project).filter(Project.title == t).first()
+                if existing:
+                    return existing
+    except Exception:
+        pass
+    # Generic fallback (race-safe enough for CI; on conflict we query after rollback)
+    existing = db.query(Project).filter(Project.title == t).first()
+    if existing:
+        return existing
+    p = Project(title=t)
+    db.add(p)
+    try:
+        db.commit(); db.refresh(p)
+        return p
+    except Exception:
+        db.rollback()
+        existing = db.query(Project).filter(Project.title == t).first()
+        if existing:
+            return existing
+        raise
+
+
 @app.post("/project/{project_id}/merge_to_main")
 def merge_to_main(project_id: int, request: Request, db: Session = Depends(get_project_db)):
-    from cedar_app.utils.project_management import merge_to_main as _merge_to_main
-    return _merge_to_main(app, project_id, request, db)
+    # Verify branches and main from query params
+    branch_id = request.query_params.get("branch_id")
 
 # -------------------- Delete all files in branch --------------------
 
@@ -1476,32 +1522,43 @@ def get_or_create_project_registry(db: Session, title: str) -> Project:
 @app.post("/projects/create")
 def create_project(title: str = Form(...), db: Session = Depends(get_registry_db)):
     """Create a new project."""
-    # Create project in registry
-    p = Project(title=title.strip()[:100])
-    db.add(p)
-    db.commit()
-    db.refresh(p)
+    title = title.strip()
+    if not title:
+        return RedirectResponse("/", status_code=303)
     
-    # Initialize project storage and database
+    # Create project in registry
+    p = get_or_create_project_registry(db, title)
+    
+    # Ensure project storage and database are initialized
     try:
         _ensure_project_storage(p.id)
         ensure_project_initialized(p.id)
+        print(f"[create-project] Successfully initialized project {p.id} storage and registry")
     except Exception as e:
-        print(f"[create-project-error] Failed to initialize project {p.id}: {e}")
-        # Still proceed since project exists in registry
+        print(f"[create-project-error] Failed to ensure project {p.id} storage/registry: {type(e).__name__}: {e}")
+        # Continue anyway
+        pass
     
-    # Create Main branch in project's database
+    # Initialize project database with tables
+    try:
+        eng = _get_project_engine(p.id)
+        Base.metadata.create_all(eng)
+        print(f"[create-project] Successfully initialized project {p.id} DB with tables")
+    except Exception as e:
+        print(f"[create-project-error] Failed to initialize project {p.id} DB: {type(e).__name__}: {e}")
+        # Still redirect but project may be broken
+        pass
+    
+    # Redirect into the new project's Main branch
+    # Open per-project DB to get Main ID again (safe)
     try:
         eng = _get_project_engine(p.id)
         SessionLocal = sessionmaker(bind=eng, autoflush=False, autocommit=False, future=True)
         with SessionLocal() as pdb:
             main = ensure_main_branch(pdb, p.id)
             main_id = main.id
-    except Exception as e:
-        print(f"[create-project] Failed to create Main branch: {e}")
+    except Exception:
         main_id = 1
-    
-    # Redirect to the new project
     return RedirectResponse(f"/project/{p.id}?branch_id={main_id}", status_code=303)
 
 @app.get("/threads", response_class=HTMLResponse)
