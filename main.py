@@ -1,12 +1,12 @@
 """
 main.py (orchestrator)
 
-This thin module delegates the full application implementation to cedar_app.web_ui.
+This thin module delegates the full application implementation to cedar_app.main_impl_full.
 It exists to keep the entrypoint stable (main:app) while moving the heavy code into a separate
 module so this file stays small (< 1000 lines) and only coordinates top-level wiring.
 
 Notes:
-- The previous full implementation has been moved to cedar_app/web_ui.py
+- The previous full implementation has been copied to cedar_app/main_impl_full.py (active)
 - Backup snapshots of the original main.py are stored at main_backup_*.py
 - Packaging scripts that import main:app continue to work unchanged.
 
@@ -20,13 +20,13 @@ from __future__ import annotations
 import importlib
 
 try:
-    _impl = importlib.import_module('cedar_app.web_ui')
+    _impl = importlib.import_module('cedar_app.main_impl_full')
     # Force a reload so per-test environment changes (e.g., CEDARPY_* vars) take effect.
     _impl = importlib.reload(_impl)
     app = getattr(_impl, 'app')  # FastAPI instance
 except Exception as e:
     # Provide a clear import-time error if the implementation module is missing
-    raise RuntimeError(f"Failed to import cedar_app.web_ui: {type(e).__name__}: {e}")
+    raise RuntimeError(f"Failed to import cedar_app.main_impl_full: {type(e).__name__}: {e}")
 
 # Optional: re-export commonly used functions/objects to preserve backwards-compat usage across the codebase
 # without forcing immediate refactors. If you want stricter encapsulation, narrow this list over time.
