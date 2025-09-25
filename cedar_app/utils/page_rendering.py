@@ -827,7 +827,7 @@ SELECT * FROM demo LIMIT 10;""")
               contM.innerHTML = textContent
                 .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
                 .replace(/_([^_]+)_/g, '<em>$1</em>')
-                .replace(/\n/g, '<br>');
+                .replace(/\\n/g, '<br>');
             } else {
               contM.textContent = textContent;
             }
@@ -897,7 +897,7 @@ SELECT * FROM demo LIMIT 10;""")
             
             // Extract just the Answer part for collapsed view
             var answerMatch = fullText.match(/Answer:\\s*([^\\n]+(?:\\n(?!\\n|Why:|Potential Issues:|Suggested Next Steps:)[^\\n]+)*)/);
-            var collapsedText = answerMatch ? answerMatch[1].trim() : fullText.split('\n')[0];
+            var collapsedText = answerMatch ? answerMatch[1].trim() : fullText.split('\\n')[0];
             
             // Create unique ID for collapsible details
             var detailId = 'agent_det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
