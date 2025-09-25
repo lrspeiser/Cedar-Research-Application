@@ -865,7 +865,7 @@ SELECT * FROM demo LIMIT 10;""")
             var fullText = m.text || '';
             
             // Extract just the Answer part for collapsed view
-            var answerMatch = fullText.match(/Answer:\s*([^\n]+(?:\n(?!\n|Why:|Potential Issues:|Suggested Next Steps:)[^\n]+)*)/);
+            var answerMatch = fullText.match(/Answer:\\s*([^\\n]+(?:\\n(?!\\n|Why:|Potential Issues:|Suggested Next Steps:)[^\\n]+)*)/);
             var collapsedText = answerMatch ? answerMatch[1].trim() : fullText.split('\n')[0];
             
             // Create unique ID for collapsible details
