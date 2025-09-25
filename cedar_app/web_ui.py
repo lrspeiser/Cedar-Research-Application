@@ -1522,44 +1522,60 @@ def get_or_create_project_registry(db: Session, title: str) -> Project:
 @app.post("/projects/create")
 def create_project(title: str = Form(...), db: Session = Depends(get_registry_db)):
     """Create a new project."""
-    title = title.strip()
-    if not title:
-        return RedirectResponse("/", status_code=303)
-    
-    # Create project in registry
-    p = get_or_create_project_registry(db, title)
-    
-    # Ensure project storage and database are initialized
     try:
-        _ensure_project_storage(p.id)
-        ensure_project_initialized(p.id)
-        print(f"[create-project] Successfully initialized project {p.id} storage and registry")
+        print(f"[create-project-debug] Starting project creation with title: '{title}'")
+        title = title.strip()
+        if not title:
+            print("[create-project-debug] Empty title, redirecting to /")
+            return RedirectResponse("/", status_code=303)
+        
+        # Create project in registry
+        print(f"[create-project-debug] Calling get_or_create_project_registry with title: '{title}'")
+        p = get_or_create_project_registry(db, title)
+        print(f"[create-project-debug] Created/got project with ID: {p.id}")
+        
+        # Ensure project storage and database are initialized
+        try:
+            _ensure_project_storage(p.id)
+            ensure_project_initialized(p.id)
+            print(f"[create-project] Successfully initialized project {p.id} storage and registry")
+        except Exception as e:
+            print(f"[create-project-error] Failed to ensure project {p.id} storage/registry: {type(e).__name__}: {e}")
+            # Continue anyway
+            pass
+        
+        # Initialize project database with tables
+        try:
+            eng = _get_project_engine(p.id)
+            Base.metadata.create_all(eng)
+            print(f"[create-project] Successfully initialized project {p.id} DB with tables")
+        except Exception as e:
+            print(f"[create-project-error] Failed to initialize project {p.id} DB: {type(e).__name__}: {e}")
+            # Still redirect but project may be broken
+            pass
+        
+        # Redirect into the new project's Main branch
+        # Open per-project DB to get Main ID again (safe)
+        try:
+            eng = _get_project_engine(p.id)
+            SessionLocal = sessionmaker(bind=eng, autoflush=False, autocommit=False, future=True)
+            with SessionLocal() as pdb:
+                main = ensure_main_branch(pdb, p.id)
+                main_id = main.id
+        except Exception as e:
+            print(f"[create-project-debug] Error getting main branch: {e}")
+            main_id = 1
+        
+        print(f"[create-project-debug] Redirecting to /project/{p.id}?branch_id={main_id}")
+        return RedirectResponse(f"/project/{p.id}?branch_id={main_id}", status_code=303)
     except Exception as e:
-        print(f"[create-project-error] Failed to ensure project {p.id} storage/registry: {type(e).__name__}: {e}")
-        # Continue anyway
-        pass
-    
-    # Initialize project database with tables
-    try:
-        eng = _get_project_engine(p.id)
-        Base.metadata.create_all(eng)
-        print(f"[create-project] Successfully initialized project {p.id} DB with tables")
-    except Exception as e:
-        print(f"[create-project-error] Failed to initialize project {p.id} DB: {type(e).__name__}: {e}")
-        # Still redirect but project may be broken
-        pass
-    
-    # Redirect into the new project's Main branch
-    # Open per-project DB to get Main ID again (safe)
-    try:
-        eng = _get_project_engine(p.id)
-        SessionLocal = sessionmaker(bind=eng, autoflush=False, autocommit=False, future=True)
-        with SessionLocal() as pdb:
-            main = ensure_main_branch(pdb, p.id)
-            main_id = main.id
-    except Exception:
-        main_id = 1
-    return RedirectResponse(f"/project/{p.id}?branch_id={main_id}", status_code=303)
+        import traceback
+        print(f"[create-project-error] Unhandled exception: {e}")
+        traceback.print_exc()
+        # Return a more informative error
+        from fastapi.responses import HTMLResponse
+        import html
+        return HTMLResponse(f"<h1>Error Creating Project</h1><pre>{html.escape(str(e))}</pre><p><a href='/'>Back to Projects</a></p>", status_code=500)
 
 @app.get("/threads", response_class=HTMLResponse)
 def threads_index(project_id: Optional[int] = None, branch_id: Optional[int] = None):
