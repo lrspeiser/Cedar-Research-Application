@@ -47,6 +47,7 @@ from cedar_app.config import (
     PROJECTS_ROOT,
     REGISTRY_DATABASE_URL,
     LEGACY_UPLOAD_DIR,
+    _default_legacy_dir,
     SHELL_API_ENABLED,
     SHELL_API_TOKEN,
     LOGS_DIR,
@@ -63,279 +64,33 @@ from main_helpers import _get_redis, _publish_relay_event
 # - Per-project: dynamic engine selected per request/project
 # ----------------------------------------------------------------------------------
 
-engeine_kwargs_typo_guard = None
-_engine_kwargs_base = dict(pool_pre_ping=True, future=True)
-
-# Central registry engine
-_registry_engine_kwargs = dict(**_engine_kwargs_base)
-if REGISTRY_DATABASE_URL.startswith("sqlite"):
-    _registry_engine_kwargs["connect_args"] = {"check_same_thread": False}
-registry_engine = create_engine(REGISTRY_DATABASE_URL, **_registry_engine_kwargs)
-RegistrySessionLocal = sessionmaker(bind=registry_engine, autoflush=False, autocommit=False, future=True)
+from cedar_app.db_utils import (
+    registry_engine,
+    RegistrySessionLocal,
+    _project_dirs,
+    _ensure_project_storage,
+    _get_project_engine,
+    get_registry_db,
+    get_project_db,
+    save_thread_snapshot,
+    ensure_project_initialized,
+    _migrate_project_files_ai_columns,
+    _migrate_thread_messages_columns,
+    _migrate_project_langextract_tables,
+)
 from main_models import Base, Project, Branch, Thread, ThreadMessage, FileEntry, Dataset, Setting, Version, ChangelogEntry, SQLUndoLog, Note
 
-# Per-project engine cache
-_project_engines: Dict[int, Any] = {}
-_project_engines_lock = threading.Lock()
-
-def _project_dirs(project_id: int) -> Dict[str, str]:
-    base = os.path.join(PROJECTS_ROOT, str(project_id))
-    db_path = os.path.join(base, "database.db")
-    files_root = os.path.join(base, "files")
-    threads_root = os.path.join(base, "threads")
-    return {"base": base, "db_path": db_path, "files_root": files_root, "threads_root": threads_root}
 
 
-def _ensure_project_storage(project_id: int) -> None:
-    paths = _project_dirs(project_id)
-    os.makedirs(paths["base"], exist_ok=True)
-    os.makedirs(paths["files_root"], exist_ok=True)
-    os.makedirs(paths.get("threads_root") or os.path.join(paths["base"], "threads"), exist_ok=True)
 
 
-def _get_project_engine(project_id: int):
-    # See PROJECT_SEPARATION_README.md for architecture details
-    with _project_engines_lock:
-        eng = _project_engines.get(project_id)
-        if eng is not None:
-            return eng
-        paths = _project_dirs(project_id)
-        os.makedirs(os.path.dirname(paths["db_path"]), exist_ok=True)
-        kwargs = dict(**_engine_kwargs_base)
-        # SQLite per project
-        kwargs["connect_args"] = {"check_same_thread": False}
-        eng = create_engine(f"sqlite:///{paths['db_path']}", **kwargs)
-        _project_engines[project_id] = eng
-        return eng
 
 
-def get_registry_db() -> Session:
-    db = RegistrySessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 
-def get_project_db(project_id: int) -> Session:
-    engine = _get_project_engine(project_id)
-    SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 
-def save_thread_snapshot(project_id: int, thread_id: int) -> Optional[str]:
-    """Write a JSON snapshot of a thread's session (metadata + messages) to threads_root.
-    Returns the absolute path of the snapshot on success, else None.
-    """
-    try:
-        _ensure_project_storage(project_id)
-        paths = _project_dirs(project_id)
-        out_dir = paths.get("threads_root") or os.path.join(paths["base"], "threads")
-        os.makedirs(out_dir, exist_ok=True)
-        SessionLocal = sessionmaker(bind=_get_project_engine(project_id), autoflush=False, autocommit=False, future=True)
-        db = SessionLocal()
-        try:
-            thr = db.query(Thread).filter(Thread.id==int(thread_id), Thread.project_id==project_id).first()
-            if not thr:
-                return None
-            msgs = db.query(ThreadMessage).filter(ThreadMessage.project_id==project_id, ThreadMessage.thread_id==thread_id).order_by(ThreadMessage.created_at.asc()).all()
-            out = {
-                "project_id": project_id,
-                "thread_id": int(thread_id),
-                "branch_id": getattr(thr, 'branch_id', None),
-                "title": getattr(thr, 'title', None),
-                "created_at": (thr.created_at.isoformat()+"Z") if getattr(thr, 'created_at', None) else None,
-                "messages": []
-            }
-            for m in msgs:
-                try:
-                    out["messages"].append({
-                        "role": m.role,
-                        "title": getattr(m, 'display_title', None),
-                        "content": m.content,
-                        "payload": getattr(m, 'payload_json', None),
-                        "created_at": (m.created_at.isoformat()+"Z") if getattr(m, 'created_at', None) else None,
-                    })
-                except Exception:
-                    pass
-            abs_path = os.path.abspath(os.path.join(out_dir, f"thread_{int(thread_id)}.json"))
-            tmp_path = abs_path + ".tmp"
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                json.dump(out, f, ensure_ascii=False, indent=2)
-            os.replace(tmp_path, abs_path)
-            try:
-                print(f"[thread-snapshot] wrote {abs_path}")
-            except Exception:
-                pass
-            return abs_path
-        finally:
-            try: db.close()
-            except Exception: pass
-    except Exception as e:
-        try:
-            print(f"[thread-snapshot-error] {type(e).__name__}: {e}")
-        except Exception:
-            pass
-        return None
 
-
-def _migrate_project_files_ai_columns(engine_obj):
-    try:
-        with engine_obj.begin() as conn:
-            if engine_obj.dialect.name == "sqlite":
-                res = conn.exec_driver_sql("PRAGMA table_info(files)")
-                cols = [row[1] for row in res.fetchall()]
-                if "ai_title" not in cols:
-                    conn.exec_driver_sql("ALTER TABLE files ADD COLUMN ai_title TEXT")
-                if "ai_description" not in cols:
-                    conn.exec_driver_sql("ALTER TABLE files ADD COLUMN ai_description TEXT")
-                if "ai_category" not in cols:
-                    conn.exec_driver_sql("ALTER TABLE files ADD COLUMN ai_category TEXT")
-                if "ai_processing" not in cols:
-                    conn.exec_driver_sql("ALTER TABLE files ADD COLUMN ai_processing INTEGER DEFAULT 0")
-            elif engine_obj.dialect.name == "mysql":
-                conn.exec_driver_sql("ALTER TABLE files ADD COLUMN IF NOT EXISTS ai_title VARCHAR(255)")
-                conn.exec_driver_sql("ALTER TABLE files ADD COLUMN IF NOT EXISTS ai_description TEXT")
-                conn.exec_driver_sql("ALTER TABLE files ADD COLUMN IF NOT EXISTS ai_category VARCHAR(255)")
-                conn.exec_driver_sql("ALTER TABLE files ADD COLUMN IF NOT EXISTS ai_processing TINYINT(1) DEFAULT 0")
-            else:
-                try:
-                    conn.exec_driver_sql("ALTER TABLE files ADD COLUMN ai_processing BOOLEAN DEFAULT 0")
-                except Exception:
-                    pass
-    except Exception:
-        pass
-
-
-def _migrate_thread_messages_columns(engine_obj):
-    try:
-        with engine_obj.begin() as conn:
-            if engine_obj.dialect.name == "sqlite":
-                res = conn.exec_driver_sql("PRAGMA table_info(thread_messages)")
-                cols = [row[1] for row in res.fetchall()]
-                if "display_title" not in cols:
-                    conn.exec_driver_sql("ALTER TABLE thread_messages ADD COLUMN display_title TEXT")
-                if "payload_json" not in cols:
-                    conn.exec_driver_sql("ALTER TABLE thread_messages ADD COLUMN payload_json JSON")
-            elif engine_obj.dialect.name == "mysql":
-                conn.exec_driver_sql("ALTER TABLE thread_messages ADD COLUMN IF NOT EXISTS display_title VARCHAR(255)")
-                conn.exec_driver_sql("ALTER TABLE thread_messages ADD COLUMN IF NOT EXISTS payload_json JSON")
-    except Exception:
-        pass
-
-
-def _migrate_project_langextract_tables(engine_obj):
-    """Create per-project tables for LangExtract chunk storage and FTS.
-    Best-effort; ignore errors if unavailable.
-    """
-    try:
-        with engine_obj.begin() as conn:
-            # doc_chunks base table
-            conn.exec_driver_sql(
-                """
-                CREATE TABLE IF NOT EXISTS doc_chunks (
-                  id TEXT PRIMARY KEY,
-                  file_id INTEGER NOT NULL,
-                  char_start INTEGER NOT NULL,
-                  char_end INTEGER NOT NULL,
-                  text TEXT NOT NULL,
-                  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                  UNIQUE(file_id, char_start, char_end)
-                )
-                """
-            )
-            # doc_chunks_fts
-            conn.exec_driver_sql(
-                """
-                CREATE VIRTUAL TABLE IF NOT EXISTS doc_chunks_fts USING fts5(
-                  chunk_id UNINDEXED,
-                  file_id UNINDEXED,
-                  text,
-                  tokenize = 'porter'
-                )
-                """
-            )
-            # Triggers (guard if they already exist)
-            def _tr_exists(name: str) -> bool:
-                res = conn.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='trigger' AND name=?", (name,))
-                return res.fetchone() is not None
-            if not _tr_exists("doc_chunks_ai"):
-                conn.exec_driver_sql(
-                    """
-                    CREATE TRIGGER doc_chunks_ai AFTER INSERT ON doc_chunks BEGIN
-                      INSERT INTO doc_chunks_fts(rowid, chunk_id, file_id, text)
-                      VALUES (new.rowid, new.id, new.file_id, new.text);
-                    END;
-                    """
-                )
-            if not _tr_exists("doc_chunks_ad"):
-                conn.exec_driver_sql(
-                    """
-                    CREATE TRIGGER doc_chunks_ad AFTER DELETE ON doc_chunks BEGIN
-                      INSERT INTO doc_chunks_fts(doc_chunks_fts, rowid, chunk_id, file_id, text)
-                      VALUES ('delete', old.rowid, old.id, old.file_id, old.text);
-                    END;
-                    """
-                )
-            if not _tr_exists("doc_chunks_au"):
-                conn.exec_driver_sql(
-                    """
-                    CREATE TRIGGER doc_chunks_au AFTER UPDATE ON doc_chunks BEGIN
-                      INSERT INTO doc_chunks_fts(doc_chunks_fts, rowid, chunk_id, file_id, text)
-                      VALUES ('delete', old.rowid, old.id, old.file_id, old.text);
-                      INSERT INTO doc_chunks_fts(rowid, chunk_id, file_id, text)
-                      VALUES (new.rowid, new.id, new.file_id, new.text);
-                    END;
-                    """
-                )
-    except Exception:
-        pass
-
-def ensure_project_initialized(project_id: int) -> None:
-    """Ensure the per-project database and storage exist and are seeded.
-    See PROJECT_SEPARATION_README.md
-    """
-    try:
-        eng = _get_project_engine(project_id)
-        # Create all tables for this project DB
-        Base.metadata.create_all(eng)
-        print(f"[ensure-project] Created tables for project {project_id}")
-        # Lightweight migrations for this project DB
-        _migrate_project_files_ai_columns(eng)
-        _migrate_thread_messages_columns(eng)
-        _migrate_project_langextract_tables(eng)
-        # Seed project row and Main branch if missing
-        SessionLocal = sessionmaker(bind=eng, autoflush=False, autocommit=False, future=True)
-        pdb = SessionLocal()
-        try:
-            proj = pdb.query(Project).filter(Project.id == project_id).first()
-            if not proj:
-                title = None
-                try:
-                    # Look up title in registry
-                    with RegistrySessionLocal() as reg:
-                        reg_proj = reg.query(Project).filter(Project.id == project_id).first()
-                        title = getattr(reg_proj, "title", None)
-                except Exception:
-                    title = None
-                title = title or f"Project {project_id}"
-                pdb.add(Project(id=project_id, title=title))
-                pdb.commit()
-                print(f"[ensure-project] Added project row for {project_id}")
-            ensure_main_branch(pdb, project_id)
-        finally:
-            pdb.close()
-        _ensure_project_storage(project_id)
-        _migrate_project_files_ai_columns(eng)
-        _migrate_thread_messages_columns(eng)
-        _migrate_project_langextract_tables(eng)
-    except Exception as e:
-        print(f"[ensure-project-error] Failed to initialize project {project_id}: {type(e).__name__}: {e}")
-        raise  # Re-raise to surface the error
 
 # ----------------------------------------------------------------------------------
 # Models
@@ -403,711 +158,64 @@ except Exception:
 # Utilities
 # ----------------------------------------------------------------------------------
 
-# LLM classification utilities (See README: "LLM classification on file upload")
-# When calling web services, configure keys via env. Do not hardcode secrets.
-# See README for setup and troubleshooting; verbose logs are emitted on error.
-# IMPORTANT (packaged app): keys are loaded from ~/CedarPyData/.env; see README: "Where to put your OpenAI key (.env) when packaged"
-# and Postmortem #7 "LLM key missing when launching the packaged app (Qt DMG)".
-# Also see README section "Tabular import via LLM codegen" for the second-stage processing when structure == 'tabular'.
-# CI note: CEDARPY_TEST_MODE enables a deterministic stub client; see README: "CI test mode (deterministic LLM stubs)".
+# Import LLM utilities from the dedicated module
+from cedar_app.llm_utils import (
+    llm_client_config as _llm_client_config,
+    llm_classify_file as _llm_classify_file,
+    llm_summarize_action as _llm_summarize_action,
+    llm_dataset_friendly_name as _llm_dataset_friendly_name,
+    snake_case as _snake_case,
+    suggest_table_name as _suggest_table_name,
+    extract_code_from_markdown as _extract_code_from_markdown,
+    tabular_import_via_llm as _tabular_import_via_llm_base,
+)
 
-def _llm_client_config():
-    """
-    Returns (client, model) if OpenAI SDK is available and a key is configured.
-    Looks up key from env first, then falls back to the user settings file via _env_get.
+# Import file processing utilities
+from cedar_app.file_utils import (
+    is_probably_text as _is_probably_text,
+    interpret_file,
+)
 
-    CI/Test mode: if CEDARPY_TEST_MODE is truthy, returns a stub client that emits
-    deterministic JSON (no network calls). See README: "CI test mode (deterministic LLM stubs)".
-    """
-    # Test-mode stub (no external calls). Enabled in CI and auto-enabled under pytest/Playwright unless explicitly disabled.
-    try:
-        _test_mode = str(os.getenv("CEDARPY_TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "on"}
-        if not _test_mode:
-            # Auto-detect test runners
-            if os.getenv("PYTEST_CURRENT_TEST") or os.getenv("PYTEST_ADDOPTS") or os.getenv("PW_TEST") or os.getenv("PLAYWRIGHT_BROWSERS_PATH"):
-                # Allow explicit override with CEDARPY_TEST_MODE=0
-                _explicit = str(os.getenv("CEDARPY_TEST_MODE", "")).strip().lower()
-                if _explicit not in {"0", "false", "no", "off"}:
-                    _test_mode = True
-    except Exception:
-        _test_mode = False
-    if _test_mode:
-        try:
-            print("[llm-test] CEDARPY_TEST_MODE=1; using stubbed LLM client")
-        except Exception:
-            pass
+# Import UI utilities
+from cedar_app.ui_utils import (
+    env_get as _env_get,
+    env_set_many as _env_set_many,
+    llm_reachability as _llm_reachability,
+    llm_reach_ok as _llm_reach_ok,
+    llm_reach_reason as _llm_reach_reason,
+    is_trivial_math as _is_trivial_math,
+    get_client_log_js as _get_client_log_js,
+    layout,
+)
 
-        class _StubMsg:
-            def __init__(self, content: str):
-                self.content = content
-        class _StubChoice:
-            def __init__(self, content: str):
-                self.message = _StubMsg(content)
-        class _StubResp:
-            def __init__(self, content: str):
-                self.choices = [_StubChoice(content)]
-        class _StubCompletions:
-            def create(self, model: str, messages: list):  # type: ignore[override]
-                # Inspect prompt to choose an appropriate deterministic JSON
-                try:
-                    joined = "\n".join([str((m or {}).get("content") or "") for m in (messages or [])])
-                except Exception:
-                    joined = ""
-                out = None
-                try:
-                    # Tabular import codegen stub: return valid Python code with run_import()
-                    if ("Generate the code now." in joined) or ("run_import(" in joined) or ("ONLY Python source code" in joined and "sqlite" in joined.lower()):
-                        code = '''\
-import csv, sqlite3, re, io
+# Import changelog utilities
+from cedar_app.changelog_utils import (
+    record_changelog as _record_changelog_base,
+    add_version as _add_version_base,
+)
 
-def _snake(s):
-    s = re.sub(r'[^0-9a-zA-Z]+', '_', str(s or '').strip()).strip('_').lower()
-    if not s:
-        s = 'col'
-    if s[0].isdigit():
-        s = 'c_' + s
-    return s
+# Import route handlers
+from cedar_app.routes import (
+    settings_page as _settings_page,
+    settings_save as _settings_save,
+    api_model_change as _api_model_change,
+    api_chat_ack as _api_chat_ack,
+    serve_project_upload as _serve_project_upload,
+)
 
-def run_import(src_path, sqlite_path, table_name, project_id, branch_id):
-    conn = sqlite3.connect(sqlite_path)
-    cur = conn.cursor()
-    # Drop/recreate table
-    cur.execute('DROP TABLE IF EXISTS ' + table_name)
-    # Inspect header
-    with open(src_path, newline='', encoding='utf-8') as f:
-        r = csv.reader(f)
-        header = next(r, None)
-        rows_buf = None
-        if header and len(header) > 0:
-            cols = [_snake(h) for h in header]
-        else:
-            # Peek first data row to decide width
-            row = next(r, None)
-            if row is None:
-                cols = ['col_1']
-                rows_buf = []
-            else:
-                n = max(1, len(row))
-                cols = ['col_' + str(i+1) for i in range(n)]
-                rows_buf = [row]
-        col_defs = ', '.join([c + ' TEXT' for c in cols])
-        cur.execute('CREATE TABLE IF NOT EXISTS ' + table_name + ' (id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER NOT NULL, branch_id INTEGER NOT NULL, ' + col_defs + ')')
-        placeholders = ','.join(['?'] * (2 + len(cols)))
-        insert_sql = 'INSERT INTO ' + table_name + ' (project_id, branch_id, ' + ','.join(cols) + ') VALUES (' + placeholders + ')'
-        ins = 0
-        if rows_buf is not None:
-            for row in rows_buf:
-                vals = [project_id, branch_id] + [ (row[i] if i < len(row) else None) for i in range(len(cols)) ]
-                cur.execute(insert_sql, vals)
-                ins += 1
-        for row in r:
-            vals = [project_id, branch_id] + [ (row[i] if i < len(row) else None) for i in range(len(cols)) ]
-            cur.execute(insert_sql, vals)
-            ins += 1
-    conn.commit(); conn.close()
-    return {"ok": True, "table": table_name, "rows_inserted": ins, "columns": cols, "warnings": []}
-'''
-                        return _StubResp(code)
-                    if "Classify incoming files" in joined or "Classify this file" in joined:
-                        # File classification stub
-                        out = {
-                            "structure": "sources",
-                            "ai_title": "Test File",
-                            "ai_description": "Deterministic test description",
-                            "ai_category": "General"
-                        }
-                        return _StubResp(json.dumps(out))
-                    if "Cedar's orchestrator" in joined or "Schema: { \"Text Visible To User\"" in joined:
-                        out = {
-                            "Text Visible To User": "Test mode: planning done; finalizing.",
-                            "function_calls": [
-                                {"name": "final", "args": {"text": "Test mode OK"}}
-                            ]
-                        }
-                        return _StubResp(json.dumps(out))
-                    if "This is a research tool" in joined or "Functions include" in joined:
-                        out = {"function": "final", "args": {"text": "Test mode (final)", "title": "Test Session"}}
-                        return _StubResp(json.dumps(out))
-                except Exception:
-                    pass
-                # Generic minimal final
-                out = {"function": "final", "args": {"text": "Test mode", "title": "Test"}}
-                return _StubResp(json.dumps(out))
-        class _StubChat:
-            def __init__(self):
-                self.completions = _StubCompletions()
-        class _StubClient:
-            def __init__(self):
-                self.chat = _StubChat()
-        return _StubClient(), (os.getenv("CEDARPY_OPENAI_MODEL") or _env_get("CEDARPY_OPENAI_MODEL") or "gpt-5")
-
-    # Normal client
-    try:
-        from openai import OpenAI  # type: ignore
-    except Exception:
-        return None, None
-    # Prefer env, then fallback to settings file
-    api_key = os.getenv("CEDARPY_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY") or _env_get("CEDARPY_OPENAI_API_KEY") or _env_get("OPENAI_API_KEY")
-    if not api_key or not str(api_key).strip():
-        return None, None
-    model = os.getenv("CEDARPY_OPENAI_MODEL") or _env_get("CEDARPY_OPENAI_MODEL") or "gpt-5"
-    try:
-        client = OpenAI(api_key=str(api_key).strip())
-        return client, model
-    except Exception:
-        return None, None
-
-
-def _llm_classify_file(meta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """
-    Calls GPT model to classify a file into one of: images | sources | code | tabular
-    and produce ai_title (<=100), ai_description (<=350), ai_category (<=100).
-
-    Input: metadata produced by interpret_file(), including:
-    - extension, mime_guess, format, language, is_text, size_bytes, line_count, sample_text
-
-    Returns dict or None on error. Errors are logged verbosely.
-    """
-    if str(os.getenv("CEDARPY_FILE_LLM", "1")).strip().lower() in {"0","false","no","off"}:
-        try:
-            print("[llm-skip] CEDARPY_FILE_LLM=0")
-        except Exception:
-            pass
-        return None
-    client, model = _llm_client_config()
-    if not client:
-        try:
-            print("[llm-skip] missing OpenAI API key; set CEDARPY_OPENAI_API_KEY or OPENAI_API_KEY")
-        except Exception:
-            pass
-        return None
-    # Prepare a bounded sample
-    sample_text = (meta.get("sample_text") or "")
-    if len(sample_text) > 8000:
-        sample_text = sample_text[:8000]
-    info = {
-        k: meta.get(k) for k in [
-            "extension","mime_guess","format","language","is_text","size_bytes","line_count","json_valid","json_top_level_keys","csv_dialect"
-        ] if k in meta
-    }
-    sys_prompt = (
-        "You are an expert data librarian. Classify incoming files and produce short, friendly labels.\n"
-        "Output strict JSON with keys: structure, ai_title, ai_description, ai_category.\n"
-        "Rules: structure must be one of: images | sources | code | tabular.\n"
-        "ai_title <= 100 chars. ai_description <= 350 chars. ai_category <= 100 chars.\n"
-        "Do not include newlines in values. If in doubt, choose the best fit."
-    )
-    user_payload = {
-        "metadata": info,
-        "display_name": meta.get("display_name"),
-        "snippet_utf8": sample_text,
-    }
-    import json as _json
-    messages = [
-        {"role": "system", "content": sys_prompt},
-        {"role": "user", "content": "Classify this file and produce JSON as specified. Input:"},
-        {"role": "user", "content": _json.dumps(user_payload, ensure_ascii=False)},
-    ]
-    try:
-        resp = client.chat.completions.create(model=model, messages=messages)
-        content = (resp.choices[0].message.content or "").strip()
-        result = _json.loads(content)
-        # Normalize and enforce limits
-        struct = str(result.get("structure"," ")).strip().lower()
-        if struct not in {"images","sources","code","tabular"}:
-            struct = None
-        def _clip(s, n):
-            s = '' if s is None else str(s)
-            return s[:n]
-        title = _clip(result.get("ai_title"), 100)
-        desc = _clip(result.get("ai_description"), 350)
-        cat = _clip(result.get("ai_category"), 100)
-        out = {"structure": struct, "ai_title": title, "ai_description": desc, "ai_category": cat}
-        try:
-            print(f"[llm] model={model} structure={struct} title={len(title)} chars cat={cat}")
-        except Exception:
-            pass
-        return out
-    except Exception as e:
-        try:
-            print(f"[llm-error] {type(e).__name__}: {e}")
-        except Exception:
-            pass
-        return None
-
-
-def _llm_summarize_action(action: str, input_payload: Dict[str, Any], output_payload: Dict[str, Any]) -> Optional[str]:
-    """Summarize an action for the changelog using a small, fast model.
-    Default model: gpt-5-nano (override via CEDARPY_SUMMARY_MODEL).
-    Returns summary text or None on error/missing key.
-
-    CI/Test mode: if CEDARPY_TEST_MODE is truthy, return a deterministic summary without calling the API.
-    See README: "CI test mode (deterministic LLM stubs)".
-    """
-    try:
-        if str(os.getenv("CEDARPY_TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "on"}:
-            return f"TEST: {action} — ok"
-    except Exception:
-        pass
-    try:
-        from openai import OpenAI  # type: ignore
-    except Exception:
-        return None
-    api_key = os.getenv("CEDARPY_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        return None
-    model = os.getenv("CEDARPY_SUMMARY_MODEL", "gpt-5-nano")
-    try:
-        client = OpenAI(api_key=api_key)
-        import json as _json
-        sys_prompt = (
-            "You are Cedar's changelog assistant. Summarize the action in 1-3 concise sentences. "
-            "Focus on what changed, why, and outcomes (including errors). Avoid secrets and long dumps."
-        )
-        messages = [
-            {"role": "system", "content": sys_prompt},
-            {"role": "user", "content": f"Action: {action}"},
-            {"role": "user", "content": "Input payload:"},
-            {"role": "user", "content": _json.dumps(input_payload, ensure_ascii=False)},
-            {"role": "user", "content": "Output payload:"},
-            {"role": "user", "content": _json.dumps(output_payload, ensure_ascii=False)},
-        ]
-        resp = client.chat.completions.create(model=model, messages=messages)
-        text = (resp.choices[0].message.content or "").strip()
-        return text
-    except Exception as e:
-        try:
-            print(f"[llm-summary-error] {type(e).__name__}: {e}")
-        except Exception:
-            pass
-        return None
-
-
-def _llm_dataset_friendly_name(file_rec: FileEntry, table_name: str, columns: List[str]) -> Optional[str]:
-    """Suggest a short, human-friendly dataset name based on file metadata and columns.
-    Uses a small/fast model. Returns None on error or when key is missing.
-    In test mode, returns a deterministic fallback.
-    """
-    try:
-        if str(os.getenv("CEDARPY_TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "on"}:
-            base = (file_rec.ai_title or file_rec.display_name or table_name or "Data").strip()
-            return (base[:60] if base else "Test Dataset")
-    except Exception:
-        pass
-    try:
-        from openai import OpenAI  # type: ignore
-    except Exception:
-        return None
-    api_key = os.getenv("CEDARPY_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        return None
-    model = os.getenv("CEDARPY_SUMMARY_MODEL", "gpt-5-nano")
-    try:
-        client = OpenAI(api_key=api_key)
-        import json as _json
-        sys_prompt = (
-            "You propose concise, human-friendly dataset names (<= 60 chars). "
-            "Use the provided file title, category, and columns. Output plain text only."
-        )
-        info = {
-            "file_title": (file_rec.ai_title or file_rec.display_name),
-            "category": file_rec.ai_category,
-            "table": table_name,
-            "columns": list(columns or [])[:20],
-        }
-        messages = [
-            {"role": "system", "content": sys_prompt},
-            {"role": "user", "content": _json.dumps(info, ensure_ascii=False)}
-        ]
-        resp = client.chat.completions.create(model=model, messages=messages)
-        name = (resp.choices[0].message.content or "").strip()
-        name = name.replace("\n", " ").strip()
-        if len(name) > 60:
-            name = name[:60]
-        return name or None
-    except Exception as e:
-        try:
-            print(f"[dataset-namer] {type(e).__name__}: {e}")
-        except Exception:
-            pass
-        return None
-
-# ----------------------------------------------------------------------------------
-# Tabular import via LLM codegen
-# See README section "Tabular import via LLM codegen" for configuration and troubleshooting.
-# ----------------------------------------------------------------------------------
-
-def _snake_case(name: str) -> str:
-    s = re.sub(r"[^0-9a-zA-Z]+", "_", name or "").strip("_")
-    s = re.sub(r"_+", "_", s)
-    s = s.lower()
-    if not s:
-        s = "t"
-    if s[0].isdigit():
-        s = "t_" + s
-    return s
-
-
-def _suggest_table_name(display_name: str) -> str:
-    base = os.path.splitext(os.path.basename(display_name or "table"))[0]
-    return _snake_case(base)
-
-
-def _extract_code_from_markdown(s: str) -> str:
-    try:
-        import re as _re
-        m = _re.search(r"```python\n(.*?)```", s, flags=_re.DOTALL | _re.IGNORECASE)
-        if m:
-            return m.group(1)
-        m2 = _re.search(r"```\n(.*?)```", s, flags=_re.DOTALL)
-        if m2:
-            return m2.group(1)
-        return s
-    except Exception:
-        return s
-
-
+# Wrapper for tabular_import_via_llm to pass our local dependencies
 def _tabular_import_via_llm(project_id: int, branch_id: int, file_rec: FileEntry, db: Session, options: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """
-    Generate Python code via LLM to import a tabular file into the per-project SQLite DB and execute it safely.
-    - Uses only stdlib modules (csv/json/sqlite3/re/io) in a restricted exec environment.
-    - Creates a branch-aware table with columns: id (INTEGER PRIMARY KEY AUTOINCREMENT), project_id, branch_id, + inferred columns.
-    - Inserts rows scoped to (project_id, branch_id).
-    Returns a result dict with keys: ok, table, rows_inserted, columns, warnings, logs, code_size, model.
-    """
-    # Determine DB path and table suggestion
-    paths = _project_dirs(project_id)
-    sqlite_path = paths.get("db_path")
-    src_path = os.path.abspath(file_rec.storage_path or "")
-    table_suggest = _suggest_table_name(file_rec.display_name or file_rec.filename or "data")
-
-    # Collect lightweight metadata for prompt
-    meta = file_rec.metadata_json or {}
-    sample_text = (meta.get("sample_text") or "")
-    if len(sample_text) > 4000:
-        sample_text = sample_text[:4000]
-    info = {
-        "extension": meta.get("extension"),
-        "mime_guess": meta.get("mime_guess"),
-        "csv_dialect": meta.get("csv_dialect"),
-        "line_count": meta.get("line_count"),
-        "size_bytes": meta.get("size_bytes"),
-    }
-
-    client, model_default = _llm_client_config()
-    if not client:
-        return {"ok": False, "error": "missing OpenAI key", "model": None}
-    model = os.getenv("CEDARPY_TABULAR_MODEL") or model_default or "gpt-5"
-
-    sys_prompt = (
-        "You generate safe, robust Python 3 code to import a local tabular file into SQLite.\n"
-        "Requirements:\n"
-        "- Define a function run_import(src_path, sqlite_path, table_name, project_id, branch_id) -> dict.\n"
-        "- Use ONLY Python standard library modules: csv, json, sqlite3, re, io, typing, math.\n"
-        "- Do NOT use pandas, requests, openpyxl, numpy, duckdb, or any external libraries.\n"
-        "- Create table if not exists with schema: id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER NOT NULL, branch_id INTEGER NOT NULL, and columns inferred from the file.\n"
-        "- Infer column names from headers (for CSV/TSV) or keys (for NDJSON). Normalize to snake_case, TEXT/INTEGER/REAL types conservatively.\n"
-        "- Insert rows with project_id and branch_id set from the function arguments.\n"
-        "- If this is a re-import, you may DROP TABLE IF EXISTS <table_name> first and then recreate it with the inferred schema before inserting rows.\n"
-        "- Stream the file (avoid loading everything into memory).\n"
-        "- Return a JSON-serializable dict: {ok: bool, table: str, rows_inserted: int, columns: [str], warnings: [str]}.\n"
-        "- Print minimal progress is okay; main signal should be the returned dict.\n"
-        "- Do not write any files except via sqlite3 to the provided sqlite_path.\n"
-        "Implementation constraints (strict):\n"
-        "- ALWAYS specify the column list in INSERT statements as (project_id, branch_id, <data columns...>). Do NOT include id in the INSERT column list; id is auto-incremented.\n"
-        "- Ensure the number of placeholders matches the number of specified columns exactly.\n"
-        "- For CSV: open with newline='' and the correct encoding; use csv.reader and call next(reader) to consume the header when present (or skip header_skip rows).\n"
-        "- When returning the 'columns' field, include ONLY the inferred data columns (exclude id, project_id, branch_id).\n"
-        "Take into account optional hints provided in the 'options' object (e.g., header_skip, delimiter, quotechar, encoding, date_formats, rename).\n"
-        "Output: ONLY Python source code, no surrounding explanations."
+    """Wrapper to pass our local dependencies to the LLM tabular import function."""
+    return _tabular_import_via_llm_base(
+        project_id, branch_id, file_rec, db,
+        project_dirs_fn=_project_dirs,
+        get_project_engine_fn=_get_project_engine,
+        Dataset=Dataset,
+        options=options
     )
 
-    user_payload = {
-        "context": {
-            "meta": info,
-            "display_name": file_rec.display_name,
-            "table_suggest": table_suggest,
-            "hints": [
-                "CSV/TSV: use csv module; prefer provided delimiter if available",
-                "NDJSON: each line is a JSON object; union keys from first 100 rows",
-                "If no headers, synthesize col_1..col_n"
-            ]
-        },
-        "paths": {"src_path": src_path, "sqlite_path": sqlite_path},
-        "project": {"project_id": project_id, "branch_id": branch_id},
-        "snippet_utf8": sample_text,
-        "options": (options or {}),
-    }
 
-    import json as _json
-    messages = [
-        {"role": "system", "content": sys_prompt},
-        {"role": "user", "content": "Generate the code now."},
-        {"role": "user", "content": _json.dumps(user_payload, ensure_ascii=False)},
-    ]
-
-    try:
-        print(f"[tabular] codegen model={model} file={file_rec.display_name} table_suggest={table_suggest}")
-    except Exception:
-        pass
-
-    try:
-        resp = client.chat.completions.create(model=model, messages=messages)
-        content = (resp.choices[0].message.content or "").strip()
-    except Exception as e:
-        try:
-            print(f"[tabular-error] codegen {type(e).__name__}: {e}")
-        except Exception:
-            pass
-        return {"ok": False, "error": str(e), "stage": "codegen", "model": model}
-
-    code = _extract_code_from_markdown(content)
-
-    # Prepare a restricted exec environment
-    import csv as _csv, json as _json2, sqlite3 as _sqlite3, re as _re, io as _io, math as _math
-    import types as _types
-
-    # Provide a small typing shim so "from typing import List" doesn't fail
-    class _TypingParam:
-        def __getitem__(self, item):
-            return object
-
-    _typing_dummy = _types.SimpleNamespace(
-        __name__="typing",
-        List=list,
-        Dict=dict,
-        Tuple=tuple,
-        Set=set,
-        Optional=_TypingParam(),
-        Any=object,
-        Iterable=_TypingParam(),
-        Union=_TypingParam(),
-        Callable=_TypingParam(),
-    )
-
-    allowed_modules = {
-        "csv": _csv,
-        "json": _json2,
-        "sqlite3": _sqlite3,
-        "re": _re,
-        "io": _io,
-        "math": _math,
-        "typing": _typing_dummy,
-    }
-
-    def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):
-        if name in allowed_modules and allowed_modules[name] is not None:
-            return allowed_modules[name]
-        raise ImportError(f"disallowed import: {name}")
-
-    def _safe_open(p, mode="r", *args, **kwargs):
-        ab = os.path.abspath(p)
-        if ("w" in mode) or ("a" in mode) or ("+" in mode):
-            raise PermissionError("open() write modes are not allowed")
-        if ab != src_path:
-            raise PermissionError("open() denied for this path")
-        return builtins.open(p, mode, *args, **kwargs)
-
-    allowed_builtin_names = [
-        "abs", "min", "max", "sum", "len", "range", "enumerate", "zip", "map", "filter",
-        "any", "all", "sorted", "reversed", "str", "int", "float", "bool", "list", "dict", "set", "tuple",
-        "print", "Exception", "isinstance", "StopIteration", "next", "iter"
-    ]
-    _base_builtins = {}
-    try:
-        for n in allowed_builtin_names:
-            _base_builtins[n] = getattr(builtins, n)
-    except Exception:
-        pass
-    _base_builtins["__import__"] = _safe_import
-    _base_builtins["open"] = _safe_open
-
-    safe_globals: Dict[str, Any] = {"__builtins__": _base_builtins}
-
-    # Also inject modules for import-less usage
-    safe_globals.update({"csv": _csv, "json": _json2, "sqlite3": _sqlite3, "re": _re, "io": _io})
-
-    buf = io.StringIO()
-    run_ok = False
-    result: Dict[str, Any] = {}
-    try:
-        with contextlib.redirect_stdout(buf):
-            # Compile then exec
-            compiled = compile(code, filename="<llm_tabular_import>", mode="exec")
-            exec(compiled, safe_globals, safe_globals)
-            run_import = safe_globals.get("run_import")
-            if not callable(run_import):
-                raise RuntimeError("Generated code did not define run_import()")
-            ret = run_import(src_path, sqlite_path, table_suggest, int(project_id), int(branch_id))
-            if not isinstance(ret, dict):
-                raise RuntimeError("run_import() did not return a dict")
-            result = ret
-            run_ok = bool(ret.get("ok"))
-    except Exception as e:
-        result = {"ok": False, "error": f"exec: {type(e).__name__}: {e}"}
-    logs = buf.getvalue()
-
-    # Optionally verify row count via our engine
-    table_name = str(result.get("table") or table_suggest)
-    rows_inserted = int(result.get("rows_inserted") or 0)
-    try:
-        with _get_project_engine(project_id).begin() as conn:
-            try:
-                cnt = conn.exec_driver_sql(f"SELECT COUNT(*) FROM {table_name}").scalar()
-                result["rowcount_check"] = int(cnt or 0)
-            except Exception:
-                pass
-    except Exception:
-        pass
-
-    # Create Dataset entry on success
-    if run_ok:
-        try:
-            friendly = _llm_dataset_friendly_name(file_rec, table_name, (result.get("columns") or []))
-            desc = f"Imported from {file_rec.display_name} — table: {table_name}"
-            if friendly:
-                ds = Dataset(project_id=project_id, branch_id=branch_id, name=friendly[:60], description=desc)
-            else:
-                ds = Dataset(project_id=project_id, branch_id=branch_id, name=table_name, description=desc)
-            db.add(ds); db.commit()
-        except Exception:
-            db.rollback()
-
-    out = {
-        "ok": run_ok,
-        "table": table_name,
-        "rows_inserted": rows_inserted,
-        "columns": result.get("columns"),
-        "warnings": result.get("warnings"),
-        "code_size": len(code or ""),
-        "logs": logs[-10000:] if logs else "",
-        "model": model,
-    }
-    if not run_ok and result.get("error"):
-        out["error"] = result.get("error")
-    return out
-
-def _is_probably_text(path: str, sample_bytes: int = 4096) -> bool:
-    try:
-        with open(path, "rb") as f:
-            chunk = f.read(sample_bytes)
-        if b"\x00" in chunk:
-            return False
-        # If mostly ASCII or UTF-8 bytes, consider text
-        text_chars = bytearray({7, 8, 9, 10, 12, 13, 27} | set(range(0x20, 0x100)))
-        nontext = chunk.translate(None, text_chars)
-        return len(nontext) / (len(chunk) or 1) < 0.30
-    except Exception:
-        return False
-
-
-def interpret_file(path: str, original_name: str) -> Dict[str, Any]:
-    """Extracts metadata from the file for storage in FileEntry.metadata_json.
-
-    Avoids heavy deps; best-effort using extension/mime and light parsing.
-    """
-    meta: Dict[str, Any] = {}
-    try:
-        stat = os.stat(path)
-        meta["size_bytes"] = stat.st_size
-        meta["mtime"] = datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat()
-        meta["ctime"] = datetime.fromtimestamp(stat.st_ctime, timezone.utc).isoformat()
-    except Exception:
-        pass
-
-    ext = os.path.splitext(original_name)[1].lower().lstrip(".")
-    meta["extension"] = ext
-    mime, _ = mimetypes.guess_type(original_name)
-    meta["mime_guess"] = mime or ""
-
-    # Format (high-level) and language
-    ftype = file_extension_to_type(original_name)
-    meta["format"] = ftype
-    language_map = {
-        "python": "Python", "rust": "Rust", "javascript": "JavaScript", "typescript": "TypeScript",
-        "c": "C", "c-header": "C", "cpp": "C++", "cpp-header": "C++", "objective-c": "Objective-C", "objective-c++": "Objective-C++",
-        "java": "Java", "kotlin": "Kotlin", "go": "Go", "ruby": "Ruby", "php": "PHP", "csharp": "C#",
-        "swift": "Swift", "scala": "Scala", "haskell": "Haskell", "clojure": "Clojure", "elixir": "Elixir", "erlang": "Erlang",
-        "lua": "Lua", "r": "R", "perl": "Perl", "shell": "Shell",
-    }
-    meta["language"] = language_map.get(ftype)
-
-    # Text / JSON / CSV heuristics
-    is_text = _is_probably_text(path)
-    meta["is_text"] = is_text
-
-    # Store a UTF-8 text sample of the first N bytes (for LLM inspection)
-    try:
-        limit = int(os.getenv("CEDARPY_SAMPLE_BYTES", "65536"))
-    except Exception:
-        limit = 65536
-    try:
-        with open(path, "rb") as f:
-            sample_b = f.read(max(0, limit))
-        sample_text = sample_b.decode("utf-8", errors="replace")
-        meta["sample_text"] = sample_text
-        meta["sample_bytes_read"] = len(sample_b)
-        meta["sample_truncated"] = (meta.get("size_bytes") or 0) > len(sample_b)
-        meta["sample_encoding"] = "utf-8-replace"
-    except Exception:
-        pass
-
-    if is_text:
-        # Try JSON validation for .json / .ndjson / .ipynb
-        if ext in {"json", "ndjson", "ipynb"}:
-            try:
-                with open(path, "r", encoding="utf-8", errors="replace") as f:
-                    if ext == "ndjson":
-                        # count lines and JSON-parse first line only
-                        first = f.readline()
-                        json.loads(first)
-                        meta["json_valid"] = True
-                    else:
-                        data = json.load(f)
-                        meta["json_valid"] = True
-                        if isinstance(data, dict):
-                            meta["json_top_level_keys"] = list(data.keys())[:50]
-                        elif isinstance(data, list):
-                            meta["json_list_length_sample"] = min(len(data), 1000)
-            except Exception:
-                meta["json_valid"] = False
-        # CSV sniffing
-        if ext in {"csv", "tsv"}:
-            try:
-                with open(path, "r", encoding="utf-8", errors="replace") as f:
-                    sample = f.read(2048)
-                dialect = csv.Sniffer().sniff(sample)
-                meta["csv_dialect"] = {
-                    "delimiter": getattr(dialect, "delimiter", ","),
-                    "quotechar": getattr(dialect, "quotechar", '"'),
-                    "doublequote": getattr(dialect, "doublequote", True),
-                    "skipinitialspace": getattr(dialect, "skipinitialspace", False),
-                }
-            except Exception:
-                pass
-        # Simple line count (bounded)
-        try:
-            lc = 0
-            with open(path, "rb") as f:
-                for i, _ in enumerate(f):
-                    lc = i + 1
-                    if lc > 2000000:
-                        break
-            meta["line_count"] = lc
-        except Exception:
-            pass
-
-    # Hash (sha256)
-    try:
-        h = hashlib.sha256()
-        with open(path, "rb") as f:
-            for chunk in iter(lambda: f.read(1024 * 1024), b""):
-                h.update(chunk)
-        meta["sha256"] = h.hexdigest()
-    except Exception:
-        pass
-
-    return meta
+# File utilities are now imported from cedar_app.file_utils
 
 def get_db() -> Session:
     # Backward-compat shim: default DB equals central registry
@@ -1118,43 +226,25 @@ def get_db() -> Session:
         db.close()
 
 
-from main_helpers import add_version, escape, ensure_main_branch, file_extension_to_type, branch_filter_ids, current_branch
+from main_helpers import escape, ensure_main_branch, file_extension_to_type, branch_filter_ids, current_branch
 import cedar_tools as ct
 
 
 def record_changelog(db: Session, project_id: int, branch_id: int, action: str, input_payload: Dict[str, Any], output_payload: Dict[str, Any]):
-    """Persist a changelog entry and try to LLM-summarize it. Best-effort; stores even if summary fails.
-    Prefers a model-provided run_summary (string or list of strings) when present in output_payload.
-    """
-    # Prefer explicit run_summary if provided; else generate via LLM
-    summary: Optional[str] = None
-    try:
-        rs = (output_payload or {}).get("run_summary") if isinstance(output_payload, dict) else None
-        if isinstance(rs, list):
-            summary = " • ".join([str(x) for x in rs])
-        elif isinstance(rs, str):
-            summary = rs.strip()
-    except Exception:
-        summary = None
-    if not summary:
-        summary = _llm_summarize_action(action, input_payload, output_payload)
-    try:
-        entry = ChangelogEntry(
-            project_id=project_id,
-            branch_id=branch_id,
-            action=action,
-            input_json=input_payload,
-            output_json=output_payload,
-            summary_text=summary,
-        )
-        db.add(entry)
-        db.commit()
-    except Exception as e:
-        try:
-            print(f"[changelog-error] {type(e).__name__}: {e}")
-        except Exception:
-            pass
-        db.rollback()
+    """Wrapper for record_changelog that passes our local dependencies."""
+    return _record_changelog_base(
+        db, project_id, branch_id, action, input_payload, output_payload,
+        ChangelogEntry=ChangelogEntry,
+        llm_summarize_action_fn=_llm_summarize_action
+    )
+
+def add_version(db: Session, project_id: int, branch_id: int, table_name: str,
+                row_id: int, column_name: str, old_value, new_value):
+    """Wrapper for add_version that passes our local dependencies."""
+    return _add_version_base(
+        db, project_id, branch_id, table_name, row_id, column_name,
+        old_value, new_value, Version=Version
+    )
 
 
 
@@ -1223,28 +313,12 @@ except Exception as e:
 # See README: "WebSocket handshake and client acks"
 @app.post("/api/chat/ack")
 def api_chat_ack(payload: Dict[str, Any]):
-    eid = str((payload or {}).get('eid') or '').strip()
-    if not eid:
-        return JSONResponse({"ok": False, "error": "missing eid"}, status_code=400)
-    rec = _ack_store.get(eid)
-    if rec:
-        rec['acked'] = True
-        rec['ack_at'] = datetime.utcnow().isoformat()+"Z"
-        try:
-            print(f"[ack] eid={eid} type={rec.get('info',{}).get('type')} thread={rec.get('info',{}).get('thread_id')}")
-        except Exception:
-            pass
-        return JSONResponse({"ok": True})
-    try:
-        print(f"[ack-miss] unknown eid={eid} payload={payload}")
-    except Exception:
-        pass
-    return JSONResponse({"ok": False, "error": "unknown eid"}, status_code=404)
+    return _api_chat_ack(payload=payload, ack_store=_ack_store)
 
 @app.on_event("startup")
 def _cedarpy_startup_llm_probe():
     try:
-        ok, reason, model = _llm_reachability(ttl_seconds=0)
+        ok, reason, model = _llm_reachability(ttl_seconds=0, llm_client_config_fn=_llm_client_config)
         if ok:
             print(f"[startup] LLM ready (model={model})")
         else:
@@ -1252,318 +326,38 @@ def _cedarpy_startup_llm_probe():
     except Exception:
         pass
 
-# Primary layout for the application (single source of truth).
-# This function renders all pages; there is no secondary/stub layout.
-# CI smoke tests exercise this rendering so DMG builds will block on failures.
-from fastapi.responses import HTMLResponse as _HTMLResponse
-
-def layout(title: str, body: str, header_label: Optional[str] = None, header_link: Optional[str] = None, nav_query: Optional[str] = None) -> HTMLResponse:  # type: ignore[override]
-    # LLM status and model selector for header
-    try:
-        ready, reason, current_model = _llm_reachability()
-        available_models = ["gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-4.1", "gpt-4o"]
-        
-        if ready:
-            # Build model selector dropdown
-            model_options = ""
-            for m in available_models:
-                selected = "selected" if m == current_model else ""
-                model_options += f"<option value='{escape(m)}' {selected}>{escape(m)}</option>"
-            
-            llm_status = f"""
-            <select id="modelSelector" onchange="changeModel(this.value)" 
-                    style="padding: 3px 8px; border-radius: 999px; background: #eef2ff; color: #3730a3; 
-                           font-size: 12px; border: 1px solid #c7d2fe; cursor: pointer;"
-                    title="Select LLM model">
-                {model_options}
-            </select>
-            <script>
-            function changeModel(model) {{
-                fetch('/api/model/change', {{
-                    method: 'POST',
-                    headers: {{'Content-Type': 'application/json'}},
-                    body: JSON.stringify({{model: model}})
-                }}).then(function(r) {{
-                    if (r.ok) {{
-                        console.log('Model changed to ' + model);
-                        // Optionally reload to reflect changes
-                        setTimeout(function() {{ location.reload(); }}, 500);
-                    }}
-                }}).catch(function(e) {{
-                    console.error('Failed to change model:', e);
-                }});
-            }}
-            </script>
-            """
-        else:
-            llm_status = f" <a href='/settings' class='pill' style='background:#fef2f2; color:#991b1b' title='LLM unavailable — click to paste your key'>LLM unavailable ({escape(reason)})</a>"
-    except Exception:
-        llm_status = ""
-
-    # Build header breadcrumb/label (optional)
-    try:
-        if header_label:
-            lbl = escape(header_label)
-            if header_link:
-                header_html = f"<a href='{escape(header_link)}' style='font-weight:600'>{lbl}</a>"
-            else:
-                header_html = f"<span style='font-weight:600'>{lbl}</span>"
-        else:
-            header_html = ""
-        header_info = header_html
-    except Exception:
-        header_html = ""
-        header_info = ""
-
-    # Build right-side navigation with optional project context (propagates ?project_id=&branch_id=)
-    try:
-        nav_qs = ("?" + nav_query.strip()) if (nav_query and nav_query.strip()) else ""
-    except Exception:
-        nav_qs = ""
-
-    nav_html = (
-        f"<a href='/'>&#8203;Projects</a> | "
-        f"<a href='/shell{nav_qs}'>Shell</a> | "
-        f"<a href='/merge{nav_qs}'>Merge</a> | "
-        f"<a href='/changelog{nav_qs}'>Changelog</a> | "
-        f"<a href='/log{nav_qs}' target='_blank' rel='noopener'>Log</a> | "
-        f"<a href='/settings'>Settings</a>"
-    )
-
-    # Client logging hook (console/errors -> /api/client-log)
-    client_log_js = """
-<script>
-(function(){
-  if (window.__cedarpyClientLogInitialized) return; window.__cedarpyClientLogInitialized = true;
-  const endpoint = '/api/client-log';
-  // Lightweight pub/sub for client logs so chat UI can mirror logs under the Processing line
-  window.__cedarLogSubscribers = window.__cedarLogSubscribers || [];
-  window.__cedarLogBuffer = window.__cedarLogBuffer || [];
-  function emitLog(payload){
-    try {
-      window.__cedarLogBuffer.push(payload);
-      if (window.__cedarLogBuffer.length > 2000) { window.__cedarLogBuffer.shift(); }
-      (window.__cedarLogSubscribers||[]).forEach(function(fn){ try { fn(payload); } catch(_){} });
-    } catch(_) {}
-  }
-  window.subscribeCedarLogs = function(fn){ try { (window.__cedarLogSubscribers||[]).push(fn); } catch(_){} };
-  window.unsubscribeCedarLogs = function(fn){ try { var a=window.__cedarLogSubscribers||[]; var i=a.indexOf(fn); if(i>=0) a.splice(i,1); } catch(_){} };
-
-  function post(payload){
-    try {
-      const body = JSON.stringify(payload);
-      if (navigator.sendBeacon) {
-        const blob = new Blob([body], {type: 'application/json'});
-        navigator.sendBeacon(endpoint, blob);
-      } else {
-        fetch(endpoint, {method: 'POST', headers: {'Content-Type': 'application/json'}, body, keepalive: true}).catch(function(){});
-      }
-    } catch(e) {}
-  }
-  function base(level, message, origin, extra){
-    var pl = Object.assign({
-      when: new Date().toISOString(),
-      level: String(level||'info'),
-      message: String(message||''),
-      url: String(location.href||''),
-      userAgent: navigator.userAgent || '',
-      origin: origin || 'console'
-    }, extra||{});
-    post(pl);
-    emitLog(pl);
-  }
-  var orig = { log: console.log, info: console.info, warn: console.warn, error: console.error };
-  console.log = function(){ try { base('info', Array.from(arguments).join(' '), 'console.log'); } catch(e){}; return orig.log.apply(console, arguments); };
-  console.info = function(){ try { base('info', Array.from(arguments).join(' '), 'console.info'); } catch(e){}; return orig.info.apply(console, arguments); };
-  console.warn = function(){ try { base('warn', Array.from(arguments).join(' '), 'console.warn'); } catch(e){}; return orig.warn.apply(console, arguments); };
-  console.error = function(){ try { base('error', Array.from(arguments).join(' '), 'console.error', { stack: (arguments && arguments[0] && arguments[0].stack) ? String(arguments[0].stack) : null }); } catch(e){}; return orig.error.apply(console, arguments); };
-  window.addEventListener('error', function(ev){
-    try { base('error', ev.message || 'window.onerror', 'window.onerror', { line: ev.lineno||null, column: ev.colno||null, stack: ev.error && ev.error.stack ? String(ev.error.stack) : null }); } catch(e){}
-  }, true);
-  window.addEventListener('unhandledrejection', function(ev){
-    try { var r = ev && ev.reason; base('error', (r && (r.message || r.toString())) || 'unhandledrejection', 'unhandledrejection', { stack: r && r.stack ? String(r.stack) : null }); } catch(e){}
-  });
-  document.addEventListener('DOMContentLoaded', function(){ try { console.log('[ui] page ready'); } catch(e){} }, { once: true });
-  // Auto-restore last thread on cold open of '/' (fresh launch). Bypass with ?home=1.
-  try {
-    if ((location.pathname === '/' || location.pathname === '') && document.referrer === '') {
-      var _sp = new URLSearchParams(location.search || '');
-      if (!_sp.has('home')) {
-        var _lp = null, _lb = null, _lt = null;
-        try { _lp = localStorage.getItem('cedar:lastProject'); } catch(_){}
-        try { _lb = localStorage.getItem('cedar:lastBranch'); } catch(_){}
-        try { _lt = localStorage.getItem('cedar:lastThread'); } catch(_){}
-        if (_lp && _lb && _lt) {
-          var _dest = '/project/' + encodeURIComponent(String(_lp)) + '?branch_id=' + encodeURIComponent(String(_lb)) + '&thread_id=' + encodeURIComponent(String(_lt));
-          location.replace(_dest);
-        }
-      }
-    }
-  } catch(_){ }
-})();
-</script>
-"""
-
-    # Build HTML document
-    html_doc = f"""<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{escape(title)}</title>
-  <style>
-    :root {{ --fg: #111; --bg: #fff; --accent: #2563eb; --muted: #6b7280; --border: #e5e7eb; }}
-    * {{ box-sizing: border-box; }}
-    body {{ margin: 0; font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Oxygen, Ubuntu, Cantarell, \"Helvetica Neue\", Arial, \"Apple Color Emoji\", \"Segoe UI Emoji\"; color: var(--fg); background: var(--bg); }}
-    header {{ padding: 16px 20px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg); }}
-    main {{ padding: 20px; margin: 0; width: 100%; }}
-    h1, h2, h3 {{ margin: 0 0 12px; }}
-    a {{ color: var(--accent); text-decoration: none; }}
-    a:hover {{ text-decoration: underline; }}
-    .row {{ display: flex; gap: 16px; flex-wrap: wrap; }}
-    .card {{ border: 1px solid var(--border); border-radius: 8px; padding: 16px; background: #fff; flex: 1 1 340px; }}
-    .muted {{ color: var(--muted); }}
-    .table {{ width: 100%; border-collapse: collapse; }}
-    .table th, .table td {{ border-bottom: 1px solid var(--border); padding: 8px 6px; text-align: left; vertical-align: top; }}
-    .pill {{ display: inline-block; padding: 2px 8px; border-radius: 999px; background: #eef2ff; color: #3730a3; font-size: 12px; }}
-    .small {{ font-size: 12px; }}
-    .topbar {{ display:flex; align-items:center; gap:12px; }}
-    .spinner {{ display:inline-block; width:12px; height:12px; border:2px solid #cbd5e1; border-top-color:#334155; border-radius:50%; animation: spin 1s linear infinite; }}
-    @keyframes spin {{ from {{ transform: rotate(0deg);}} to {{ transform: rotate(360deg);}} }}
-
-    /* Two-column layout and tabs */
-    .two-col {{ display: grid; grid-template-columns: 1fr 420px; gap: 16px; align-items: start; }}
-    .pane {{ display: flex; flex-direction: column; gap: 8px; }}
-    .pane.right {{ display:flex; flex-direction:column; min-height:0; }}
-    .pane.right .tab-panels {{ display:flex; flex-direction:column; flex:1; min-height:0; overflow:auto; }}
-    .tabs {{ display: flex; gap: 6px; border-bottom: 1px solid var(--border); }}
-    .tab {{ display:inline-block; padding:6px 10px; border:1px solid var(--border); border-bottom:none; border-radius:6px 6px 0 0; background:#f3f4f6; color:#111; cursor:pointer; user-select:none; }}
-    .tab.active {{ background:#fff; font-weight:600; }}
-    .tab-panels {{ border:1px solid var(--border); border-radius:0 6px 6px 6px; background:#fff; padding:12px; }}
-    .panel.hidden {{ display:none !important; }}
-    @media (max-width: 900px) {{ .two-col {{ grid-template-columns: 1fr; }} }}
-  </style>
-  {client_log_js}
-  <script>
-  (function(){{
-    function activateTab(tab) {{
-      try {{
-        var pane = tab.closest('.pane') || document;
-        var tabs = tab.parentElement.querySelectorAll('.tab');
-        tabs.forEach(function(t){{ t.classList.remove('active'); }});
-        tab.classList.add('active');
-        var target = tab.getAttribute('data-target');
-        if (!target) return;
-        var panelsRoot = pane.querySelector('.tab-panels');
-        if (!panelsRoot) return;
-        panelsRoot.querySelectorAll('.panel').forEach(function(p){{ p.classList.add('hidden'); }});
-        var el = pane.querySelector('#' + target);
-        if (el) el.classList.remove('hidden');
-      }} catch(e) {{ try {{ console.error('[ui] tab error', e); }} catch(_) {{}} }}
-    }}
-    function initTabs(){{
-      document.querySelectorAll('.tabs .tab').forEach(function(tab){{
-        tab.addEventListener('click', function(ev){{ ev.preventDefault(); activateTab(tab); }});
-      }});
-    }}
-    if (document.readyState === 'loading') {{
-      document.addEventListener('DOMContentLoaded', initTabs, {{ once: true }});
-    }} else {{
-      initTabs();
-    }}
-  }})();
-  </script>
-</head>
-<body>
-  <header>
-    <div class="topbar">
-      <div><strong>Cedar</strong> <span class='muted'>•</span> {header_info}</div>
-      <div style=\"margin-left:auto\">{nav_html}{llm_status}</div>
-    </div>
-  </header>
-  <main>
-    {body}
-  </main>
-</body>
-</html>
-"""
-    try:
-        html_doc = html_doc.format(llm_status=llm_status, header_info=header_html, nav_html=nav_html)
-    except Exception:
-        pass
-    return HTMLResponse(html_doc)
+# Layout is now imported from ui_utils
 
 
 
 @app.get("/settings", response_class=HTMLResponse)
 def settings_page(msg: Optional[str] = None):
-    # Do not display the actual key; show presence only
-    key_present = bool(_env_get("CEDARPY_OPENAI_API_KEY") or _env_get("OPENAI_API_KEY"))
-    model = _env_get("CEDARPY_OPENAI_MODEL") or _env_get("OPENAI_API_KEY_MODEL") or _env_get("CEDARPY_OPENAI_MODEL") or "gpt-5"
-    banner = f"<div class='notice'>{html.escape(msg)}</div>" if msg else ""
-    body = f"""
-    <h1>Settings</h1>
-    {banner}
-    <p class='muted'>LLM keys are read from <code>{html.escape(SETTINGS_PATH)}</code>. We will not display keys here.</p>
-    <p>OpenAI key status: <strong>{'Present' if key_present else 'Missing'}</strong></p>
-    <p>LLM connectivity: {('✅ <strong>OK</strong> – ' + html.escape(str(model))) if _llm_reach_ok() else ('❌ <strong>Unavailable</strong> – ' + html.escape(_llm_reach_reason()))}</p>
-    <form method='post' action='/settings/save'>
-      <div>
-        <label>OpenAI API Key</label><br/>
-        <input type='password' name='openai_key' placeholder='sk-...' style='width:420px' autocomplete='off' />
-      </div>
-      <div style='margin-top:8px;'>
-        <label>Model (optional)</label><br/>
-        <input type='text' name='model' value='{html.escape(str(model))}' style='width:420px' />
-      </div>
-      <div style='margin-top:12px;'>
-        <button type='submit'>Save</button>
-      </div>
-    </form>
-    """
-    return layout("Settings", body)
+    return _settings_page(
+        msg=msg,
+        env_get_fn=_env_get,
+        llm_reach_ok_fn=_llm_reach_ok,
+        llm_reach_reason_fn=_llm_reach_reason,
+        layout_fn=layout,
+        data_dir=DATA_DIR,
+        llm_client_config_fn=_llm_client_config
+    )
 
 
 @app.post("/settings/save")
-def settings_save(openai_key: str = Form("") , model: str = Form("")):
-    # Persist to ~/CedarPyData/.env; do not print the key
-    updates: Dict[str, str] = {}
-    if openai_key and str(openai_key).strip():
-        updates["OPENAI_API_KEY"] = str(openai_key).strip()
-    if model and str(model).strip():
-        updates["CEDARPY_OPENAI_MODEL"] = str(model).strip()
-    if updates:
-        _env_set_many(updates)
-        return RedirectResponse("/settings?msg=Saved", status_code=303)
-    else:
-        return RedirectResponse("/settings?msg=No+changes", status_code=303)
+def settings_save(openai_key: str = Form(""), model: str = Form("")):
+    return _settings_save(
+        openai_key=openai_key,
+        model=model,
+        env_set_many_fn=_env_set_many
+    )
 
 @app.post("/api/model/change")
 def api_model_change(payload: Dict[str, Any]):
     """API endpoint to change the LLM model from the dropdown"""
-    try:
-        model = str(payload.get("model", "")).strip()
-        if not model:
-            return JSONResponse({"ok": False, "error": "No model specified"}, status_code=400)
-        
-        # Validate model is one of the allowed ones
-        allowed_models = {"gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-4.1", "gpt-4o"}
-        if model not in allowed_models:
-            return JSONResponse({"ok": False, "error": f"Invalid model: {model}"}, status_code=400)
-        
-        # Update the model in environment and settings file
-        updates = {"CEDARPY_OPENAI_MODEL": model}
-        _env_set_many(updates)
-        
-        # Log the change
-        try:
-            print(f"[model-change] Changed LLM model to {model}")
-        except Exception:
-            pass
-        
-        return JSONResponse({"ok": True, "model": model})
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    return _api_model_change(
+        payload=payload,
+        env_set_many_fn=_env_set_many
+    )
 
 # Serve uploaded files for convenience
 # Serve uploaded files (legacy path no longer used). We mount a dynamic per-project files app below.
@@ -1587,161 +381,17 @@ except Exception as e:
 
 @app.get("/uploads/{project_id}/{path:path}")
 def serve_project_upload(project_id: int, path: str):
-    # See PROJECT_SEPARATION_README.md
-    base = _project_dirs(project_id)["files_root"]
-    ab = os.path.abspath(os.path.join(base, path))
-    base_ab = os.path.abspath(base)
-    if not ab.startswith(base_ab) or not os.path.isfile(ab):
-        raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(ab)
+    return _serve_project_upload(
+        project_id=project_id,
+        path=path,
+        project_dirs_fn=_project_dirs
+    )
 
 # ----------------------------------------------------------------------------------
 # HTML helpers (all inline; no external templates)
 # ----------------------------------------------------------------------------------
 
-SETTINGS_PATH = os.path.join(DATA_DIR, ".env")
-
-
-def _env_get(k: str) -> Optional[str]:
-    try:
-        v = os.getenv(k)
-        if v is None and os.path.isfile(SETTINGS_PATH):
-            # Fallback: try file parse
-            with open(SETTINGS_PATH, "r", encoding="utf-8", errors="ignore") as f:
-                for line in f:
-                    s = line.strip()
-                    if not s or s.startswith("#") or "=" not in s:
-                        continue
-                    kk, vv = s.split("=", 1)
-                    if kk.strip() == k:
-                        return vv.strip().strip('"').strip("'")
-        return v
-    except Exception:
-        return None
-
-
-def _env_set_many(updates: Dict[str, str]) -> None:
-    """Update ~/CedarPyData/.env with provided key=value pairs, preserving other lines.
-    Keys are also set in-process via os.environ. We avoid printing secret values.
-    See README: Settings and Postmortem #7 for details.
-    """
-    try:
-        os.makedirs(DATA_DIR, exist_ok=True)
-        # Read existing lines
-        existing: Dict[str, str] = {}
-        order: list[str] = []
-        if os.path.isfile(SETTINGS_PATH):
-            with open(SETTINGS_PATH, "r", encoding="utf-8", errors="ignore") as f:
-                for line in f:
-                    if "=" in line and not line.strip().startswith("#"):
-                        k, v = line.split("=", 1)
-                        k = k.strip()
-                        if k and k not in existing:
-                            existing[k] = v.rstrip("\n")
-                            order.append(k)
-        # Apply updates
-        for k, v in updates.items():
-            existing[k] = v
-            if k not in order:
-                order.append(k)
-            # set in-process
-            try:
-                os.environ[k] = v
-            except Exception:
-                pass
-        # Write back, one VAR=VALUE per line
-        with open(SETTINGS_PATH, "w", encoding="utf-8", errors="ignore") as f:
-            for k in order:
-                val = existing.get(k)
-                if val is None:
-                    continue
-                # Write raw; we do not quote to avoid surprises
-                f.write(f"{k}={val}\n")
-        # Invalidate LLM reachability cache so header updates quickly
-        try:
-            _LLM_READY_CACHE.update({"ts": 0.0})
-        except Exception:
-            pass
-    except Exception:
-        pass
-
-# Cached LLM reachability indicator for UI (TTL seconds)
-_LLM_READY_CACHE = {"ts": 0.0, "ready": False, "reason": "init", "model": None}
-
-
-def _llm_reachability(ttl_seconds: int = 300) -> tuple[bool, str, str]:
-    """Best-effort reachability check for UI. Returns (ready, reason, model).
-    Cached to avoid per-request network calls. Provides clearer reasons when unavailable.
-    """
-    now = time.time()
-    try:
-        if (now - float(_LLM_READY_CACHE.get("ts") or 0)) <= max(5, ttl_seconds):
-            return bool(_LLM_READY_CACHE.get("ready")), str(_LLM_READY_CACHE.get("reason") or ""), str(_LLM_READY_CACHE.get("model") or "")
-    except Exception:
-        pass
-    # Determine SDK availability
-    sdk_ok = True
-    try:
-        from openai import OpenAI  # type: ignore  # noqa: F401
-    except Exception:
-        sdk_ok = False
-    # Determine key presence (env or settings file)
-    key_present = bool(
-        os.getenv("CEDARPY_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY") or _env_get("CEDARPY_OPENAI_API_KEY") or _env_get("OPENAI_API_KEY")
-    )
-    client, model = _llm_client_config()
-    if not client:
-        reason = "missing key"
-        if key_present and not sdk_ok:
-            reason = "OpenAI SDK missing"
-        elif (not key_present) and sdk_ok:
-            reason = "missing key"
-        elif (not key_present) and (not sdk_ok):
-            reason = "SDK+key missing"
-        else:
-            reason = "init error"
-        _LLM_READY_CACHE.update({"ts": now, "ready": False, "reason": reason, "model": model or ""})
-        return False, reason, model or ""
-    try:
-        # Cheap probe: retrieve the model
-        client.models.retrieve(model)
-        prev_ready = bool(_LLM_READY_CACHE.get("ready"))
-        _LLM_READY_CACHE.update({"ts": now, "ready": True, "reason": "ok", "model": model})
-        try:
-            if not prev_ready:
-                print(f"[llm-ready] model={model} key=ok")
-        except Exception:
-            pass
-        return True, "ok", model
-    except Exception as e:
-        _LLM_READY_CACHE.update({"ts": now, "ready": False, "reason": f"{type(e).__name__}", "model": model or ""})
-        return False, f"{type(e).__name__}", model or ""
-
-# Module-level helpers used by Settings and Layout
-def _llm_reach_ok() -> bool:
-    try:
-        ok, _, _ = _llm_reachability()
-        return bool(ok)
-    except Exception:
-        return False
-
-def _llm_reach_reason() -> str:
-    try:
-        ok, reason, _ = _llm_reachability()
-        return "ok" if ok else (reason or "unknown")
-    except Exception:
-        return "unknown"
-
-# Helper to detect trivially simple arithmetic prompts. Used only to enforce plan-first policy.
-# We always use the LLM; this does not compute answers, only classifies trivial math.
-import re as _re_simple
-
-def _is_trivial_math(msg: str) -> bool:
-    try:
-        s = (msg or "").strip().lower()
-        return bool(_re_simple.match(r"^(what\s+is\s+)?(-?\d+)\s*([+\-*/x×])\s*(-?\d+)\s*\??$", s))
-    except Exception:
-        return False
+# Note: env_get, env_set_many, llm_reachability and layout are now imported from ui_utils
 
 
 
@@ -2913,8 +1563,8 @@ SELECT * FROM demo LIMIT 10;""")
             var fullText = m.text || '';
             
             // Extract just the Answer part for collapsed view
-            var answerMatch = fullText.match(/Answer:\\s*([^\\n]+(?:\\n(?!\\n|Why:|Potential Issues:|Suggested Next Steps:)[^\\n]+)*)/);
-            var collapsedText = answerMatch ? answerMatch[1].trim() : fullText.split('\n')[0];
+            var answerMatch = fullText.match(/Answer:\\\\s*([^\\\\n]+(?:\\\\n(?!\\\\n|Why:|Potential Issues:|Suggested Next Steps:)[^\\\\n]+)*)/);
+            var collapsedText = answerMatch ? answerMatch[1].trim() : fullText.split('\\n')[0];
             
             // Create unique ID for collapsible details
             var detailId = 'agent_det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
