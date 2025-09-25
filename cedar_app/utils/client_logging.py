@@ -1,6 +1,9 @@
 """
 Client logging utilities for Cedar app.
 Handles client-side log collection and processing.
+
+Note: This module works with in-memory logging rather than database persistence,
+matching the existing Cedar app architecture that uses _LOG_BUFFER.
 """
 
 import json
@@ -8,232 +11,222 @@ import os
 from typing import Dict, Any, List
 from datetime import datetime
 from fastapi import HTTPException
-from sqlalchemy.orm import sessionmaker
+from pydantic import BaseModel
 
-from ..db_utils import _get_project_engine, ensure_project_initialized
-from main_models import ClientLog, Project, Branch
+
+class ClientLogEntry(BaseModel):
+    """Pydantic model for client log entries."""
+    when: str = None
+    level: str
+    message: str
+    url: str = None
+    line: int = None
+    column: int = None
+    stack: str = None
+    userAgent: str = None
+    origin: str = None
+    project_id: int = None
+    branch_id: int = None
 
 
 def api_client_log(app, payload: Dict[str, Any]):
-    """Record client-side logs for debugging and monitoring."""
-    project_id = int(payload.get("project_id"))
-    branch_id = int(payload.get("branch_id", 1))
-    level = str(payload.get("level", "info")).lower()
+    """Record client-side logs for debugging and monitoring.
+    Uses in-memory _LOG_BUFFER for consistency with existing architecture.
+    """
+    try:
+        # Import the global log buffer from main_impl_full
+        from cedar_app.main_impl_full import _LOG_BUFFER
+    except ImportError:
+        # Fallback if not available
+        _LOG_BUFFER = []
+    
+    # Extract data from payload
+    project_id = payload.get("project_id")
+    branch_id = payload.get("branch_id", 1)
+    level = str(payload.get("level", "info")).upper()
     message = str(payload.get("message", ""))
     context = payload.get("context", {})
+    url = payload.get("url", "")
+    timestamp = payload.get("when") or datetime.utcnow().isoformat() + "Z"
     
-    # Validate log level
-    valid_levels = ["debug", "info", "warn", "error", "critical"]
-    if level not in valid_levels:
-        level = "info"
+    # Create log entry for the buffer
+    log_entry = {
+        "ts": timestamp,
+        "level": level,
+        "host": "client",
+        "origin": f"client:P{project_id}:B{branch_id}" if project_id else "client",
+        "url": url,
+        "loc": "",
+        "ua": payload.get("userAgent", ""),
+        "message": message,
+        "stack": payload.get("stack"),
+    }
     
-    ensure_project_initialized(project_id)
-    SessionLocal = sessionmaker(bind=_get_project_engine(project_id), autoflush=False, autocommit=False, future=True)
-    db = SessionLocal()
+    # Append to buffer
     try:
-        # Create log entry
-        log_entry = ClientLog(
-            project_id=project_id,
-            branch_id=branch_id,
-            level=level,
-            message=message,
-            context_json=json.dumps(context) if context else None,
-            created_at=datetime.utcnow()
-        )
-        db.add(log_entry)
-        db.commit()
-        
-        # Also write to console for debugging (optional)
-        if os.getenv("CEDARPY_DEBUG_CLIENT_LOGS"):
-            try:
-                print(f"[CLIENT-{level.upper()}] P{project_id}/B{branch_id}: {message}")
-                if context:
-                    print(f"  Context: {json.dumps(context, indent=2)}")
-            except Exception:
-                pass
-        
-        return {"ok": True, "logged": True}
-    except Exception as e:
-        # Don't fail the client if logging fails
-        if os.getenv("CEDARPY_DEBUG_CLIENT_LOGS"):
-            print(f"[CLIENT-LOG-ERROR] {type(e).__name__}: {e}")
-        return {"ok": False, "error": str(e)}
-    finally:
-        try:
-            db.close()
-        except Exception:
-            pass
+        _LOG_BUFFER.append(log_entry)
+    except Exception:
+        pass
+    
+    # Also write to console for debugging
+    try:
+        print(f"[CLIENT-{level}] P{project_id}/B{branch_id}: {message}")
+        if context:
+            print(f"  Context: {json.dumps(context, indent=2)}")
+    except Exception:
+        pass
+    
+    return {"ok": True, "logged": True}
 
 
 def api_client_logs_batch(app, payload: Dict[str, Any]):
     """Record multiple client-side logs at once."""
-    project_id = int(payload.get("project_id"))
-    branch_id = int(payload.get("branch_id", 1))
+    project_id = payload.get("project_id")
+    branch_id = payload.get("branch_id", 1)
     logs = payload.get("logs", [])
     
     if not logs:
         return {"ok": True, "count": 0}
     
-    ensure_project_initialized(project_id)
-    SessionLocal = sessionmaker(bind=_get_project_engine(project_id), autoflush=False, autocommit=False, future=True)
-    db = SessionLocal()
     try:
-        count = 0
-        for log_item in logs:
-            try:
-                level = str(log_item.get("level", "info")).lower()
-                if level not in ["debug", "info", "warn", "error", "critical"]:
-                    level = "info"
-                
-                log_entry = ClientLog(
-                    project_id=project_id,
-                    branch_id=branch_id,
-                    level=level,
-                    message=str(log_item.get("message", "")),
-                    context_json=json.dumps(log_item.get("context", {})) if log_item.get("context") else None,
-                    created_at=datetime.fromisoformat(log_item["timestamp"].replace("Z", "+00:00")) 
-                              if "timestamp" in log_item else datetime.utcnow()
-                )
-                db.add(log_entry)
-                count += 1
-            except Exception as e:
-                if os.getenv("CEDARPY_DEBUG_CLIENT_LOGS"):
-                    print(f"[CLIENT-BATCH-ERROR] Failed to log item: {e}")
+        # Import the global log buffer from main_impl_full
+        from cedar_app.main_impl_full import _LOG_BUFFER
+    except ImportError:
+        # Fallback if not available
+        _LOG_BUFFER = []
+    
+    count = 0
+    for log_item in logs:
+        try:
+            level = str(log_item.get("level", "info")).upper()
+            message = str(log_item.get("message", ""))
+            timestamp = log_item.get("timestamp") or datetime.utcnow().isoformat() + "Z"
+            
+            log_entry = {
+                "ts": timestamp,
+                "level": level,
+                "host": "client",
+                "origin": f"client:P{project_id}:B{branch_id}" if project_id else "client",
+                "url": log_item.get("url", ""),
+                "loc": "",
+                "ua": log_item.get("userAgent", ""),
+                "message": message,
+                "stack": log_item.get("stack"),
+            }
+            
+            _LOG_BUFFER.append(log_entry)
+            count += 1
+        except Exception as e:
+            print(f"[CLIENT-BATCH-ERROR] Failed to log item: {e}")
+            continue
+    
+    return {"ok": True, "count": count}
+
+
+def api_client_logs_query(app, project_id: int = None, branch_id: int = None, 
+                         level: str = None, limit: int = 100):
+    """Query client logs for debugging from in-memory buffer."""
+    try:
+        # Import the global log buffer from main_impl_full
+        from cedar_app.main_impl_full import _LOG_BUFFER
+        logs = list(_LOG_BUFFER)
+    except ImportError:
+        logs = []
+    
+    # Filter logs
+    filtered_logs = []
+    for log in logs:
+        # Filter by project if specified
+        if project_id is not None:
+            origin = log.get("origin", "")
+            if f"P{project_id}" not in origin:
                 continue
         
-        if count > 0:
-            db.commit()
-        
-        return {"ok": True, "count": count}
-    except Exception as e:
-        if os.getenv("CEDARPY_DEBUG_CLIENT_LOGS"):
-            print(f"[CLIENT-BATCH-ERROR] {type(e).__name__}: {e}")
-        return {"ok": False, "error": str(e), "count": 0}
-    finally:
-        try:
-            db.close()
-        except Exception:
-            pass
-
-
-def api_client_logs_query(app, project_id: int, branch_id: int = None, 
-                         level: str = None, limit: int = 100):
-    """Query client logs for debugging."""
-    ensure_project_initialized(project_id)
-    SessionLocal = sessionmaker(bind=_get_project_engine(project_id), autoflush=False, autocommit=False, future=True)
-    db = SessionLocal()
-    try:
-        q = db.query(ClientLog).filter(ClientLog.project_id == project_id)
-        
+        # Filter by branch if specified
         if branch_id is not None:
-            q = q.filter(ClientLog.branch_id == int(branch_id))
+            origin = log.get("origin", "")
+            if f"B{branch_id}" not in origin:
+                continue
         
-        if level:
-            q = q.filter(ClientLog.level == level.lower())
+        # Filter by level if specified
+        if level and log.get("level", "").lower() != level.lower():
+            continue
         
-        logs = q.order_by(ClientLog.created_at.desc()).limit(min(limit, 1000)).all()
-        
-        return {
-            "ok": True,
-            "logs": [
-                {
-                    "id": log.id,
-                    "level": log.level,
-                    "message": log.message,
-                    "context": json.loads(log.context_json) if log.context_json else None,
-                    "branch_id": log.branch_id,
-                    "created_at": log.created_at.isoformat() + "Z" if log.created_at else None
-                }
-                for log in logs
-            ]
-        }
-    finally:
-        try:
-            db.close()
-        except Exception:
-            pass
+        filtered_logs.append({
+            "level": log.get("level"),
+            "message": log.get("message"),
+            "origin": log.get("origin"),
+            "url": log.get("url"),
+            "created_at": log.get("ts")
+        })
+    
+    # Limit results
+    filtered_logs = filtered_logs[-limit:] if limit > 0 else filtered_logs
+    
+    return {
+        "ok": True,
+        "logs": filtered_logs
+    }
 
 
 def api_client_error_report(app, payload: Dict[str, Any]):
     """Handle client error reports with additional context."""
-    project_id = int(payload.get("project_id"))
-    branch_id = int(payload.get("branch_id", 1))
+    project_id = payload.get("project_id")
+    branch_id = payload.get("branch_id", 1)
     error_type = str(payload.get("type", "unknown"))
     message = str(payload.get("message", ""))
     stack_trace = payload.get("stack_trace", "")
     user_agent = payload.get("user_agent", "")
     url = payload.get("url", "")
-    context = payload.get("context", {})
     
-    # Add error details to context
-    error_context = {
-        "error_type": error_type,
-        "stack_trace": stack_trace,
-        "user_agent": user_agent,
-        "url": url,
-        **context
-    }
-    
-    ensure_project_initialized(project_id)
-    SessionLocal = sessionmaker(bind=_get_project_engine(project_id), autoflush=False, autocommit=False, future=True)
-    db = SessionLocal()
     try:
-        # Log as error level
-        log_entry = ClientLog(
-            project_id=project_id,
-            branch_id=branch_id,
-            level="error",
-            message=f"[{error_type}] {message}",
-            context_json=json.dumps(error_context),
-            created_at=datetime.utcnow()
-        )
-        db.add(log_entry)
-        db.commit()
+        # Import the global log buffer from main_impl_full
+        from cedar_app.main_impl_full import _LOG_BUFFER
+    except ImportError:
+        _LOG_BUFFER = []
+    
+    try:
+        # Create error log entry
+        log_entry = {
+            "ts": datetime.utcnow().isoformat() + "Z",
+            "level": "ERROR",
+            "host": "client",
+            "origin": f"client:P{project_id}:B{branch_id}" if project_id else "client",
+            "url": url,
+            "loc": "",
+            "ua": user_agent,
+            "message": f"[{error_type}] {message}",
+            "stack": stack_trace,
+        }
+        
+        _LOG_BUFFER.append(log_entry)
         
         # Also log to console for immediate visibility
-        if os.getenv("CEDARPY_DEBUG_CLIENT_LOGS") or error_type == "critical":
-            print(f"[CLIENT-ERROR] P{project_id}/B{branch_id} - {error_type}: {message}")
-            if stack_trace:
-                print(f"  Stack: {stack_trace[:500]}")
+        print(f"[CLIENT-ERROR] P{project_id}/B{branch_id} - {error_type}: {message}")
+        if stack_trace:
+            print(f"  Stack: {stack_trace[:500]}")
         
         return {"ok": True, "reported": True}
     except Exception as e:
         print(f"[ERROR-REPORT-FAIL] {type(e).__name__}: {e}")
         return {"ok": False, "error": str(e)}
-    finally:
-        try:
-            db.close()
-        except Exception:
-            pass
 
 
-def cleanup_old_logs(project_id: int, days_to_keep: int = 7):
-    """Clean up old client logs to manage storage."""
-    from datetime import timedelta
-    
-    ensure_project_initialized(project_id)
-    SessionLocal = sessionmaker(bind=_get_project_engine(project_id), autoflush=False, autocommit=False, future=True)
-    db = SessionLocal()
+def cleanup_old_logs(project_id: int = None, days_to_keep: int = 7):
+    """Clean up old client logs from in-memory buffer.
+    Note: In-memory logs are automatically cleaned by buffer size limits.
+    This function provides a consistent API but has limited effect on memory buffers.
+    """
     try:
-        cutoff_date = datetime.utcnow() - timedelta(days=days_to_keep)
+        # Import the global log buffer from main_impl_full
+        from cedar_app.main_impl_full import _LOG_BUFFER
         
-        # Delete old logs
-        deleted = db.query(ClientLog).filter(
-            ClientLog.project_id == project_id,
-            ClientLog.created_at < cutoff_date
-        ).delete()
+        # For in-memory buffer, we can only clean based on count
+        # This is a no-op for memory buffers since they're automatically managed
+        current_count = len(_LOG_BUFFER)
         
-        db.commit()
-        
-        if os.getenv("CEDARPY_DEBUG_CLIENT_LOGS"):
-            print(f"[LOG-CLEANUP] Deleted {deleted} old log entries for project {project_id}")
-        
-        return {"ok": True, "deleted": deleted}
+        print(f"[LOG-CLEANUP] In-memory buffer has {current_count} entries")
+        return {"ok": True, "deleted": 0, "note": "In-memory logs auto-managed"}
     except Exception as e:
         print(f"[CLEANUP-ERROR] {type(e).__name__}: {e}")
         return {"ok": False, "error": str(e)}
-    finally:
-        try:
-            db.close()
-        except Exception:
-            pass
