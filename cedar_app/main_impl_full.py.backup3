@@ -834,19 +834,183 @@ async def ws_sql(websocket: WebSocket, project_id: int):
 # Message format:
 #  - { "action": "exec", "sql": "...", "branch_id": 2 | null, "branch_name": "Main" | null, "max_rows": 200 }
 #  - { "action": "undo_last", "branch_id": 2 | null, "branch_name": "Main" | null }
-
-# SQL route handlers moved to routes/sql_routes.py
-from cedar_app.routes.sql_routes import (
-    ws_sqlx as ws_sqlx_impl,
-    make_table_branch_aware as make_table_branch_aware_impl,
-    undo_last_sql as undo_last_sql_impl,
-    execute_sql as execute_sql_impl
-)
-
 @app.websocket("/ws/sqlx/{project_id}")
 async def ws_sqlx(websocket: WebSocket, project_id: int):
-    """WebSocket SQL endpoint. Delegates to extracted module."""
-    await ws_sqlx_impl(websocket, project_id)
+    token_q = websocket.query_params.get("token") if hasattr(websocket, "query_params") else None
+    if not SHELL_API_ENABLED:
+        await websocket.close(code=4403); return
+    if SHELL_API_TOKEN:
+        cookie_tok = websocket.cookies.get("Cedar-Shell-Token") if hasattr(websocket, "cookies") else None
+        if (token_q or cookie_tok) != SHELL_API_TOKEN:
+            await websocket.close(code=4401); return
+    else:
+        try:
+            client_host = (websocket.client.host if websocket.client else "")
+        except Exception:
+            client_host = ""
+        if client_host not in {"127.0.0.1", "::1", "localhost"}:
+            await websocket.close(code=4401); return
+
+    await websocket.accept()
+
+    # Ensure per-project database schema and storage are initialized
+    try:
+        ensure_project_initialized(project_id)
+    except Exception:
+        pass
+
+    # Per-project session
+    SessionLocal = sessionmaker(bind=_get_project_engine(project_id), autoflush=False, autocommit=False, future=True)
+
+    def _resolve_branch_id(db: Session, branch_id: Optional[int], branch_name: Optional[str]) -> int:
+        if branch_id:
+            b = db.query(Branch).filter(Branch.id == branch_id, Branch.project_id == project_id).first()
+            if b: return b.id
+        if branch_name:
+            b = db.query(Branch).filter(Branch.project_id == project_id, Branch.name == branch_name).first()
+            if b: return b.id
+        # default to Main
+        main_b = db.query(Branch).filter(Branch.project_id == project_id, Branch.name == "Main").first()
+        if not main_b:
+            main_b = ensure_main_branch(db, project_id)
+        return main_b.id
+
+    while True:
+        try:
+            raw = await websocket.receive_text()
+        except WebSocketDisconnect:
+            break
+        except Exception:
+            break
+        if not raw:
+            continue
+        try:
+            msg = json.loads(raw)
+        except Exception:
+            msg = {"action": "exec", "sql": raw}
+
+        action = (msg.get("action") or "exec").lower()
+        sql_text = msg.get("sql") or ""
+        br_id = msg.get("branch_id")
+        br_name = msg.get("branch_name")
+        try:
+            max_rows = int(msg.get("max_rows", int(os.getenv("CEDARPY_SQL_MAX_ROWS", "200"))))
+        except Exception:
+            max_rows = 200
+
+        db = SessionLocal()
+        try:
+            branch_id_eff = _resolve_branch_id(db, br_id, br_name)
+            if action == "undo_last":
+                # Deterministic undo: allow specifying an explicit log_id
+                log = None
+                req_log_id = msg.get("log_id")
+                if req_log_id:
+                    try:
+                        req_log_id = int(req_log_id)
+                        log = db.query(SQLUndoLog).filter(SQLUndoLog.id==req_log_id, SQLUndoLog.project_id==project_id).first()
+                    except Exception:
+                        log = None
+                if not log:
+                    # Fallback: find last log for this project+branch
+                    log = db.query(SQLUndoLog).filter(SQLUndoLog.project_id==project_id, SQLUndoLog.branch_id==branch_id_eff).order_by(SQLUndoLog.created_at.desc(), SQLUndoLog.id.desc()).first()
+                if not log:
+                    # Fallback: find the latest log for this project whose rows_after indicate the target branch
+                    cand = db.query(SQLUndoLog).filter(SQLUndoLog.project_id==project_id).order_by(SQLUndoLog.created_at.desc(), SQLUndoLog.id.desc()).limit(50).all()
+                    for lg in cand:
+                        try:
+                            ra = lg.rows_after or []
+                            if any((isinstance(r, dict) and int(r.get("branch_id", -1)) == int(branch_id_eff)) for r in ra):
+                                log = lg; break
+                        except Exception:
+                            pass
+                if not log:
+                    await websocket.send_text(json.dumps({"ok": False, "error": "Nothing to undo"}))
+                    db.close(); continue
+                table = _safe_identifier(log.table_name)
+                pk_cols = log.pk_columns or []
+                with _get_project_engine(project_id).begin() as conn:
+                    if log.op == "insert":
+                        for row in (log.rows_after or []):
+                            conds = [f"{pc} = {_sql_quote(row.get(pc))}" for pc in pk_cols if pc in row]
+                            conds.append(f"project_id = {project_id}")
+                            conds.append(f"branch_id = {branch_id_eff}")
+                            if conds:
+                                conn.exec_driver_sql(f"DELETE FROM {table} WHERE " + " AND ".join(conds))
+                    elif log.op == "delete":
+                        for row in (log.rows_before or []):
+                            cols = list(row.keys())
+                            vals = ", ".join(_sql_quote(row[c]) for c in cols)
+                            conn.exec_driver_sql(f"INSERT INTO {table} (" + ", ".join(cols) + ") VALUES (" + vals + ")")
+                    elif log.op == "update":
+                        for row in (log.rows_before or []):
+                            sets = []
+                            conds = []
+                            for k, v in row.items():
+                                if k in pk_cols or k in ("project_id","branch_id"):
+                                    conds.append(f"{k} = {_sql_quote(v)}")
+                                else:
+                                    sets.append(f"{k} = {_sql_quote(v)}")
+                            if sets and conds:
+                                conn.exec_driver_sql(f"UPDATE {table} SET " + ", ".join(sets) + " WHERE " + " AND ".join(conds))
+                try:
+                    db.delete(log); db.commit()
+                except Exception:
+                    db.rollback()
+                await websocket.send_text(json.dumps({"ok": True, "undone": True}))
+                db.close(); continue
+            else:
+                # Execute with undo capture (SELECT/PRAGMA will be routed internally to _execute_sql)
+                res = _execute_sql_with_undo(db, sql_text, project_id, branch_id_eff, max_rows=max_rows)
+                # Use exact undo id from execution result when available; fall back to latest log for this branch
+                last_log_id = res.get("undo_log_id")
+                if last_log_id is None:
+                    try:
+                        # Ensure session sees freshest state
+                        try:
+                            db.expire_all()
+                        except Exception:
+                            pass
+                        _last = db.query(SQLUndoLog).filter(SQLUndoLog.project_id==project_id, SQLUndoLog.branch_id==branch_id_eff).order_by(SQLUndoLog.created_at.desc(), SQLUndoLog.id.desc()).first()
+                        if not _last:
+                            _last = db.query(SQLUndoLog).filter(SQLUndoLog.project_id==project_id).order_by(SQLUndoLog.created_at.desc(), SQLUndoLog.id.desc()).first()
+                        if _last:
+                            last_log_id = _last.id
+                    except Exception:
+                        pass
+                # Use 0 as a sentinel when we couldn't determine a specific undo id; this allows downstream callers
+                # to treat it as "unknown" while still providing a non-null value and relying on branch-based fallbacks.
+                if last_log_id is None:
+                    last_log_id = 0
+                out = {
+                    "ok": bool(res.get("success")),
+                    "statement_type": res.get("statement_type"),
+                    "columns": res.get("columns"),
+                    "rows": res.get("rows"),
+                    "rowcount": res.get("rowcount"),
+                    "truncated": res.get("truncated"),
+                    "error": None if res.get("success") else res.get("error"),
+                    "last_log_id": last_log_id,
+                }
+                await websocket.send_text(json.dumps(out))
+        except Exception as e:
+            try:
+                await websocket.send_text(json.dumps({"ok": False, "error": str(e)}))
+            except Exception:
+                pass
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
+
+    try:
+        await websocket.close()
+    except Exception:
+        pass
+
+
+@app.post("/api/shell/stop/{job_id}")
 def api_shell_stop(job_id: str, request: Request, x_api_token: Optional[str] = Header(default=None)):
     require_shell_enabled_and_auth(request, x_api_token)
     job = get_shell_job(job_id)
@@ -877,17 +1041,199 @@ def api_shell_status(job_id: str, request: Request, x_api_token: Optional[str] =
 # ----------------------------------------------------------------------------------
 
 # Test-only tool execution API (local + CEDARPY_TEST_MODE only)
-
-# Testing tools moved to utils/dev_tools.py
-from cedar_app.utils.dev_tools import (
-    ToolExecRequest,
-    api_test_tool_exec as api_test_tool_exec_impl
-)
+class ToolExecRequest(BaseModel):
+    function: str
+    args: Optional[Dict[str, Any]] = None
+    project_id: Optional[int] = None
+    branch_id: Optional[int] = None
 
 @app.post("/api/test/tool")
 def api_test_tool_exec(body: ToolExecRequest, request: Request):
-    """Tool execution endpoint for testing. Delegates to extracted module."""
-    return api_test_tool_exec_impl(body, request)
+    # Only allow from local requests. Require either:
+    # - CEDARPY_TEST_MODE=1 (CI/test), or
+    # - CEDARPY_DEV_ALLOW_TEST_TOOL=1 (local dev override)
+    try:
+        test_mode = str(os.getenv("CEDARPY_TEST_MODE", "")).strip().lower() in {"1","true","yes","on"}
+    except Exception:
+        test_mode = False
+    try:
+        dev_allow = str(os.getenv("CEDARPY_DEV_ALLOW_TEST_TOOL", "")).strip().lower() in {"1","true","yes","on"}
+    except Exception:
+        dev_allow = False
+    host = (request.client.host if request and request.client else "")
+    local_ok = host in {"127.0.0.1","::1","localhost","testclient"}
+    if not local_ok:
+        raise HTTPException(status_code=403, detail="forbidden")
+    if not (test_mode or dev_allow):
+        raise HTTPException(status_code=403, detail="forbidden")
+
+    fn = (body.function or "").strip().lower()
+    args = body.args or {}
+    pid = int(body.project_id or 0)
+    bid = int(body.branch_id or 0)
+
+    def _branch_id_or_main(project_id: int, bid_hint: int | None) -> int:
+        SessionLocal = sessionmaker(bind=_get_project_engine(project_id), autoflush=False, autocommit=False, future=True)
+        with SessionLocal() as dbs:
+            if bid_hint:
+                b = dbs.query(Branch).filter(Branch.id==int(bid_hint), Branch.project_id==project_id).first()
+                if b:
+                    return b.id
+            m = ensure_main_branch(dbs, project_id)
+            return m.id
+
+    if fn == "db":
+        if not pid:
+            raise HTTPException(status_code=400, detail="project_id required for db")
+        sql_text = str(args.get("sql") or "")
+        return ct.tool_db(project_id=pid, sql_text=sql_text, execute_sql=_execute_sql)
+
+    if fn == "code":
+        if not pid:
+            raise HTTPException(status_code=400, detail="project_id required for code")
+        source = str(args.get("source") or "")
+        if not source:
+            raise HTTPException(status_code=400, detail="source required")
+        b_id = _branch_id_or_main(pid, bid or None)
+        SessionLocal2 = sessionmaker(bind=_get_project_engine(pid), autoflush=False, autocommit=False, future=True)
+        def _q(sql_text: str):
+            try:
+                return _execute_sql(sql_text, pid, max_rows=200)
+            except Exception as e:
+                return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        return ct.tool_code(
+            language='python',
+            source=source,
+            project_id=pid,
+            branch_id=b_id,
+            SessionLocal=SessionLocal2,
+            FileEntry=FileEntry,
+            branch_filter_ids=branch_filter_ids,
+            query_sql=_q,
+        )
+
+    if fn == "web":
+        url = str(args.get("url") or "")
+        query = str(args.get("query") or "")
+        return ct.tool_web(url=url, query=query)
+
+    if fn == "download":
+        if not pid:
+            raise HTTPException(status_code=400, detail="project_id required")
+        urls = args.get("urls") or []
+        if not isinstance(urls, list) or not urls:
+            raise HTTPException(status_code=400, detail="urls required")
+        SessionLocal2 = sessionmaker(bind=_get_project_engine(pid), autoflush=False, autocommit=False, future=True)
+        with SessionLocal2() as dbs:
+            b_id = _branch_id_or_main(pid, bid or None)
+            b = dbs.query(Branch).filter(Branch.id==b_id).first()
+            branch_name = b.name if b else "Main"
+        # call central implementation (opens its own session)
+        return ct.tool_download(
+            project_id=pid,
+            branch_id=b_id,
+            branch_name=branch_name,
+            urls=urls,
+            project_dirs=_project_dirs,
+            SessionLocal=SessionLocal2,
+            FileEntry=FileEntry,
+            file_extension_to_type=file_extension_to_type,
+        )
+
+    if fn == "extract":
+        if not pid:
+            raise HTTPException(status_code=400, detail="project_id required")
+        fid = args.get("file_id")
+        if fid is None:
+            raise HTTPException(status_code=400, detail="file_id required")
+        SessionLocal2 = sessionmaker(bind=_get_project_engine(pid), autoflush=False, autocommit=False, future=True)
+        return ct.tool_extract(project_id=pid, file_id=int(fid), SessionLocal=SessionLocal2, FileEntry=FileEntry)
+
+    if fn == "image":
+        if not pid:
+            raise HTTPException(status_code=400, detail="project_id required")
+        fid = args.get("image_id") or args.get("file_id")
+        purpose = str(args.get("purpose") or "")
+        if fid is None:
+            raise HTTPException(status_code=400, detail="image_id (file_id) required")
+        SessionLocal2 = sessionmaker(bind=_get_project_engine(pid), autoflush=False, autocommit=False, future=True)
+        def _api_exec_img(image_id: int, p: str = "") -> Dict[str, Any]:
+            try:
+                with SessionLocal2() as dbs:
+                    f = dbs.query(FileEntry).filter(FileEntry.id==int(image_id), FileEntry.project_id==pid).first()
+                    if not f or not f.storage_path or not os.path.isfile(f.storage_path):
+                        return {"ok": False, "error": "image not found"}
+                    import base64 as _b64
+                    with open(f.storage_path, 'rb') as fh:
+                        b = fh.read()
+                    ext = (os.path.splitext(f.storage_path)[1].lower() or ".png").lstrip('.')
+                    mime = f.mime_type or ("image/" + (ext if ext in {"png","jpeg","jpg","webp","gif"} else "png"))
+                    data_url = f"data:{mime};base64,{_b64.b64encode(b).decode('ascii')}"
+                    return {"ok": True, "image_id": f.id, "purpose": p, "data_url_head": data_url[:120000]}
+            except Exception as e:
+                return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        return ct.tool_image(image_id=int(fid), purpose=purpose, exec_img=_api_exec_img)
+
+    if fn == "shell":
+        script = str(args.get("script") or "")
+        return ct.tool_shell(script=script)
+
+    if fn == "notes":
+        if not pid:
+            raise HTTPException(status_code=400, detail="project_id required")
+        themes = args.get("themes") or []
+        b_id = _branch_id_or_main(pid, bid or None)
+        SessionLocal2 = sessionmaker(bind=_get_project_engine(pid), autoflush=False, autocommit=False, future=True)
+        return ct.tool_notes(project_id=pid, branch_id=b_id, themes=themes, SessionLocal=SessionLocal2, Note=Note)
+
+    if fn == "compose":
+        if not pid:
+            raise HTTPException(status_code=400, detail="project_id required")
+        sections = args.get("sections") or []
+        b_id = _branch_id_or_main(pid, bid or None)
+        SessionLocal2 = sessionmaker(bind=_get_project_engine(pid), autoflush=False, autocommit=False, future=True)
+        return ct.tool_compose(project_id=pid, branch_id=b_id, sections=sections, SessionLocal=SessionLocal2, Note=Note)
+
+    if fn == "tabular_import":
+        if not pid:
+            raise HTTPException(status_code=400, detail="project_id required")
+        fid = args.get("file_id")
+        options = args.get("options") if isinstance(args, dict) else None
+        if fid is None:
+            raise HTTPException(status_code=400, detail="file_id required")
+        SessionLocal2 = sessionmaker(bind=_get_project_engine(pid), autoflush=False, autocommit=False, future=True)
+        b_id = _branch_id_or_main(pid, bid or None)
+        return ct.tool_tabular_import(
+            project_id=pid,
+            branch_id=b_id,
+            file_id=int(fid),
+            options=options if isinstance(options, dict) else None,
+            SessionLocal=SessionLocal2,
+            FileEntry=FileEntry,
+            project_dirs=_project_dirs,
+            get_project_engine=_get_project_engine,
+            Dataset=Dataset,
+        )
+
+    raise HTTPException(status_code=400, detail="unsupported function")
+
+# Client + Server unified log buffer
+# We maintain a single in-memory ring buffer of recent logs and write both client- and server-side log entries into it.
+# The /log page renders from this buffer (latest last for readability in UI).
+# See README.md: "Client-side logging" and "Unified backend logging".
+_LOG_BUFFER: deque = deque(maxlen=5000)
+# Back-compat aliases (existing code references these):
+_CLIENT_LOG_BUFFER = _LOG_BUFFER  # client posts append here
+_SERVER_LOG_BUFFER = _LOG_BUFFER  # server handler appends here
+
+# Lightweight server logging integration
+# - Capture Python logging via a custom handler
+# - Capture print(...) by patching builtins (optional; enabled by default)
+# - Add HTTP middleware to log request start/end with timing
+import logging as _logging, contextvars as _ctxv, builtins as _bi, time as _time
+
+_current_path: _ctxv.ContextVar[str] = _ctxv.ContextVar("cedarpy_current_path", default="")
+
 class CedarBufferHandler(_logging.Handler):
     def emit(self, record: _logging.LogRecord) -> None:  # type: ignore[name-defined]
         try:
@@ -1071,8 +1417,80 @@ def delete_all_files(project_id: int, request: Request, db: Session = Depends(ge
 
 @app.post("/project/{project_id}/sql/make_branch_aware")
 def make_table_branch_aware(project_id: int, request: Request, table: str = Form(...), db: Session = Depends(get_project_db)):
-    """Make table branch-aware. Delegates to extracted module."""
-    return make_table_branch_aware_impl(project_id, request, table, db)
+    ensure_project_initialized(project_id)
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        return RedirectResponse("/", status_code=303)
+    branch_id = request.query_params.get("branch_id")
+    try:
+        branch_id = int(branch_id) if branch_id is not None else None
+    except Exception:
+        branch_id = None
+    current_b = current_branch(db, project.id, branch_id)
+    main_b = ensure_main_branch(db, project.id)
+
+    tbl = _safe_identifier(table)
+    try:
+        with _get_project_engine(project.id).begin() as conn:
+            if _dialect(_get_project_engine(project.id)) != "sqlite":
+                return RedirectResponse(f"/project/{project.id}?branch_id={current_b.id}&msg=Only+SQLite+supported+for+now", status_code=303)
+            # Introspect
+            info = conn.exec_driver_sql(f"PRAGMA table_info({tbl})").fetchall()
+            if not info:
+                return RedirectResponse(f"/project/{project.id}?branch_id={current_b.id}&msg=Table+not+found", status_code=303)
+            cols = [{"cid": r[0], "name": r[1], "type": r[2] or "", "notnull": int(r[3]) == 1, "dflt": r[4], "pk": int(r[5])} for r in info]
+            names = {c["name"].lower() for c in cols}
+            if "project_id" in names and "branch_id" in names:
+                return RedirectResponse(f"/project/{project.id}?branch_id={current_b.id}&msg=Already+branch-aware", status_code=303)
+            # Rename old
+            tmp = f"{tbl}_old_ba"
+            conn.exec_driver_sql(f"ALTER TABLE {tbl} RENAME TO {tmp}")
+            # Build CREATE for new table
+            col_defs = []
+            pk_cols = [c["name"] for c in cols if c["pk"]]
+            for c in cols:
+                line = f"{c['name']} {c['type']}".strip()
+                if c["notnull"]:
+                    line += " NOT NULL"
+                # Inline PRIMARY KEY if single PK col
+                if len(pk_cols) == 1 and c["name"] == pk_cols[0] and ("int" in c["type"].lower()):
+                    line += " PRIMARY KEY"
+                col_defs.append(line)
+            # Add branch columns
+            col_defs.append("project_id INTEGER NOT NULL")
+            col_defs.append("branch_id INTEGER NOT NULL")
+            # Table-level PK for composite keys
+            if len(pk_cols) > 1:
+                pk_list = ", ".join(pk_cols)
+                col_defs.append(f"PRIMARY KEY ({pk_list})")
+            create_sql = f"CREATE TABLE {tbl} (" + ", ".join(col_defs) + ")"
+            conn.exec_driver_sql(create_sql)
+            # Copy data into Main
+            old_cols_list = ", ".join([c["name"] for c in cols])
+            insert_cols_list = old_cols_list + ", project_id, branch_id"
+            conn.exec_driver_sql(
+                f"INSERT INTO {tbl} ({insert_cols_list}) SELECT {old_cols_list}, {project.id}, {main_b.id} FROM {tmp}"
+            )
+            # Drop old
+            conn.exec_driver_sql(f"DROP TABLE {tmp}")
+    except Exception as e:
+        try:
+            record_changelog(db, project.id, current_b.id, "sql.make_branch_aware", {"table": tbl}, {"error": str(e)})
+        except Exception:
+            pass
+        return RedirectResponse(f"/project/{project.id}?branch_id={current_b.id}&msg=Error:+{html.escape(str(e))}", status_code=303)
+
+    try:
+        record_changelog(db, project.id, current_b.id, "sql.make_branch_aware", {"table": tbl}, {"ok": True})
+    except Exception:
+        pass
+    return RedirectResponse(f"/project/{project.id}?branch_id={current_b.id}&msg=Converted+{tbl}+to+branch-aware", status_code=303)
+
+BRANCH_AWARE_SQL_DEFAULT = os.getenv("CEDARPY_SQL_BRANCH_MODE", "1") == "1"
+
+# -------------------- Delete project (registry + files + per-project DB dir) --------------------
+
+@app.post("/project/{project_id}/delete")
 def delete_project(project_id: int):
     from cedar_app.utils.project_management import delete_project as _delete_project
     return _delete_project(app, project_id)
@@ -1081,8 +1499,90 @@ def delete_project(project_id: int):
 
 @app.post("/project/{project_id}/sql/undo_last")
 def undo_last_sql(project_id: int, request: Request, db: Session = Depends(get_project_db)):
-    """Undo last SQL operation. Delegates to extracted module."""
-    return undo_last_sql_impl(project_id, request, db)
+    ensure_project_initialized(project_id)
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        return RedirectResponse("/", status_code=303)
+    branch_id = request.query_params.get("branch_id")
+    try:
+        branch_id = int(branch_id) if branch_id is not None else None
+    except Exception:
+        branch_id = None
+    current_b = current_branch(db, project.id, branch_id)
+
+    log = db.query(SQLUndoLog).filter(SQLUndoLog.project_id==project.id, SQLUndoLog.branch_id==current_b.id).order_by(SQLUndoLog.created_at.desc(), SQLUndoLog.id.desc()).first()
+    if not log:
+        return RedirectResponse(f"/project/{project.id}?branch_id={current_b.id}&msg=Nothing+to+undo", status_code=303)
+
+    table = _safe_identifier(log.table_name)
+    pk_cols = log.pk_columns or []
+    try:
+        with _get_project_engine(project.id).begin() as conn:
+            if log.op == "insert":
+                # Delete rows we inserted
+                for row in (log.rows_after or []):
+                    conds = [f"{pc} = {_sql_quote(row.get(pc))}" for pc in pk_cols if pc in row]
+                    conds.append(f"project_id = {project.id}")
+                    conds.append(f"branch_id = {current_b.id}")
+                    if conds:
+                        conn.exec_driver_sql(f"DELETE FROM {table} WHERE " + " AND ".join(conds))
+            elif log.op == "delete":
+                # Re-insert rows
+                for row in (log.rows_before or []):
+                    cols = list(row.keys())
+                    vals = ", ".join(_sql_quote(row[c]) for c in cols)
+                    conn.exec_driver_sql(f"INSERT INTO {table} (" + ", ".join(cols) + ") VALUES (" + vals + ")")
+            elif log.op == "update":
+                # Restore before values
+                for row in (log.rows_before or []):
+                    sets = []
+                    conds = []
+                    for k, v in row.items():
+                        if k in pk_cols or k in ("project_id","branch_id"):
+                            conds.append(f"{k} = {_sql_quote(v)}")
+                        else:
+                            sets.append(f"{k} = {_sql_quote(v)}")
+                    if sets and conds:
+                        conn.exec_driver_sql(f"UPDATE {table} SET " + ", ".join(sets) + " WHERE " + " AND ".join(conds))
+    except Exception as e:
+        try:
+            record_changelog(db, project.id, current_b.id, "sql.undo_last", {"undo_log_id": getattr(log, 'id', None)}, {"error": str(e)})
+        except Exception:
+            pass
+        return RedirectResponse(f"/project/{project.id}?branch_id={current_b.id}&msg=Undo+failed:+{html.escape(str(e))}", status_code=303)
+
+    # Remove the log entry we just undid
+    try:
+        db.delete(log)
+        db.commit()
+    except Exception:
+        db.rollback()
+
+    try:
+        record_changelog(db, project.id, current_b.id, "sql.undo_last", {"undo_log_id": getattr(log, 'id', None)}, {"ok": True})
+    except Exception:
+        pass
+
+    return RedirectResponse(f"/project/{project.id}?branch_id={current_b.id}&msg=Undone", status_code=303)
+
+# -------------------- SQL Helpers for Branch-Aware Mode --------------------
+
+# _dialect moved to sql_utils.py
+
+
+# _table_has_branch_columns moved to sql_utils.py
+
+
+# _get_pk_columns moved to sql_utils.py
+
+
+# _safe_identifier moved to sql_utils.py
+
+
+# _preprocess_sql_branch_aware moved to sql_utils.py
+
+
+@app.post("/project/{project_id}/sql", response_class=HTMLResponse)
 def execute_sql(project_id: int, request: Request, sql: str = Form(...), db: Session = Depends(get_project_db)):
     ensure_project_initialized(project_id)
     # resolve current project and branch
