@@ -757,9 +757,12 @@ def serve_project_upload(project_id: int, path: str):
 
 # Moved to utils/page_rendering.py
 from cedar_app.utils.page_rendering import projects_list_html
-
-
 from cedar_app.utils.page_rendering import project_page_html
+
+# Import extracted functions
+from cedar_app.utils.file_upload import serve_project_upload as _serve_project_upload_impl, upload_file as _upload_file_impl
+from cedar_app.utils.sql_websocket import ws_sqlx as _ws_sqlx_impl
+from cedar_app.utils.test_tools import api_test_tool_exec as _api_test_tool_exec_impl
 
 
 
