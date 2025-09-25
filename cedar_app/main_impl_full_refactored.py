@@ -2524,13 +2524,129 @@ async def ws_chat_stream(websocket: WebSocket, project_id: int):
         pass
 
 
-
 # Background workers and upload function moved to utils/file_operations.py
 from cedar_app.utils.file_operations import (
     _run_langextract_ingest_background,
     _run_upload_postprocess_background,
     upload_file as upload_file_impl
 )
+
+def _run_upload_postprocess_background(project_id: int, branch_id: int, file_id: int, thread_id: int, original_name: str, meta: Dict[str, Any]) -> None:
+    """Background worker for upload post-processing in embedded harness mode.
+
+    Performs:
+    - LLM classification (updates file record; writes assistant message)
+    - Versioning and changelog (file.upload+classify)
+    - Optionally kick off LangExtract indexing + tabular import in its own background thread
+
+    Notes:
+    - Uses a fresh DB session bound to the per-project engine.
+    - See README (WebSocket-first flow and LLM key setup) for API keys configuration.
+    """
+    try:
+        from sqlalchemy.orm import sessionmaker as _sessionmaker
+        import threading as _threading
+        import json as _json
+    except Exception:
+        return
+    try:
+        SessionLocal = _sessionmaker(bind=_get_project_engine(project_id), autoflush=False, autocommit=False, future=True)
+        dbj = SessionLocal()
+    except Exception:
+        return
+    try:
+        # Load the file record
+        rec = dbj.query(FileEntry).filter(FileEntry.id == int(file_id), FileEntry.project_id == project_id).first()
+        if not rec:
+            return
+        # Build meta for LLM
+        meta_for_llm = dict(meta or {})
+        meta_for_llm["display_name"] = original_name
+        # LLM classification (best-effort)
+        ai_result = None
+        try:
+            ai_result = _llm_classify_file(meta_for_llm)
+            if ai_result:
+                rec.structure = ai_result.get("structure")
+                rec.ai_title = ai_result.get("ai_title")
+                rec.ai_description = ai_result.get("ai_description")
+                rec.ai_category = ai_result.get("ai_category")
+            rec.ai_processing = False
+            dbj.commit(); dbj.refresh(rec)
+        except Exception:
+            try:
+                rec.ai_processing = False
+                dbj.commit()
+            except Exception:
+                dbj.rollback()
+        # Assistant message reflecting analysis outcome (keeps tests/UI consistent)
+        try:
+            if ai_result:
+                disp_title = f"File analyzed — {rec.structure or 'unknown'}"
+                dbj.add(ThreadMessage(
+                    project_id=project_id,
+                    branch_id=branch_id,
+                    thread_id=thread_id,
+                    role="assistant",
+                    display_title=disp_title,
+                    content=_json.dumps({
+                        "event": "file_analyzed",
+                        "file_id": file_id,
+                        "structure": rec.structure,
+                        "ai_title": rec.ai_title,
+                        "ai_category": rec.ai_category,
+                    }),
+                    payload_json=ai_result,
+                ))
+                dbj.commit()
+            else:
+                # Explicitly record a skipped analysis
+                msg = ThreadMessage(project_id=project_id, branch_id=branch_id, thread_id=thread_id, role="assistant", display_title="File analysis skipped", content="LLM classification disabled, missing key, or error")
+                dbj.add(msg); dbj.commit()
+        except Exception:
+            try: dbj.rollback()
+            except Exception: pass
+        # Version entry for file metadata
+        try:
+            add_version(dbj, "file", rec.id, {
+                "project_id": project_id, "branch_id": branch_id,
+                "filename": rec.filename, "display_name": rec.display_name,
+                "file_type": rec.file_type, "structure": rec.structure,
+                "mime_type": rec.mime_type, "size_bytes": rec.size_bytes,
+                "metadata": meta,
+            })
+        except Exception:
+            pass
+        # Changelog
+        try:
+            input_payload = {"action": "classify_file", "metadata_for_llm": meta_for_llm}
+            output_payload = {"ai": ai_result, "thread_id": thread_id}
+            record_changelog(dbj, project_id, branch_id, "file.upload+classify", input_payload, output_payload)
+        except Exception:
+            pass
+        # LangExtract indexing + (later) tabular import
+        try:
+            _lx_ingest_enabled = str(os.getenv("CEDARPY_LX_INGEST", "1")).strip().lower() not in {"", "0", "false", "no", "off"}
+        except Exception:
+            _lx_ingest_enabled = True
+        try:
+            _lx_bg_on = str(os.getenv("CEDARPY_LANGEXTRACT_BG", "1")).strip().lower() not in {"", "0", "false", "no", "off"}
+        except Exception:
+            _lx_bg_on = True
+        if _lx_ingest_enabled and _lx_bg_on:
+            try:
+                # System message indicating ingestion start
+                dbj.add(ThreadMessage(project_id=project_id, branch_id=branch_id, thread_id=thread_id, role="system", display_title="Indexing file chunks...", content=json.dumps({"action":"langextract_ingest","file_id": file_id, "display_name": original_name})))
+                dbj.commit()
+            except Exception:
+                dbj.rollback()
+            try:
+                _threading.Thread(target=_run_langextract_ingest_background, args=(project_id, branch_id, int(file_id), int(thread_id)), daemon=True).start()
+            except Exception:
+                pass
+    finally:
+        try: dbj.close()
+        except Exception: pass
 
 
 @app.post("/project/{project_id}/files/upload")
