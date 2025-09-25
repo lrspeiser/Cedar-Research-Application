@@ -845,6 +845,10 @@ async def ws_sql(websocket: WebSocket, project_id: int):
 # Message format:
 #  - { "action": "exec", "sql": "...", "branch_id": 2 | null, "branch_name": "Main" | null, "max_rows": 200 }
 #  - { "action": "undo_last", "branch_id": 2 | null, "branch_name": "Main" | null }
+
+# Import ClientLogEntry for the client-log endpoint
+from cedar_app.utils.logging import ClientLogEntry, _LOG_BUFFER
+
 @app.post("/api/client-log")
 def api_client_log(entry: ClientLogEntry, request: Request):
     # Keep the legacy in-memory buffer approach for compatibility
@@ -1304,7 +1308,6 @@ def get_or_create_project_registry(db: Session, title: str) -> Project:
     - SQLite: use INSERT .. ON CONFLICT DO NOTHING, then SELECT
     - Fallback: SELECT first, else create
     """
-    from main_helpers import ensure_main_branch
     t = (title or "").strip()
     if not t:
         raise ValueError("empty title")
@@ -1347,6 +1350,8 @@ def get_or_create_project_registry(db: Session, title: str) -> Project:
 def create_project(title: str = Form(...), db: Session = Depends(get_registry_db)):
     """Create a new project."""
     from main_helpers import ensure_main_branch, add_version
+    from sqlalchemy.orm import sessionmaker
+    
     title = title.strip()
     if not title:
         return RedirectResponse("/", status_code=303)

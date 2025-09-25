@@ -369,6 +369,13 @@ def _cedarpy_startup_llm_probe():
 
 
 
+@app.get("/", response_class=HTMLResponse)
+def home(request: Request, db: Session = Depends(get_registry_db)):
+    """Home page showing list of all projects."""
+    projects = db.query(Project).order_by(Project.created_at.desc()).all()
+    return layout("Cedar", projects_list_html(projects), header_label="All Projects")
+
+
 @app.get("/settings", response_class=HTMLResponse)
 def settings_page(msg: Optional[str] = None):
     return _settings_page(
@@ -1469,7 +1476,33 @@ def get_or_create_project_registry(db: Session, title: str) -> Project:
 @app.post("/projects/create")
 def create_project(title: str = Form(...), db: Session = Depends(get_registry_db)):
     """Create a new project."""
-    return create_project_impl(title, db)
+    # Create project in registry
+    p = Project(title=title.strip()[:100])
+    db.add(p)
+    db.commit()
+    db.refresh(p)
+    
+    # Initialize project storage and database
+    try:
+        _ensure_project_storage(p.id)
+        ensure_project_initialized(p.id)
+    except Exception as e:
+        print(f"[create-project-error] Failed to initialize project {p.id}: {e}")
+        # Still proceed since project exists in registry
+    
+    # Create Main branch in project's database
+    try:
+        eng = _get_project_engine(p.id)
+        SessionLocal = sessionmaker(bind=eng, autoflush=False, autocommit=False, future=True)
+        with SessionLocal() as pdb:
+            main = ensure_main_branch(pdb, p.id)
+            main_id = main.id
+    except Exception as e:
+        print(f"[create-project] Failed to create Main branch: {e}")
+        main_id = 1
+    
+    # Redirect to the new project
+    return RedirectResponse(f"/project/{p.id}?branch_id={main_id}", status_code=303)
 
 @app.get("/threads", response_class=HTMLResponse)
 def threads_index(project_id: Optional[int] = None, branch_id: Optional[int] = None):
