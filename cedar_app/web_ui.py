@@ -1519,6 +1519,11 @@ def get_or_create_project_registry(db: Session, title: str) -> Project:
         raise
 
 
+@app.get("/test/version")
+def test_version():
+    """Test endpoint to verify server is using updated code."""
+    return {"version": "2024-09-25-debug", "message": "If you see this, the server is using the updated web_ui.py"}
+
 @app.post("/projects/create")
 def create_project(title: str = Form(...), db: Session = Depends(get_registry_db)):
     """Create a new project."""
