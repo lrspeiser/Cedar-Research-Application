@@ -1603,8 +1603,8 @@ SELECT * FROM demo LIMIT 10;""")
             var fullText = m.text || '';
             
             // Extract just the Answer part for collapsed view
-            var answerMatch = fullText.match(/Answer:\\\\s*([^\\\\n]+(?:\\\\n(?!\\\\n|Why:|Potential Issues:|Suggested Next Steps:)[^\\\\n]+)*)/);
-            var collapsedText = answerMatch ? answerMatch[1].trim() : fullText.split('\\n')[0];
+            var answerMatch = fullText.match(/Answer:\s*([^\n]+(?:\n(?!\n|Why:|Potential Issues:|Suggested Next Steps:)[^\n]+)*)/);
+            var collapsedText = answerMatch ? answerMatch[1].trim() : fullText.split('\n')[0];
             
             // Create unique ID for collapsible details
             var detailId = 'agent_det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
@@ -1656,7 +1656,11 @@ SELECT * FROM demo LIMIT 10;""")
             wrapA.appendChild(detailsA);
             
             // Make bubble and title clickable to toggle details
-            var toggleDetails = function() {
+            var toggleDetails = function(e) {
+              if (e) {
+                e.preventDefault();
+                e.stopPropagation();
+              }
               var d = document.getElementById(detailId);
               if (d) {
                 var isHidden = d.style.display === 'none';
@@ -1666,11 +1670,12 @@ SELECT * FROM demo LIMIT 10;""")
               }
             };
             
+            // Add click event listeners
             bubA.addEventListener('click', toggleDetails);
-            metaA.querySelector('.title').addEventListener('click', function(e) {
-              e.stopPropagation();
-              toggleDetails();
-            });
+            var titleEl = metaA.querySelector('.title');
+            if (titleEl) {
+              titleEl.addEventListener('click', toggleDetails);
+            }
             
             if (msgs) msgs.appendChild(wrapA);
             stepAdvance('agent:' + agentName.toLowerCase(), wrapA);
