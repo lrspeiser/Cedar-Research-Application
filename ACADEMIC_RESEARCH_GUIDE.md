@@ -23,12 +23,44 @@ Cedar has been optimized to assist academics with rigorous research that meets p
 
 ### 4. Multi-Agent Collaboration
 The Chief Agent coordinates multiple specialized agents simultaneously:
-- **Code Agent**: Creates reproducible computational artifacts
-- **SQL Agent**: Structures data into queryable databases
-- **Research Agent**: Finds academic sources and builds citations
-- **Notes Agent**: Documents methodology and findings
-- **Math Agent**: Provides mathematical proofs and derivations
-- **Shell Agent**: Executes system commands with full documentation
+
+#### Understanding Agent Capabilities (CRITICAL!)
+
+**💻 Code Agent**: 
+- ✅ CAN: Write/execute Python code, calculations, data analysis, visualizations
+- ❌ CANNOT: Access files on disk or run shell commands
+- USE FOR: All computations and statistical analysis
+
+**🖥️ Shell Agent** (ONLY agent that can search your computer!):
+- ✅ CAN: Execute ANY shell command (`find`, `grep`, `ls`, `cat`, etc.)
+- ✅ CAN: Search for files: `find ~ -name "*keyword*"`
+- ✅ CAN: Search file contents: `grep -r "pattern" /path`
+- USE FOR: Finding files on your machine, system operations
+
+**🗄️ SQL Agent**:
+- ✅ CAN: Create databases, tables, execute SQL queries
+- ❌ CANNOT: Search filesystem
+- USE FOR: Structuring data into queryable databases
+
+**📚 Research Agent**:
+- ✅ CAN: Find academic papers and build citations
+- ❌ CANNOT: Download actual papers
+- USE FOR: Building bibliographies and literature reviews
+
+**📝 Notes Agent**:
+- ✅ CAN: Create structured documentation
+- ❌ CANNOT: Search for information
+- USE FOR: Documenting methodology and findings
+
+**📥 File Agent** (URL downloader ONLY!):
+- ✅ CAN: Download files from URLs
+- ❌ CANNOT: Search your computer for files
+- USE FOR: ONLY downloading from the internet
+
+**🔬 Math Agent**:
+- ✅ CAN: Derive formulas and write proofs
+- ❌ CANNOT: Execute calculations (use Code Agent)
+- USE FOR: Mathematical derivations and theorem proofs
 
 ## Research Workflow
 
