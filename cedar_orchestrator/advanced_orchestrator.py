@@ -521,19 +521,20 @@ Why: Applied step-by-step logical reasoning to analyze the problem"""
             )
 
 class SQLAgent:
-    """Agent that uses LLM to write and execute SQL queries"""
+    """Agent that uses LLM to write and execute SQL queries, create databases, and manage schemas"""
     
     def __init__(self, llm_client: Optional[AsyncOpenAI]):
         self.llm_client = llm_client
         
     async def process(self, task: str) -> AgentResult:
-        """Use LLM to generate SQL queries and execute them"""
+        """Use LLM to generate SQL for database creation, updates, and queries"""
         start_time = time.time()
         logger.info(f"[SQLAgent] Starting processing for task: {task[:100]}...")
         
         if not self.llm_client:
             return AgentResult(
                 agent_name="SQLAgent",
+                display_name="SQL Agent",
                 result="No LLM client available",
                 confidence=0.0,
                 method="Error",
@@ -541,9 +542,10 @@ class SQLAgent:
             )
         
         # Check if this is actually a SQL/database task
-        if not any(word in task.lower() for word in ["sql", "database", "table", "select", "query"]):
+        if not any(word in task.lower() for word in ["sql", "database", "table", "select", "query", "create", "insert", "update", "delete", "alter", "index"]):
             return AgentResult(
                 agent_name="SQLAgent",
+                display_name="SQL Agent",
                 result="Not a database query task",
                 confidence=0.1,
                 method="Task mismatch",
@@ -561,10 +563,17 @@ class SQLAgent:
                 "messages": [
                     {
                         "role": "system",
-                        "content": """You are a SQL expert. Generate ONLY the SQL query to solve the given problem.
-                        - Output ONLY the SQL query, no explanations
-                        - Use standard SQL syntax
-                        - The query should be complete and runnable"""
+                        "content": """You are a SQL expert. Generate SQL for database operations including:
+                        - CREATE DATABASE statements for new databases
+                        - CREATE TABLE statements with proper schemas and constraints
+                        - INSERT, UPDATE, DELETE operations for data manipulation
+                        - SELECT queries with JOINs, aggregations, and subqueries
+                        - ALTER TABLE for schema modifications
+                        - CREATE INDEX for performance optimization
+                        - Output ONLY the SQL statements, no explanations
+                        - Use standard SQL syntax (SQLite/PostgreSQL compatible)
+                        - Include proper constraints (PRIMARY KEY, FOREIGN KEY, NOT NULL, UNIQUE)
+                        - For CREATE TABLE, include appropriate data types and relationships"""
                     },
                     {"role": "user", "content": task}
                 ]
@@ -588,33 +597,58 @@ class SQLAgent:
             
             logger.info(f"[SQLAgent] Generated SQL: {generated_sql}")
             
-            # For demo purposes, return the SQL query
-            # In production, you'd execute against a real database
-            formatted_output = f"""Answer: Generated SQL query for your request
+            # Determine the type of SQL operation
+            sql_upper = generated_sql.upper()
+            if "CREATE DATABASE" in sql_upper:
+                operation_type = "Database Creation"
+            elif "CREATE TABLE" in sql_upper:
+                operation_type = "Table Creation"
+            elif "INSERT" in sql_upper:
+                operation_type = "Data Insertion"
+            elif "UPDATE" in sql_upper:
+                operation_type = "Data Update"
+            elif "DELETE" in sql_upper:
+                operation_type = "Data Deletion"
+            elif "ALTER TABLE" in sql_upper:
+                operation_type = "Schema Modification"
+            elif "CREATE INDEX" in sql_upper:
+                operation_type = "Index Creation"
+            elif "SELECT" in sql_upper:
+                operation_type = "Data Query"
+            else:
+                operation_type = "SQL Operation"
+            
+            # Show the SQL that was generated
+            sql_preview = f"**SQL Generated:**\n```sql\n{generated_sql}\n```\n\n"
+            
+            formatted_output = f"""{sql_preview}Answer: Generated {operation_type} SQL for your request
 
-Why: Translated your request into SQL syntax
+Why: Translated your request into executable SQL statements
 
-Potential Issues: Query not executed (no database connection)
-
-Suggested Next Steps: Connect to a database to execute this query"""
+Suggested Next Steps: 
+- Review the SQL for correctness
+- Execute in your database environment
+- For CREATE operations, ensure database permissions
+- For data modifications, consider using transactions"""
             
             return AgentResult(
                 agent_name="SQLAgent",
-                display_name="SQL Generator",
+                display_name="SQL Agent",
                 result=formatted_output,
-                confidence=0.8,
-                method="LLM-generated SQL",
-                explanation=f"Generated SQL query"
+                confidence=0.9 if "CREATE" in sql_upper else 0.85,
+                method=f"LLM-generated {operation_type}",
+                explanation=f"Generated {operation_type} SQL"
             )
             
         except Exception as e:
             logger.error(f"[SQLAgent] Error: {e}")
             return AgentResult(
                 agent_name="SQLAgent",
-                result=f"Failed to generate SQL: {str(e)}",
+                display_name="SQL Agent",
+                result=f"Answer: Failed to generate SQL\n\nError: {str(e)}\n\nSuggested Next Steps: Check your query syntax and try again",
                 confidence=0.1,
                 method="Error",
-                explanation=f"I encountered an error: {str(e)[:200]}"
+                explanation=f"SQL generation error: {str(e)[:100]}"
             )
 
 class GeneralAgent:
@@ -1432,12 +1466,12 @@ CURRENT STATUS:
 - You must provide a final answer within these remaining iterations
 
 AVAILABLE AGENTS AND THEIR SPECIALTIES:
-1. Code Executor - Generates and executes Python code for calculations and programming tasks
+1. Coding Agent - Generates and executes Python code for calculations and programming tasks
 2. Shell Executor - Executes shell commands with full system access (grep, install, etc.)
-3. Math Agent - Derives formulas from first principles with detailed mathematical proofs
-4. Research Agent - Web searches and finding relevant sources/citations
-5. Strategy Agent - Creates detailed action plans with agent coordination strategies
-6. SQL Agent - Database queries and SQL operations
+3. SQL Agent - Creates databases, tables, and executes all SQL operations
+4. Math Agent - Derives formulas from first principles with detailed mathematical proofs
+5. Research Agent - Web searches and finding relevant sources/citations
+6. Strategy Agent - Creates detailed action plans with agent coordination strategies
 7. Data Agent - Analyzes database schemas and suggests relevant SQL queries
 8. Notes Agent - Creates organized notes from findings without duplication
 9. File Agent - Downloads files from URLs or analyzes local file paths

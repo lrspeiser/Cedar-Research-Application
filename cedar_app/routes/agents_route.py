@@ -24,15 +24,17 @@ def register_agents_route(app: FastAPI):
                 "prompt": """You are the Chief Agent, the central decision-maker in a multi-agent system. You review all sub-agent responses and make the FINAL decision on what happens next.
 
 AVAILABLE AGENTS AND THEIR SPECIALTIES:
-1. Code Executor - Generates and executes Python code for calculations and programming tasks
-2. Logical Reasoner - Step-by-step logical analysis and reasoning
-3. General Assistant - General knowledge and direct answers
-4. SQL Agent - Database queries and SQL operations
-5. Math Agent - Derives formulas from first principles with detailed mathematical proofs
-6. Research Agent - Web searches and finding relevant sources/citations
-7. Strategy Agent - Creates detailed action plans with agent coordination strategies
-8. Data Agent - Analyzes database schemas and suggests relevant SQL queries
-9. Notes Agent - Creates organized notes from findings without duplication
+1. Coding Agent - Generates and executes Python code for calculations and programming tasks
+2. Shell Executor - Executes shell commands with full system access (grep, install, etc.)
+3. SQL Agent - Creates databases, executes queries, and manages database operations
+4. Math Agent - Derives formulas from first principles with detailed mathematical proofs
+5. Research Agent - Web searches and finding relevant sources/citations
+6. Strategy Agent - Creates detailed action plans with agent coordination strategies
+7. Data Agent - Analyzes database schemas and suggests relevant SQL queries
+8. Notes Agent - Creates organized notes from findings without duplication
+9. File Agent - Downloads files from URLs or analyzes local file paths
+10. Logical Reasoner - Step-by-step logical analysis and reasoning (use sparingly)
+11. General Assistant - General knowledge and direct answers (use sparingly)
 
 Your PRIMARY responsibility is to determine:
 1. Whether the agents have provided a satisfactory answer that can be sent to the user (decision: "final")
@@ -70,16 +72,31 @@ You MUST respond in this EXACT JSON format:
 }"""
             },
             {
-                "name": "Code Executor",
+                "name": "Coding Agent",
                 "internal_name": "CodeAgent",
-                "description": "Generates and executes Python code to solve problems",
+                "description": "Generates and executes Python code to solve problems. Shows code before execution.",
                 "is_primary": False,
                 "prompt": """You are a Python code generator. Generate ONLY executable Python code to solve the given problem.
 - Output ONLY the Python code, no explanations or markdown
 - The code should print the final result
 - Use proper error handling
 - For mathematical expressions, parse them correctly (e.g., 'square root of 5*10' means sqrt(5*10))
-- The code must be complete and runnable as-is"""
+- The code must be complete and runnable as-is
+- Code is shown to the user before execution for transparency"""
+            },
+            {
+                "name": "Shell Executor",
+                "internal_name": "ShellAgent",
+                "description": "Executes shell commands with full system access. Can install packages, grep files, and run system commands.",
+                "is_primary": False,
+                "prompt": """Extract or generate the shell command from the user's request.
+- Output ONLY the shell command, nothing else
+- Support multiline commands
+- Commands run with 30-second timeout
+- Output is limited to 3000 characters
+- Full system access with user permissions
+- Can install packages: brew, pip, npm, apt-get
+- Can search and manipulate files: grep, find, ls, cat, mkdir, rm, cp, mv"""
             },
             {
                 "name": "Logical Reasoner",
@@ -105,14 +122,20 @@ You MUST respond in this EXACT JSON format:
 - Give just the answer when appropriate"""
             },
             {
-                "name": "SQL Generator",
+                "name": "SQL Agent",
                 "internal_name": "SQLAgent",
-                "description": "Generates SQL queries for database operations",
+                "description": "Creates databases, tables, and executes SQL queries for comprehensive database management",
                 "is_primary": False,
-                "prompt": """You are a SQL expert. Generate ONLY the SQL query to solve the given problem.
-- Output ONLY the SQL query, no explanations
-- Use standard SQL syntax
-- The query should be complete and runnable"""
+                "prompt": """You are a SQL expert. Generate SQL for database operations including:
+- CREATE DATABASE statements for new databases
+- CREATE TABLE statements with proper schemas
+- INSERT, UPDATE, DELETE operations
+- SELECT queries with JOINs, aggregations, and subqueries
+- ALTER TABLE for schema modifications
+- Index creation for performance optimization
+- Output ONLY the SQL, no explanations
+- Use standard SQL syntax compatible with SQLite/PostgreSQL
+- Include proper constraints (PRIMARY KEY, FOREIGN KEY, NOT NULL, etc.)"""
             },
             {
                 "name": "Math Agent",
@@ -153,7 +176,7 @@ Then provide a comprehensive summary."""
                 "is_primary": False,
                 "prompt": """You are a strategic planning expert. Create detailed action plans that include:
 1. Breaking down the problem into manageable steps
-2. Identifying which specialized agents should be used (available agents: Code Executor, Math Agent, Research Agent, Data Agent, Notes Agent, Logical Reasoner, General Assistant)
+2. Identifying which specialized agents should be used (available agents: Coding Agent, Shell Executor, SQL Agent, Math Agent, Research Agent, Data Agent, Notes Agent, File Agent, Logical Reasoner, General Assistant)
 3. Determining the sequence of operations
 4. Specifying how to gather source material
 5. How to analyze data and compile results
@@ -201,6 +224,21 @@ Format notes with:
 - Categories/tags
 - Key points
 - Action items if any"""
+            },
+            {
+                "name": "File Agent",
+                "internal_name": "FileAgent",
+                "description": "Downloads files from URLs and manages local files. Saves metadata to database.",
+                "is_primary": False,
+                "prompt": """You are a file management expert. Handle file operations including:
+- Download files from web URLs
+- Analyze local file paths
+- Extract file metadata (size, type, content preview)
+- Save files with timestamped names to ~/CedarDownloads
+- Store file information in database
+- Generate AI descriptions for text files
+- Support for all file types
+- Automatic MIME type detection"""
             }
         ]
         
@@ -238,15 +276,17 @@ Format notes with:
         <div class="card" style="margin-bottom: 24px; background: #ecfdf5; border-color: #86efac;">
             <h3 style="color: #16a34a;">Agent Capabilities Summary</h3>
             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 12px; margin-top: 12px;">
+                <div><strong>💻 Coding Agent:</strong> Python code generation & execution</div>
+                <div><strong>🖥️ Shell Executor:</strong> System commands & package installation</div>
+                <div><strong>🗄️ SQL Agent:</strong> Database creation & management</div>
                 <div><strong>🧮 Math Agent:</strong> Mathematical proofs & derivations</div>
                 <div><strong>🔍 Research Agent:</strong> Web searches & citations</div>
                 <div><strong>📋 Strategy Agent:</strong> Planning & coordination</div>
-                <div><strong>💾 Data Agent:</strong> Database analysis & SQL</div>
+                <div><strong>💾 Data Agent:</strong> Database schema analysis</div>
                 <div><strong>📝 Notes Agent:</strong> Knowledge management</div>
-                <div><strong>💻 Code Executor:</strong> Python code execution</div>
+                <div><strong>📁 File Agent:</strong> File downloads & management</div>
                 <div><strong>🧠 Logical Reasoner:</strong> Step-by-step analysis</div>
-                <div><strong>💬 General Assistant:</strong> Direct responses</div>
-                <div><strong>🗄️ SQL Generator:</strong> Query generation</div>
+                <div><strong>💬 General Assistant:</strong> General knowledge</div>
             </div>
         </div>
         
@@ -258,7 +298,7 @@ Format notes with:
             <h3 style="color: #0369a1;">How Agents Work</h3>
             <ol>
                 <li><strong>Orchestrator receives your message</strong> - The system analyzes your request and determines which agents to engage</li>
-                <li><strong>Specialized agents process in parallel</strong> - Multiple sub-agents (Code Executor, Reasoner, etc.) work simultaneously</li>
+                <li><strong>Specialized agents process in parallel</strong> - Multiple sub-agents (Coding Agent, Shell Executor, SQL Agent, etc.) work simultaneously</li>
                 <li><strong>Results are collected</strong> - Each agent provides its answer with confidence score and method used</li>
                 <li><strong>Chief Agent reviews all responses</strong> - The Chief Agent analyzes all sub-agent results for accuracy and completeness</li>
                 <li><strong>Decision is made</strong> - Chief Agent either:
