@@ -710,13 +710,13 @@ class ThinkerOrchestrator:
             if previous_results:
                 await websocket.send_json({
                     "type": "message",
-                    "role": "Chief Agent",
+                    "role": "The Chief Agent",
                     "text": f"**Note:** Maximum iterations ({self.MAX_ITERATIONS}) reached.\n\n{previous_results[0].result if previous_results else 'Processing limit reached. Please refine your request.'}"
                 })
             else:
                 await websocket.send_json({
                     "type": "message",
-                    "role": "Chief Agent",
+                    "role": "The Chief Agent",
                     "text": "Processing limit reached. Please try a more specific request."
                 })
             return
@@ -838,7 +838,7 @@ class ThinkerOrchestrator:
             
             await websocket.send_json({
                 "type": "agent_result",
-                "agent_name": "Chief Agent",
+                "agent_name": "The Chief Agent",
                 "text": f"Status: Refining answer (iteration {iteration + 2}/{self.MAX_ITERATIONS})\n\nApproach: {guidance}"
             })
             
@@ -853,7 +853,7 @@ class ThinkerOrchestrator:
         
         # Chief Agent has made final decision - prepare the response
         final_answer = chief_decision.get('final_answer', '')
-        selected_agent = chief_decision.get('selected_agent', 'Chief Agent')
+        selected_agent = chief_decision.get('selected_agent', 'The Chief Agent')
         reasoning = chief_decision.get('reasoning', '')
         
         logger.info(f"[ORCHESTRATOR] Chief Agent FINAL decision")
@@ -909,7 +909,7 @@ class ThinkerOrchestrator:
         # Send final response with Chief Agent attribution
         await websocket.send_json({
             "type": "message",
-            "role": selected_agent if selected_agent != 'combined' else 'Chief Agent',
+            "role": selected_agent if selected_agent != 'combined' else 'The Chief Agent',
             "text": final_text,
             "metadata": {
                 "selected_agent": selected_agent,

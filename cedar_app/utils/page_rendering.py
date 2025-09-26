@@ -79,7 +79,6 @@ def project_page_html(
     selected_thread: Optional[Thread] = None,
     thread_messages: Optional[List[ThreadMessage]] = None,
     msg: Optional[str] = None,
-    sql_result_block: Optional[str] = None,
     last_msgs_map: Optional[Dict[int, List[ThreadMessage]]] = None,
     notes: Optional[List[Note]] = None,
     code_items: Optional[list] = None,
@@ -128,50 +127,6 @@ def project_page_html(
         """)
     files_tbody = ''.join(file_rows) if file_rows else '<tr><td colspan="6" class="muted">No files yet.</td></tr>'
 
-    # extract latest plan from selected thread messages (if any)
-    plan_card_html = ""
-    try:
-        if thread_messages:
-            last_plan = None
-            for m in reversed(thread_messages):
-                try:
-                    pj = m.payload_json if hasattr(m, 'payload_json') else None
-                except Exception:
-                    pj = None
-                if isinstance(pj, dict) and str(pj.get('function') or '').lower() == 'plan':
-                    last_plan = pj
-                    break
-            if last_plan:
-                # Render a compact plan card for the right column
-                try:
-                    pt = html.escape(str(last_plan.get('title') or 'Plan'))
-                except Exception:
-                    pt = 'Plan'
-                steps = last_plan.get('steps') or []
-                rows = []
-                si = 0
-                for st in steps[:10]:
-                    si += 1
-                    fn = html.escape(str((st or {}).get('function') or ''))
-                    ti = html.escape(str((st or {}).get('title') or ''))
-                    st_status = html.escape(str((st or {}).get('status') or 'in queue'))
-                    rows.append(f"<tr><td class='small'>{fn}</td><td>{ti}</td><td class='small muted'>{st_status}</td></tr>")
-                tbody = ''.join(rows) or "<tr><td colspan='3' class='muted small'>(no steps)</td></tr>"
-                plan_card_html = f"""
-                <div class='card' style='padding:12px'>
-                  <h3 style='margin-bottom:6px'>Plan</h3>
-                  <div class='small muted' style='margin-bottom:6px'>{pt}</div>
-                  <table class='table'>
-                    <thead><tr><th>Func</th><th>Title</th><th>Status</th></tr></thead>
-                    <tbody>{tbody}</tbody>
-                  </table>
-                </div>
-                """
-    except Exception:
-        plan_card_html = ""
-
-    # Build plan panel content (fallback when no plan yet)
-    plan_panel_html = plan_card_html or "<div class='card' style='padding:12px'><h3>Plan</h3><div class='muted small'>(No plan yet)</div></div>"
     
     # Build History panel with numbered chats
     from cedar_app.utils.chat_persistence import get_chat_manager
@@ -186,9 +141,9 @@ def project_page_html(
         status = chat['status']
         msg_count = chat['message_count']
         
-        # Status indicator
+        # Status indicator - for processing status, add a data attribute for refresh
         if status == 'processing':
-            status_icon = "<span class='spinner' style='width:10px; height:10px'></span>"
+            status_icon = "<span class='spinner' style='width:10px; height:10px' data-chat-status='processing' data-chat-num='{}' ></span>".format(chat_num)
         elif status == 'error':
             status_icon = "<span style='color:#ef4444'>⚠</span>"
         elif status == 'complete':
@@ -248,40 +203,6 @@ def project_page_html(
     # message
     flash = f"<div class='muted' style='margin-bottom:8px'>{escape(msg)}</div>" if msg else ""
     flash_html = flash if msg else ""
-
-    # SQL console card with basic instructions
-    examples = escape("""Examples:
--- Create a table
-CREATE TABLE IF NOT EXISTS demo (id INTEGER PRIMARY KEY, name VARCHAR(100));
--- Insert a row
-INSERT INTO demo (name) VALUES ('Alice');
--- Read rows
-SELECT * FROM demo LIMIT 10;""")
-
-    sql_card = f"""
-      <div class=\"card\" style=\"padding:12px\">
-        <h3>SQL Console</h3>
-        <form method=\"post\" action=\"/project/{project.id}/sql?branch_id={current.id}\" class=\"inline\" onsubmit=\"return cedarSqlConfirm(this)\"> 
-          <textarea name=\"sql\" rows=\"6\" placeholder=\"WRITE SQL HERE\" style=\"width:100%; font-family: ui-monospace, Menlo, Monaco, 'Courier New', monospace;\"></textarea>
-          <div style=\"height:8px\"></div>
-          <button type=\"submit\">Run SQL</button>
-        </form>
-        <script>
-        function cedarSqlConfirm(f) {{
-          var t = (f.querySelector('[name=sql]')||{{}}).value || '';
-          var re = /^\\s*(drop|delete|truncate|update|alter)\\b/i;
-          if (re.test(t)) {{
-            return confirm('This SQL looks destructive. Proceed?');
-          }}
-          return true;
-        }}
-        </script>
-        <form method=\"post\" action=\"/project/{project.id}/sql/undo_last?branch_id={current.id}\" class=\"inline\" style=\"margin-top:6px\">
-          <button type=\"submit\" class=\"secondary\">Undo Last SQL</button>
-        </form>
-        {sql_result_block or ''}
-      </div>
-    """
 
     # Thread select + create controls at the top
     threads_options = ''.join([f"<option value='{escape(t.title)}'>{escape(t.title)}</option>" for t in threads])
@@ -612,7 +533,15 @@ SELECT * FROM demo LIMIT 10;""")
       // Running timer state for the active step
       var _timerId = null;
       var _timerEl = null;
-      function _clearRunningTimer(){ try { if (_timerId) { clearInterval(_timerId); _timerId = null; } } catch(_){} }
+      function _clearRunningTimer(){ 
+        try { 
+          if (_timerId) { 
+            clearInterval(_timerId); 
+            _timerId = null; 
+            _timerEl = null;
+          } 
+        } catch(_){} 
+      }
       function annotateTime(node, dtMs){
         try {
           if (!node) return;
@@ -635,6 +564,11 @@ SELECT * FROM demo LIMIT 10;""")
           var lastText = '';
           _timerId = setInterval(function(){
             try {
+              // Check if element still exists in DOM
+              if (!_timerEl || !_timerEl.parentNode) {
+                _clearRunningTimer();
+                return;
+              }
               var dt = _now() - t0;
               var sec = (dt/1000).toFixed(dt >= 1000 ? 1 : 2);
               var text = '(' + sec + 's)';
@@ -726,6 +660,7 @@ SELECT * FROM demo LIMIT 10;""")
               streamText.textContent = '[timeout] Took too long. Exceeded ' + budgetS + 's budget; elapsed ' + elapsedS + 's. Please try again.';
             } catch(_){ }
             clearSpinner();
+            _clearRunningTimer(); // Stop timer on timeout
             stepAdvance('timeout', stream);
             finalOrError = true; timedOut = true;
             try { ws.close(); } catch(_){ }
@@ -991,37 +926,8 @@ SELECT * FROM demo LIMIT 10;""")
               return;
             }
 
-            // Lightweight plan updates should not create extra bubbles
+            // Lightweight plan updates - just skip them now that Plan tab is removed
             if (fn === 'plan_update') {
-              try {
-                var paneU = document.getElementById('right-plan');
-                if (paneU) {
-                  var callU = m.call || {};
-                  var stepsU = Array.isArray(callU.steps) ? callU.steps : [];
-                  var rowsU = stepsU.map(function(st, idx){
-                    try {
-                      var f = String((st && st.function) || '');
-                      var ti = String((st && st.title) || '');
-                      var stStatus = String((st && st.status) || 'in queue');
-                      var desc = String((st && st.description) || '');
-                      var goal = String((st && st.goal_outcome) || '');
-                      var args = st && st.args ? JSON.stringify(st.args) : '{}';
-                      var did = 'plan_det_' + idx + '_' + Math.random().toString(36).slice(2,6);
-                      return "<tr class='plan-row' data-det-id='"+did+"'><td class='small'>"+f+"</td><td>"+ti+"</td><td class='small muted'>"+stStatus+"</td></tr>"+
-                             "<tr id='"+did+"' class='plan-detail' style='display:none'><td colspan='3'><div class='small'><b>Description:</b> "+desc+"<br><b>Goal:</b> "+goal+"<br><b>Args:</b> <code class='small'>"+args.replace(/</g,'&lt;')+"</code></div></td></tr>";
-                    } catch(_){ return ""; }
-                  }).join('');
-                  if (!rowsU) rowsU = "<tr><td colspan='3' class='muted small'>(no steps)</td></tr>";
-                  var htmlU = "<div class='card' style='padding:12px'>"+
-                               "<h3 style='margin-bottom:6px'>Plan</h3>"+
-                               "<table class='table'><thead><tr><th>Func</th><th>Title</th><th>Status</th></tr></thead><tbody>"+rowsU+"</tbody></table>"+
-                               "</div>";
-                  paneU.innerHTML = htmlU;
-                  try {
-                    paneU.querySelectorAll('.plan-row').forEach(function(r){ r.addEventListener('click', function(){ var id=r.getAttribute('data-det-id'); var e = id && document.getElementById(id); if(e){ e.style.display=(e.style.display==='none'?'table-row':'none'); } }); });
-                  } catch(_) {}
-                }
-              } catch(_){ }
               stepAdvance('system:'+fn, null);
               return;
             }
@@ -1064,43 +970,7 @@ SELECT * FROM demo LIMIT 10;""")
             ackEvent(m);
             try { if (fn === 'thread_update' && m.call && m.call.thread_id) { upsertAllChatsItem(m.call.thread_id, String(m.call.title||''), null); } } catch(_){ }
 
-            // If this is a plan function, also update the right-side Plan panel live
-            if (fn === 'plan') {
-              try {
-                var pane = document.getElementById('right-plan');
-                if (pane) {
-                  var call = m.call || {};
-                  var steps = Array.isArray(call.steps) ? call.steps : [];
-                  var rows = steps.map(function(st, idx){
-                    try {
-                      var f = String((st && st.function) || '');
-                      var ti = String((st && st.title) || '');
-                      var stStatus = String((st && st.status) || 'in queue');
-                      var desc = String((st && st.description) || '');
-                      var goal = String((st && st.goal_outcome) || '');
-                      var args = st && st.args ? JSON.stringify(st.args) : '{}';
-                      var did = 'plan_det_p_' + idx + '_' + Math.random().toString(36).slice(2,6);
-                      return "<tr class='plan-row' data-det-id='"+did+"'><td class='small'>"+f+"</td><td>"+ti+"</td><td class='small muted'>"+stStatus+"</td></tr>"+
-                             "<tr id='"+did+"' class='plan-detail' style='display:none'><td colspan='3'><div class='small'><b>Description:</b> "+desc+"<br><b>Goal:</b> "+goal+"<br><b>Args:</b> <code class='small'>"+args.replace(/</g,'&lt;')+"</code></div></td></tr>";
-                    } catch(_){ return ""; }
-                  }).join('');
-                  if (!rows) rows = "<tr><td colspan='3' class='muted small'>(no steps)</td></tr>";
-                  var html = "<div class='card' style='padding:12px'>"+
-                             "<h3 style='margin-bottom:6px'>Plan</h3>"+
-                             "<table class='table'><thead><tr><th>Func</th><th>Title</th><th>Status</th></tr></thead><tbody>"+rows+"</tbody></table>"+
-                             "</div>";
-                  pane.innerHTML = html;
-                  try {
-                    pane.querySelectorAll('.plan-row').forEach(function(r){ r.addEventListener('click', function(){ var id=r.getAttribute('data-det-id'); var e = id && document.getElementById(id); if(e){ e.style.display=(e.style.display==='none'?'table-row':'none'); } }); });
-                  } catch(_) {}
-                  // Ensure the Plan tab is visible
-                  try {
-                    var tab = document.querySelector(".tabs[data-pane='right'] .tab[data-target='right-plan']");
-                    if (tab) { tab.click(); }
-                  } catch(_){}
-                }
-              } catch(_){}
-            }
+            // Plan function - no longer updating a panel since Plan tab is removed
           } catch(_){ }
         } else if (m.type === 'thinking_start') { ackEvent(m);
           try {
@@ -1182,6 +1052,7 @@ SELECT * FROM demo LIMIT 10;""")
             }
             if (label === 'finalizing' || label === 'persisted' || label === 'timeout') {
               clearSpinner();
+              _clearRunningTimer(); // Stop any running timer
               if (label === 'timeout') { finalOrError = true; }
             }
           } catch(_){ }
@@ -1322,8 +1193,9 @@ SELECT * FROM demo LIMIT 10;""")
             // Fallback to replacing the processing text if bubble rendering fails
             try { streamText.textContent = m.text; } catch(_){}
           }
-          // Clear spinner once final is ready; remove the transient processing bubble so tests don't see it anymore
+          // Clear spinner and timer once final is ready; remove the transient processing bubble so tests don't see it anymore
           clearSpinner();
+          _clearRunningTimer(); // Stop any running timer
           try {
             setTimeout(function(){ try { if (stream && stream.parentNode) stream.parentNode.removeChild(stream); } catch(_){} }, 400);
           } catch(_) { try { if (stream && stream.parentNode) stream.parentNode.removeChild(stream); } catch(_){} }
@@ -1334,6 +1206,7 @@ SELECT * FROM demo LIMIT 10;""")
           try { if (timeoutId) clearTimeout(timeoutId); } catch(_){}
           streamText.textContent = '[error] ' + (m.error || 'unknown'); ackEvent(m);
           clearSpinner();
+          _clearRunningTimer(); // Stop any running timer on error
           try {
             // Also append a system bubble with error details for visibility in the thread
             var wrapE = document.createElement('div'); wrapE.className = 'msg system';
@@ -1351,7 +1224,19 @@ SELECT * FROM demo LIMIT 10;""")
         handleEvent(m);
       };
       ws.onerror = function(){ try { streamText.textContent = (streamText.textContent||'') + ' [ws-error]'; } catch(_){} };
-      ws.onclose = function(){ try { if (window.unsubscribeCedarLogs && logSub) window.unsubscribeCedarLogs(logSub); } catch(_){}; try { if (currentStep && currentStep.node && !timedOut) { annotateTime(currentStep.node, _now() - currentStep.t0); currentStep = null; } if (!finalOrError && !timedOut) { streamText.textContent = (streamText.textContent||'') + ' [closed]'; } } catch(_){} };
+      ws.onclose = function(){ 
+        try { if (window.unsubscribeCedarLogs && logSub) window.unsubscribeCedarLogs(logSub); } catch(_){}; 
+        try { 
+          _clearRunningTimer(); // Ensure timer is stopped on websocket close
+          if (currentStep && currentStep.node && !timedOut) { 
+            annotateTime(currentStep.node, _now() - currentStep.t0); 
+            currentStep = null; 
+          } 
+          if (!finalOrError && !timedOut) { 
+            streamText.textContent = (streamText.textContent||'') + ' [closed]'; 
+          } 
+        } catch(_){} 
+      };
     } catch(e) {}
   }
 
@@ -1433,10 +1318,12 @@ SELECT * FROM demo LIMIT 10;""")
   
   window.refreshHistoryPanel = function() {
     // Refresh the history panel to show updated chat list
-    // For now, manually switch to history tab to see updates
-    var histTab = document.querySelector('[data-target="right-history"]');
-    if (histTab) {
-      // Could trigger refresh here if needed
+    // This would typically reload the history items from the server
+    // For now, we'll rely on page refresh or manual tab switching
+    var histPanel = document.getElementById('right-history');
+    if (histPanel) {
+      // In a full implementation, this would fetch updated chat list
+      // and re-render the history items with correct status indicators
     }
   }
   document.addEventListener('DOMContentLoaded', function(){
@@ -1635,7 +1522,6 @@ SELECT * FROM demo LIMIT 10;""")
           <div class="pane" style="display:flex; flex-direction:column; min-height:0">
             <div class="tabs" data-pane="left">
               <a href="#" class="tab active" data-target="left-chat">Chat</a>
-              <a href="#" class="tab" data-target="left-notes">Notes</a>
             </div>
             <div class="tab-panels" style="flex:1; min-height:0">
               <div id="left-chat" class="panel">
@@ -1662,97 +1548,38 @@ SELECT * FROM demo LIMIT 10;""")
                 { ("<div class='card' style='margin-top:8px; padding:12px'><h3>File Details</h3>" + left_details + "</div>") if selected_file else "" }
                 {code_details_html}
               </div>
-              <div id="left-notes" class="panel hidden">
-                {notes_panel_html}
-              </div>
             </div>
           </div>
 
           <div class="pane right">
             <div class="tabs" data-pane="right">
-              {''}
-              {''}
-              {''}
-              {''}
-              {''}
-              {''}
-              {''}
-              {''}
-              {''}
-              {''}
-              {''}
-              {''}
-              {''}
-              {''}
-              {''}
-              {''}
-              {''}
-              {''}
-              {''}
-              {''}
-              {''}
-              {''}
-              {''}
-              {''}
-              {''}
-              {''}
-              {''}
-              {''}
-              {''}
-              {''}
-              {''}
-              {''}
-              {''}
-              {''}
-              {''}
-              {''}
-              {''}
-              {''}
-              {''}
-              {''}
-              {''}
-              {''}
-              {''}
-              <a href="#" class="{('tab active' if not (selected_code or False) else 'tab')}" data-target="right-plan">Plan</a>
+              <a href="#" class="tab active" data-target="right-files">Files</a>
               <a href="#" class="tab" data-target="right-history">History</a>
-              <a href="#" class="tab" data-target="right-files">Files</a>
-              <a href="#" class="{('tab active' if (selected_code or False) else 'tab')}" data-target="right-code">Code</a>
-              <a href=\"#\" class=\"tab\" data-target=\"right-upload\" data-testid=\"open-uploader\">Upload</a>
-              <a href="#" class="tab" data-target="right-sql">SQL</a>
+              <a href="#" class="tab" data-target="right-code">Code</a>
               <a href="#" class="tab" data-target="right-dbs">Databases</a>
-            </div>
+              <a href="#" class="tab" data-target="right-notes">Notes</a>
             <div class="tab-panels">
-              <div id="right-plan" class="{('panel' if not (selected_code or False) else 'panel hidden')}">
-                {plan_panel_html}
-              </div>
               <div id="right-history" class="panel hidden">
                 {history_panel_html}
               </div>
               <div id="right-files" class="panel">
-                <div class="card" style="max-height:220px; overflow:auto; padding:12px">
+                <div class="card" style="padding:12px">
                   <h3 style='margin-bottom:6px'>Files</h3>
-                  {file_list_html}
+                  <!-- Upload form at the top of Files tab -->
+                  <form method="post" action="/project/{project.id}/files/upload?branch_id={current.id}" enctype="multipart/form-data" data-testid="upload-form" style="margin-bottom:12px; padding-bottom:12px; border-bottom:1px solid var(--border)">
+                    <input type="file" name="file" required data-testid="upload-input" style="margin-right:8px" />
+                    <button type="submit" data-testid="upload-submit" style="display:inline-block">Upload</button>
+                  </form>
+                  <div style="max-height:180px; overflow:auto">
+                    {file_list_html}
+                  </div>
                 </div>
               </div>
-              <div id="right-code" class="{('panel' if (selected_code or False) else 'panel hidden')}">
+              <div id="right-code" class="panel hidden">
                 <div class="card" style="max-height:220px; overflow:auto; padding:12px">
                   <h3 style='margin-bottom:6px'>Code</h3>
                   {code_list_html}
                 </div>
-              </div>
-              <div id="right-upload" class="panel">
-                <div class="card" style='padding:12px'>
-                  <h3 style='margin-bottom:6px'>Upload</h3>
-                  <form method="post" action="/project/{project.id}/files/upload?branch_id={current.id}" enctype="multipart/form-data" data-testid="upload-form">
-                    <input type="file" name="file" required data-testid="upload-input" />
-                    <div style="height:6px"></div>
-                    <div style="height:6px"></div>
-                    <button type="submit" data-testid="upload-submit">Upload</button>
-                  </form>
-                </div>
-              </div>
-              <div id="right-sql" class="panel hidden">
-                {sql_card}
               </div>
               <div id="right-dbs" class="panel hidden">
                 <div class="card" style="padding:12px">
@@ -1762,6 +1589,9 @@ SELECT * FROM demo LIMIT 10;""")
                     <tbody>{dataset_tbody}</tbody>
                   </table>
                 </div>
+              </div>
+              <div id="right-notes" class="panel hidden">
+                {notes_panel_html}
               </div>
             </div>
           </div>
