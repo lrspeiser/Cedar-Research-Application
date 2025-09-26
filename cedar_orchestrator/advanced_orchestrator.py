@@ -66,77 +66,84 @@ class AgentResult:
     clarification_question: str = ""  # Question to ask the user
     
 class ShellAgent:
-    """Agent that executes shell commands with full system access"""
+    """Agent that executes shell commands exactly as provided by the Chief Agent"""
     
     def __init__(self, llm_client: Optional[AsyncOpenAI]):
         self.llm_client = llm_client
+        self.conversation_history = []  # Store conversation context
         
-    async def process(self, task: str) -> AgentResult:
-        """Execute shell commands and analyze results"""
+    async def process(self, task: str, conversation_context: str = None) -> AgentResult:
+        """Execute shell commands exactly as provided and analyze results
+        
+        Args:
+            task: Either a shell command to execute or a request from Chief Agent with command
+            conversation_context: Optional conversation history for context
+        """
         start_time = time.time()
-        logger.info(f"[ShellAgent] Starting shell execution for: {task[:100]}...")
+        logger.info(f"[ShellAgent] Starting shell execution for: {task[:200]}...")
         
-        # Extract shell commands from the task
-        # Support both inline commands and requests to install/run things
+        # The task should contain the exact shell command from the Chief Agent
+        # Look for shell command in various formats
         shell_command = None
         
-        # Check if task contains explicit shell commands (in backticks or quotes)
+        # Pattern 1: Command in backticks `command`
         import re
-        # Look for commands in backticks
         backtick_match = re.search(r'`([^`]+)`', task)
-        # Look for commands after keywords
-        command_keywords = r'(?:run|execute|install|grep|find|search|check)\s+["\']?([^"\'\n]+)["\']?'
-        keyword_match = re.search(command_keywords, task, re.IGNORECASE)
+        
+        # Pattern 2: Command after "Execute:" or "Run:" or "Command:"
+        exec_match = re.search(r'(?:Execute|Run|Command):\s*(.+?)(?:\n|$)', task, re.IGNORECASE)
+        
+        # Pattern 3: Command in quotes after shell-related keywords
+        quote_match = re.search(r'(?:run|execute|shell)\s+["']([^"']+)["']', task, re.IGNORECASE)
+        
+        # Pattern 4: The entire task is the command (if it starts with common shell commands)
+        shell_commands = ['ls', 'cd', 'pwd', 'grep', 'find', 'cat', 'echo', 'pip', 'npm', 'brew', 'apt-get', 'chmod', 'mkdir', 'rm', 'cp', 'mv', 'curl', 'wget', 'git', 'docker', 'python', 'node']
         
         if backtick_match:
-            shell_command = backtick_match.group(1)
-        elif keyword_match and not any(word in keyword_match.group(1).lower() for word in ['for', 'to', 'that', 'which']):
-            shell_command = keyword_match.group(1)
-        elif any(cmd in task.lower() for cmd in ['brew install', 'pip install', 'npm install', 'apt-get', 'grep', 'find', 'ls', 'cat', 'echo']):
-            # Extract the actual command
-            for line in task.split('\n'):
-                if any(cmd in line.lower() for cmd in ['brew', 'pip', 'npm', 'apt-get', 'grep', 'find', 'ls', 'cat', 'echo']):
-                    shell_command = line.strip()
-                    break
-        
-        if not shell_command and self.llm_client:
-            # Ask LLM to extract or generate the shell command
-            try:
-                model = os.getenv("CEDARPY_OPENAI_MODEL") or "gpt-5"
-                completion_params = {
-                    "model": model,
-                    "messages": [
-                        {"role": "system", "content": "Extract or generate the shell command from the user's request. Output ONLY the shell command, nothing else. Support multiline commands."},
-                        {"role": "user", "content": task}
-                    ]
-                }
-                if "gpt-5" in model:
-                    completion_params["max_completion_tokens"] = 200
-                else:
-                    completion_params["max_tokens"] = 200
-                    completion_params["temperature"] = 0.1
-                
-                response = await self.llm_client.chat.completions.create(**completion_params)
-                shell_command = response.choices[0].message.content.strip()
-                # Remove markdown if present
-                if shell_command.startswith("```"):
-                    shell_command = shell_command.split("\n", 1)[1].rsplit("```", 1)[0]
-            except Exception as e:
-                logger.error(f"[ShellAgent] Failed to extract command: {e}")
+            shell_command = backtick_match.group(1).strip()
+            logger.info(f"[ShellAgent] Extracted command from backticks: {shell_command}")
+        elif exec_match:
+            shell_command = exec_match.group(1).strip()
+            logger.info(f"[ShellAgent] Extracted command after keyword: {shell_command}")
+        elif quote_match:
+            shell_command = quote_match.group(1).strip()
+            logger.info(f"[ShellAgent] Extracted command from quotes: {shell_command}")
+        elif any(task.strip().startswith(cmd) for cmd in shell_commands):
+            shell_command = task.strip()
+            logger.info(f"[ShellAgent] Using entire task as command: {shell_command}")
+        else:
+            # Last resort: if the task looks like it might be a command
+            lines = task.strip().split('\n')
+            for line in lines:
+                line = line.strip()
+                if line and not line.startswith('#') and not line.startswith('//'):
+                    # Check if line contains shell-like syntax
+                    if any(cmd in line.lower() for cmd in shell_commands) or '|' in line or '>' in line or '&&' in line:
+                        shell_command = line
+                        logger.info(f"[ShellAgent] Found command-like line: {shell_command}")
+                        break
         
         if not shell_command:
             return AgentResult(
                 agent_name="ShellAgent",
                 display_name="Shell Executor",
-                result="""Answer: No shell command detected or generated
+                result="""Answer: No executable shell command found
 
-Why: Could not identify a specific shell command to execute
+Error: The Shell Agent requires an exact shell command to execute. 
 
-Suggested Next Steps: Provide a specific shell command in backticks or describe what you want to install or run""",
-                confidence=0.2,
+The Chief Agent should provide the command in one of these formats:
+- In backticks: `ls -la`
+- After a keyword: Execute: ls -la
+- As a direct command: grep -r "pattern" /path
+
+Suggested Next Steps: Please provide the exact shell command to execute.""",
+                confidence=0.1,
                 method="No command found",
-                explanation="No shell command identified"
+                explanation="No shell command identified in the request"
             )
+        
+        # Store the command in history
+        self.conversation_history.append({"command": shell_command, "timestamp": time.time()})
         
         # Execute the shell command
         logger.info(f"[ShellAgent] Executing command: {shell_command}")
@@ -148,92 +155,135 @@ Suggested Next Steps: Provide a specific shell command in backticks or describe 
                 shell=True,
                 capture_output=True,
                 text=True,
-                timeout=30,  # 30 second timeout
+                timeout=60,  # 60 second timeout for longer operations
+                cwd=os.path.expanduser("~/Projects/cedarpy"),  # Set working directory
                 env={**os.environ}  # Pass current environment
             )
             
-            # Get output (combine stdout and stderr, limit to 3000 chars)
-            output = result.stdout[:1500] if result.stdout else ""
-            error = result.stderr[:1500] if result.stderr else ""
+            # Get output (keep more for analysis)
+            output = result.stdout[:5000] if result.stdout else ""
+            error = result.stderr[:2000] if result.stderr else ""
             exit_code = result.returncode
             
-            combined_output = f"Exit Code: {exit_code}\n"
-            if output:
-                combined_output += f"Output:\n{output}\n"
-            if error:
-                combined_output += f"Error:\n{error}\n"
+            # Build execution report
+            execution_report = f"""Shell Command Execution Report
+============================================
+Command: {shell_command}
+Working Directory: ~/Projects/cedarpy
+Exit Code: {exit_code}
+Execution Time: {time.time() - start_time:.2f}s
+"""
             
-            # Truncate to 3000 characters
-            combined_output = combined_output[:3000]
+            if output:
+                execution_report += f"\nStandard Output:\n{'-' * 40}\n{output}\n"
+            if error:
+                execution_report += f"\nError Output:\n{'-' * 40}\n{error}\n"
             
             logger.info(f"[ShellAgent] Command completed with exit code: {exit_code}")
             
-            # Analyze results with LLM if available
+            # Analyze results with LLM
             analysis = ""
+            suggested_followups = []
+            
             if self.llm_client:
                 try:
+                    # Build context including conversation history if available
+                    context = f"""You are analyzing shell command execution results.
+                    
+Conversation Context:
+{conversation_context if conversation_context else 'No prior context provided'}
+
+Previous Commands in Session:
+{self._format_history()}
+
+Analyze the results and:
+1. Summarize what happened (success/failure)
+2. Extract key information from the output
+3. Identify any errors or warnings
+4. Recommend specific follow-up shell commands if needed
+5. Note if the original goal was achieved
+
+Format follow-up commands exactly as they should be run."""
+                    
                     model = os.getenv("CEDARPY_OPENAI_MODEL") or "gpt-5"
                     completion_params = {
                         "model": model,
                         "messages": [
-                            {
-                                "role": "system",
-                                "content": """Analyze the shell command execution results. Explain:
-                                1. What the command did
-                                2. Whether it succeeded or failed
-                                3. Key information from the output
-                                4. Any warnings or errors
-                                5. Suggested next steps
-                                Keep it concise and helpful."""
-                            },
-                            {"role": "user", "content": f"Command: {shell_command}\n\nResults:\n{combined_output}"}
+                            {"role": "system", "content": context},
+                            {"role": "user", "content": f"Command: {shell_command}\n\nExecution Report:\n{execution_report}"}
                         ]
                     }
                     if "gpt-5" in model:
-                        completion_params["max_completion_tokens"] = 400
+                        completion_params["max_completion_tokens"] = 800
                     else:
-                        completion_params["max_tokens"] = 400
-                        completion_params["temperature"] = 0.3
+                        completion_params["max_tokens"] = 800
+                        completion_params["temperature"] = 0.2
                     
                     response = await self.llm_client.chat.completions.create(**completion_params)
                     analysis = response.choices[0].message.content.strip()
+                    
+                    # Extract follow-up commands if mentioned
+                    followup_matches = re.findall(r'`([^`]+)`', analysis)
+                    if followup_matches:
+                        suggested_followups = followup_matches
+                    
                 except Exception as e:
                     logger.warning(f"[ShellAgent] Failed to analyze results: {e}")
-                    analysis = "Analysis not available"
+                    analysis = self._basic_analysis(shell_command, exit_code, output, error)
+            else:
+                # Provide basic analysis without LLM
+                analysis = self._basic_analysis(shell_command, exit_code, output, error)
             
-            # Format the response
+            # Format the final response
             if exit_code == 0:
-                formatted_output = f"""Answer: Command executed successfully
-
-**Command:** `{shell_command}`
-
-**Analysis:** {analysis if analysis else 'Command completed successfully'}
-
-**Raw Output (first 3000 chars):**
-```
-{combined_output}
-```
-
-Why: Shell command executed with exit code {exit_code}
-
-Suggested Next Steps: Review the output and run follow-up commands if needed"""
+                status = "✅ Command executed successfully"
                 confidence = 0.9
             else:
-                formatted_output = f"""Answer: Command failed with exit code {exit_code}
-
-**Command:** `{shell_command}`
-
-**Analysis:** {analysis if analysis else 'Command failed - check error output'}
-
-**Raw Output (first 3000 chars):**
-```
-{combined_output}
-```
-
-Why: Shell command returned non-zero exit code
-
-Suggested Next Steps: Review the error output and try a modified command"""
+                status = f"❌ Command failed with exit code {exit_code}"
                 confidence = 0.6
+            
+            # Build formatted output
+            formatted_output = f"""Answer: {status}
+
+**Executed Command:**
+```bash
+{shell_command}
+```
+
+**Analysis:**
+{analysis}
+
+**Execution Details:**
+- Working Directory: ~/Projects/cedarpy
+- Exit Code: {exit_code}
+- Execution Time: {time.time() - start_time:.2f}s
+"""
+            
+            # Add output preview
+            if output:
+                preview = output[:1000] + "..." if len(output) > 1000 else output
+                formatted_output += f"\n**Output Preview:**\n```\n{preview}\n```\n"
+            
+            if error:
+                error_preview = error[:500] + "..." if len(error) > 500 else error
+                formatted_output += f"\n**Error Output:**\n```\n{error_preview}\n```\n"
+            
+            # Add follow-up suggestions
+            if suggested_followups:
+                formatted_output += "\n**Suggested Follow-up Commands:**\n"
+                for cmd in suggested_followups[:3]:  # Limit to 3 suggestions
+                    formatted_output += f"- `{cmd}`\n"
+            
+            formatted_output += "\nWhy: Direct shell command execution with full system access\n"
+            formatted_output += "\nSuggested Next Steps: "
+            
+            if exit_code == 0:
+                if suggested_followups:
+                    formatted_output += "Run the suggested follow-up commands to continue."
+                else:
+                    formatted_output += "The command succeeded. Review the output for the information you need."
+            else:
+                formatted_output += "Review the error message and adjust the command as needed."
             
             return AgentResult(
                 agent_name="ShellAgent",
@@ -249,13 +299,16 @@ Suggested Next Steps: Review the error output and try a modified command"""
             return AgentResult(
                 agent_name="ShellAgent",
                 display_name="Shell Executor",
-                result=f"""Answer: Command timed out after 30 seconds
+                result=f"""Answer: ⏱️ Command timed out after 60 seconds
 
 **Command:** `{shell_command}`
 
-Why: The command took too long to execute and was terminated
+**Why:** The command took too long to execute and was terminated
 
-Suggested Next Steps: Try a simpler command or one that completes faster""",
+**Suggested Next Steps:**
+- Try adding output redirection or limiting the scope (e.g., `grep -r "pattern" . --include="*.py"`)
+- Use `head` or `tail` to limit output (e.g., `command | head -100`)
+- Run the command with `&` to run in background if it's a long process""",
                 confidence=0.3,
                 method="Timeout",
                 explanation="Command timed out"
@@ -265,17 +318,63 @@ Suggested Next Steps: Try a simpler command or one that completes faster""",
             return AgentResult(
                 agent_name="ShellAgent",
                 display_name="Shell Executor",
-                result=f"""Answer: Failed to execute command
+                result=f"""Answer: ❌ Failed to execute command
 
 **Command:** `{shell_command}`
 
 **Error:** {str(e)}
 
-Suggested Next Steps: Check the command syntax and try again""",
+**Common Issues:**
+- Command not found: Install the tool or check the PATH
+- Permission denied: Try with sudo if appropriate
+- Syntax error: Check quotes and special characters
+
+**Suggested Next Steps:** 
+- Verify the command syntax
+- Check if required tools are installed
+- Try a simpler version of the command first""",
                 confidence=0.2,
                 method="Execution error",
                 explanation=f"Error: {str(e)[:100]}"
             )
+    
+    def _format_history(self) -> str:
+        """Format command history for context"""
+        if not self.conversation_history:
+            return "No previous commands in this session"
+        
+        history_lines = []
+        for i, entry in enumerate(self.conversation_history[-5:], 1):  # Last 5 commands
+            cmd = entry.get('command', 'Unknown')
+            history_lines.append(f"{i}. {cmd}")
+        
+        return "\n".join(history_lines)
+    
+    def _basic_analysis(self, command: str, exit_code: int, output: str, error: str) -> str:
+        """Provide basic analysis without LLM"""
+        analysis = []
+        
+        if exit_code == 0:
+            analysis.append("The command completed successfully.")
+            if output:
+                lines = output.strip().split('\n')
+                analysis.append(f"Generated {len(lines)} lines of output.")
+                # Try to identify common patterns
+                if 'successfully installed' in output.lower():
+                    analysis.append("Package installation completed.")
+                elif re.search(r'\d+ files?', output):
+                    match = re.search(r'(\d+) files?', output)
+                    analysis.append(f"Found or processed {match.group(1)} file(s).")
+        else:
+            analysis.append(f"The command failed with exit code {exit_code}.")
+            if 'command not found' in error.lower():
+                analysis.append("The command or program is not installed or not in PATH.")
+            elif 'permission denied' in error.lower():
+                analysis.append("Permission denied. You may need elevated privileges.")
+            elif 'no such file or directory' in error.lower():
+                analysis.append("File or directory not found. Check the path.")
+            
+        return " ".join(analysis)
 
 class CodeAgent:
     """Agent that uses LLM to write code, then executes it"""
@@ -1467,7 +1566,8 @@ CURRENT STATUS:
 
 AVAILABLE AGENTS AND THEIR SPECIALTIES:
 1. Coding Agent - Generates and executes Python code for calculations and programming tasks
-2. Shell Executor - Executes shell commands with full system access (grep, install, etc.)
+2. Shell Executor - Executes EXACT shell commands (MUST provide commands in backticks: `command`)
+   Examples: `grep -r "pattern" .`, `pip install package`, `ls -la`, `find . -name "*.py"`
 3. SQL Agent - Creates databases, tables, and executes all SQL operations
 4. Math Agent - Derives formulas from first principles with detailed mathematical proofs
 5. Research Agent - Web searches and finding relevant sources/citations
@@ -1477,6 +1577,15 @@ AVAILABLE AGENTS AND THEIR SPECIALTIES:
 9. File Agent - Downloads files from URLs or analyzes local file paths
 10. Reasoning Agent - Step-by-step logical analysis (use sparingly)
 11. General Assistant - General knowledge (use sparingly)
+
+IMPORTANT FOR SHELL COMMANDS:
+- When sending work to Shell Executor, you MUST provide the exact command in backticks
+- Format: "Execute: `exact command here`" or just "`command`"
+- Examples:
+  * For grep: "Execute: `grep -r 'pattern' /path/to/search`"
+  * For installation: "Run: `pip install numpy`"
+  * For file operations: "`find . -type f -name '*.txt'`"
+- The Shell Agent needs the EXACT command, not a description of what to do
 
 Your RESPONSIBILITIES:
 1. EXPLAIN YOUR THINKING: Describe how you're analyzing the problem and what you expect from each agent
@@ -1854,7 +1963,20 @@ I've analyzed your request as a {thinking['identified_type'].replace('_', ' ')}.
         # Don't send stream updates that would overwrite the Chief Agent analysis
         # The detailed analysis message is complete and should stand on its own
         
-        agent_tasks = [agent.process(message) for agent in agents]
+        # Create agent tasks - pass conversation context to Shell Agent
+        agent_tasks = []
+        for agent in agents:
+            if isinstance(agent, ShellAgent):
+                # Pass conversation context to Shell Agent for better analysis
+                conversation_context = f"User Query: {message}\nIteration: {iteration + 1}"
+                if previous_results:
+                    conversation_context += "\nPrevious Results:\n"
+                    for prev in previous_results[:3]:
+                        conversation_context += f"- {prev.display_name}: {prev.result[:100]}...\n"
+                agent_tasks.append(agent.process(message, conversation_context=conversation_context))
+            else:
+                agent_tasks.append(agent.process(message))
+        
         results = await asyncio.gather(*agent_tasks, return_exceptions=True)
         logger.info(f"[ORCHESTRATOR] Parallel processing completed in {time.time() - parallel_start:.3f}s")
         
@@ -1994,7 +2116,18 @@ Please provide this information so I can better assist you."""
             })
             
             # Prepare enhanced message with Chief Agent's guidance
-            enhanced_message = f"{message}\n\nRefinement guidance: {guidance}"
+            # Check if the guidance contains a shell command (in backticks)
+            if '`' in guidance:
+                # Extract command from guidance if present
+                import re
+                cmd_match = re.search(r'`([^`]+)`', guidance)
+                if cmd_match and 'ShellAgent' in thinking.get('agents_to_use', []):
+                    # Pass the command directly for Shell Agent
+                    enhanced_message = f"Execute: `{cmd_match.group(1)}`\n\nOriginal request: {message}"
+                else:
+                    enhanced_message = f"{message}\n\nRefinement guidance: {guidance}"
+            else:
+                enhanced_message = f"{message}\n\nRefinement guidance: {guidance}"
             
             # Brief delay for UI
             await asyncio.sleep(0.3)
