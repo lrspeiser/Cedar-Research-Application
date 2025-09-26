@@ -856,8 +856,13 @@ class FileAgent:
         start_time = time.time()
         logger.info(f"[FileAgent] Starting file processing for: {task[:100]}...")
         
-        # Check if task contains URLs or file paths
+        # Import required modules at the start
         import re
+        import urllib.request
+        import tempfile
+        import mimetypes
+        
+        # Check if task contains URLs or file paths
         url_pattern = r'https?://[^\s]+'
         file_path_pattern = r'(/[^\s]+|[A-Za-z]:\\[^\s]+|\./[^\s]+)'
         
@@ -871,10 +876,6 @@ class FileAgent:
             logger.info(f"[FileAgent] Found {len(urls)} URLs to download")
             for url in urls:
                 try:
-                    import urllib.request
-                    import tempfile
-                    import mimetypes
-                    
                     # Create temp directory for downloads
                     download_dir = os.path.join(os.path.expanduser("~"), "CedarDownloads")
                     os.makedirs(download_dir, exist_ok=True)
