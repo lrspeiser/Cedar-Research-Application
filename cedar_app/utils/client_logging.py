@@ -34,11 +34,12 @@ def api_client_log(app, payload: Dict[str, Any]):
     Uses in-memory _LOG_BUFFER for consistency with existing architecture.
     """
     try:
-        # Import the global log buffer from main_impl_full
-        from cedar_app.main_impl_full import _LOG_BUFFER
+        # Import the global log buffer from main module
+        from main import _LOG_BUFFER
     except ImportError:
         # Fallback if not available
-        _LOG_BUFFER = []
+        from collections import deque
+        _LOG_BUFFER = deque(maxlen=1000)
     
     # Extract data from payload
     project_id = payload.get("project_id")
@@ -89,11 +90,12 @@ def api_client_logs_batch(app, payload: Dict[str, Any]):
         return {"ok": True, "count": 0}
     
     try:
-        # Import the global log buffer from main_impl_full
-        from cedar_app.main_impl_full import _LOG_BUFFER
+        # Import the global log buffer from main module
+        from main import _LOG_BUFFER
     except ImportError:
         # Fallback if not available
-        _LOG_BUFFER = []
+        from collections import deque
+        _LOG_BUFFER = deque(maxlen=1000)
     
     count = 0
     for log_item in logs:
@@ -127,8 +129,8 @@ def api_client_logs_query(app, project_id: int = None, branch_id: int = None,
                          level: str = None, limit: int = 100):
     """Query client logs for debugging from in-memory buffer."""
     try:
-        # Import the global log buffer from main_impl_full
-        from cedar_app.main_impl_full import _LOG_BUFFER
+        # Import the global log buffer from main module
+        from main import _LOG_BUFFER
         logs = list(_LOG_BUFFER)
     except ImportError:
         logs = []
@@ -180,10 +182,11 @@ def api_client_error_report(app, payload: Dict[str, Any]):
     url = payload.get("url", "")
     
     try:
-        # Import the global log buffer from main_impl_full
-        from cedar_app.main_impl_full import _LOG_BUFFER
+        # Import the global log buffer from main module
+        from main import _LOG_BUFFER
     except ImportError:
-        _LOG_BUFFER = []
+        from collections import deque
+        _LOG_BUFFER = deque(maxlen=1000)
     
     try:
         # Create error log entry
@@ -218,8 +221,8 @@ def cleanup_old_logs(project_id: int = None, days_to_keep: int = 7):
     This function provides a consistent API but has limited effect on memory buffers.
     """
     try:
-        # Import the global log buffer from main_impl_full
-        from cedar_app.main_impl_full import _LOG_BUFFER
+        # Import the global log buffer from main module
+        from main import _LOG_BUFFER
         
         # For in-memory buffer, we can only clean based on count
         # This is a no-op for memory buffers since they're automatically managed

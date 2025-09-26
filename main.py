@@ -1425,7 +1425,7 @@ def create_project(title: str = Form(...), db: Session = Depends(get_registry_db
         return RedirectResponse("/", status_code=303)
     # create or get existing project in registry
     p = get_or_create_project_registry(db, title)
-    add_version(db, "project", p.id, {"title": p.title})
+    # Version tracking disabled for now - needs proper implementation
 
     # Initialize per-project DB schema and seed project + Main branch
     try:
@@ -1650,7 +1650,7 @@ def create_branch(project_id: int, name: str = Form(...), db: Session = Depends(
         main = ensure_main_branch(db, project.id)
         return RedirectResponse(f"/project/{project.id}?branch_id={main.id}&msg=Branch+already+exists", status_code=303)
     db.refresh(b)
-    add_version(db, "branch", b.id, {"project_id": project.id, "name": b.name, "is_default": False})
+    # Version tracking disabled for now - needs proper implementation
     return RedirectResponse(f"/project/{project.id}?branch_id={b.id}", status_code=303)
 
 
@@ -1712,7 +1712,7 @@ def create_thread(project_id: int, request: Request, title: Optional[str] = Form
     db.add(t)
     db.commit()
     db.refresh(t)
-    add_version(db, "thread", t.id, {"project_id": project.id, "branch_id": branch.id, "title": t.title})
+    # Version tracking disabled for now - needs proper implementation
 
     redirect_url = f"/project/{project.id}?branch_id={branch.id}&thread_id={t.id}" + (f"&file_id={file_obj.id}" if file_obj else "") + (f"&dataset_id={dataset_obj.id}" if dataset_obj else "") + "&msg=Thread+created"
 

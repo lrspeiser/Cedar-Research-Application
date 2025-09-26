@@ -415,12 +415,12 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
             
             return AgentResult(
                 agent_name="CodeAgent",
-                display_name="Code Agent",
-                result=f"**Agent Failure Report:**\n\nThe Code Agent was unable to process your request due to missing LLM configuration.\n\n**Error Details:**\n{error_details}\n\n**What the Chief Agent should know:**\nThis agent requires an LLM to generate and execute code. Without it, no code generation is possible.",
+                display_name="Coding Agent",
+                result=f"**Agent Failure Report:**\n\nThe Coding Agent was unable to process your request due to missing LLM configuration.\n\n**Error Details:**\n{error_details}\n\n**What the Chief Agent should know:**\nThis agent requires an LLM to generate and execute code. Without it, no code generation is possible.",
                 confidence=0.0,
                 method="Configuration Error",
                 explanation="LLM client not available - cannot generate code",
-                summary="Code Agent failed: No LLM configured"
+                summary="Coding Agent failed: No LLM configured"
             )
         
         try:
@@ -468,7 +468,7 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
             if "unclear" in task.lower() or "ambiguous" in task.lower() or task.count('?') > 2:
                 return AgentResult(
                     agent_name="CodeAgent",
-                    display_name="Code Agent",
+                    display_name="Coding Agent",
                     result="Results So Far: Unable to generate code due to unclear requirements\n\nNext Steps: Clarify the specific calculation or operation needed",
                     confidence=0.2,
                     method="Needs clarification",
@@ -557,7 +557,7 @@ Why: Generated and executed Python code to compute the exact result"""
                 
                 return AgentResult(
                     agent_name="CodeAgent",
-                    display_name="Code Executor",
+                    display_name="Coding Agent",
                     result=formatted_output,
                     confidence=0.95 if output else 0.5,
                     method="LLM-generated and executed Python code",
@@ -579,7 +579,7 @@ Suggested Next Steps: Review the code and error, then provide a more specific qu
                 
                 return AgentResult(
                     agent_name="CodeAgent",
-                    display_name="Code Executor",
+                    display_name="Coding Agent",
                     result=formatted_output,
                     confidence=0.3,
                     method="LLM code generation with execution error",
@@ -599,8 +599,8 @@ Model: {model if 'model' in locals() else 'Not determined'}"""
             
             return AgentResult(
                 agent_name="CodeAgent",
-                display_name="Code Agent",
-                result=f"**Code Generation Failed:**\n\nThe Code Agent encountered an error while generating code.\n\n**Error Details:**\n```\n{error_details}\n```\n\n**Common Causes:**\n- OpenAI API rate limit or timeout\n- Invalid API key or permissions\n- Network connectivity issues\n- Model-specific parameter errors\n\n**Suggested Fix:**\nCheck the error message above and ensure your API configuration is correct.",
+                display_name="Coding Agent",
+                result=f"**Code Generation Failed:**\n\nThe Coding Agent encountered an error while generating code.\n\n**Error Details:**\n```\n{error_details}\n```\n\n**Common Causes:**\n- OpenAI API rate limit or timeout\n- Invalid API key or permissions\n- Network connectivity issues\n- Model-specific parameter errors\n\n**Suggested Fix:**\nCheck the error message above and ensure your API configuration is correct.",
                 confidence=0.1,
                 method=f"Error: {error_type}",
                 explanation=f"Code generation failed: {error_type}",
@@ -1181,7 +1181,7 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
                         "role": "system",
                         "content": """You are a strategic planning expert. Create detailed action plans that include:
                         1. Breaking down the problem into manageable steps
-                        2. Identifying which specialized agents should be used (available agents: Code Agent, Math Agent, Research Agent, Data Agent, Notes Agent, Logical Reasoner, General Assistant)
+                        2. Identifying which specialized agents should be used (available agents: Coding Agent, Math Agent, Research Agent, Data Agent, Notes Agent, Logical Reasoner, General Assistant)
                         3. Determining the sequence of operations
                         4. Specifying how to gather source material
                         5. How to analyze data and compile results
@@ -1735,17 +1735,17 @@ QUERY COMPLEXITY ASSESSMENT:
 1. SIMPLE QUERIES (e.g., "2+2", "what's the capital of France"):
    - Can be solved by ONE agent in ONE iteration
    - Don't waste cycles with multiple agents
-   - Example reasoning: "The user asks 'what is 2+2' - this is a simple calculation that our Code Agent can handle instantly. No need for multiple agents."
+   - Example reasoning: "The user asks 'what is 2+2' - this is a simple calculation that our Coding Agent can handle instantly. No need for multiple agents."
 
 2. MODERATE QUERIES (e.g., "analyze this CSV", "find files about X"):
    - May need 2-3 agents working together
    - Usually solved in 1-2 iterations
-   - Example reasoning: "The user wants to analyze sales data - I'll use Code Agent for analysis and SQL Agent to structure the data for future queries."
+   - Example reasoning: "The user wants to analyze sales data - I'll use Coding Agent for analysis and SQL Agent to structure the data for future queries."
 
 3. COMPLEX QUERIES (e.g., "derive Maxwell's equations", "build a complete system"):
    - Requires multiple agents and iterations
    - May need clarification from user
-   - Example reasoning: "Deriving Maxwell's equations requires Math Agent for theory, Code Agent for visualization, and Notes Agent for documentation. This will take multiple steps."
+   - Example reasoning: "Deriving Maxwell's equations requires Math Agent for theory, Coding Agent for visualization, and Notes Agent for documentation. This will take multiple steps."
 
 BEFORE DECIDING, ALWAYS ASK YOURSELF:
 • Is this a simple question that can be solved quickly by one agent?
@@ -1757,7 +1757,7 @@ PROVIDE SPECIFIC REASONING FOR THIS EXACT QUERY:
 Don't give generic explanations. Be specific about THIS user's question.
 
 ❌ BAD: "I'll use multiple agents for comprehensive analysis"
-✅ GOOD: "Since you're asking for 2+2, I only need the Code Agent to compute this simple arithmetic - no need for other agents"
+✅ GOOD: "Since you're asking for 2+2, I only need the Coding Agent to compute this simple arithmetic - no need for other agents"
 
 ❌ BAD: "Research Agent will find sources"
 ✅ GOOD: "You're asking about Maxwell's equations for a specific application in antenna design, so I'll first ask if you want the general equations or need them applied to your antenna problem"
@@ -1773,7 +1773,7 @@ SMART ITERATION STRATEGY:
 - Complex derivations: Plan to use available iterations wisely
 
 You can send to SINGLE agents when appropriate:
-- If you just need a calculation, send ONLY to Code Agent
+- If you just need a calculation, send ONLY to Coding Agent
 - If you just need to find files, send ONLY to Shell Agent
 - No requirement to use multiple agents per iteration!
 
@@ -1793,7 +1793,7 @@ WHEN REVIEWING RESULTS, ASK:
 
 DETAILED AGENT CAPABILITIES - READ CAREFULLY:
 
-1. 💻 CODING AGENT (Code Agent)
+1. 💻 CODING AGENT (Coding Agent)
    ✅ CAN: Write and execute Python code, perform calculations, data analysis, create visualizations
    ✅ CAN: Process data, run statistical tests, implement algorithms, generate plots
    ❌ CANNOT: Access files on disk, search the filesystem, run shell commands
@@ -1806,7 +1806,7 @@ DETAILED AGENT CAPABILITIES - READ CAREFULLY:
    ✅ CAN: Search file contents: `grep -r "pattern" /path`
    ✅ CAN: Install packages: `pip install package`, `brew install tool`
    ✅ CAN: Navigate filesystem, read files, check what's installed
-   ❌ CANNOT: Write complex programs (use Code Agent instead)
+   ❌ CANNOT: Write complex programs (use Coding Agent instead)
    📝 REQUIRES: Exact shell command in backticks: `command here`
    USE FOR: Finding files on your machine, searching content, system operations
 
@@ -1821,7 +1821,7 @@ DETAILED AGENT CAPABILITIES - READ CAREFULLY:
 4. 🔬 MATH AGENT (Mathematical Prover)
    ✅ CAN: Derive formulas from first principles, write proofs
    ✅ CAN: Create LaTeX mathematical expressions
-   ❌ CANNOT: Execute calculations (use Code Agent for actual computation)
+   ❌ CANNOT: Execute calculations (use Coding Agent for actual computation)
    📝 REQUIRES: Mathematical concept to prove or derive
    USE FOR: Mathematical proofs, theorem derivation, formula explanation
 
@@ -1879,7 +1879,7 @@ DETAILED AGENT CAPABILITIES - READ CAREFULLY:
 ⚠️ CRITICAL DISTINCTIONS:
 - To FIND FILES ON THE COMPUTER: Use Shell Agent with `find` or `grep` commands
 - To DOWNLOAD FROM INTERNET: Use File Agent with URL
-- To ANALYZE EXISTING DATA: Use Code Agent for computation
+- To ANALYZE EXISTING DATA: Use Coding Agent for computation
 - To CREATE DATABASES: Use SQL Agent
 - To SEARCH YOUR MACHINE: ONLY Shell Agent can do this!
 
@@ -1894,7 +1894,7 @@ DETAILED AGENT CAPABILITIES - READ CAREFULLY:
    ❌ NOT: Notes Agent (only creates documentation)
 
 2. FOR COMPUTATIONS AND ANALYSIS:
-   ➡️ USE: Code Agent for all calculations, data processing, statistics
+   ➡️ USE: Coding Agent for all calculations, data processing, statistics
    - Ensures reproducibility with shareable code
    - Document all parameters in code comments
 
@@ -1927,7 +1927,7 @@ DETAILED AGENT CAPABILITIES - READ CAREFULLY:
 ❌ Using File Agent to search for local files (use Shell Agent)
 ❌ Using Notes Agent to find information (it only documents)
 ❌ Using Data Agent to create databases (use SQL Agent)
-❌ Using Math Agent for calculations (use Code Agent)
+❌ Using Math Agent for calculations (use Coding Agent)
 ✅ Use Shell Agent for ANY filesystem search or operation
 
 SHELL AGENT COMMAND FORMAT (CRITICAL!):
@@ -1959,11 +1959,11 @@ SPECIFIC DECISION CRITERIA:
 
 - Use "final" when:
   • SIMPLE QUERIES: Answer is complete (even if brief)
-    Example: "2+2" -> Code Agent returns "4" -> FINAL
+    Example: "2+2" -> Coding Agent returns "4" -> FINAL
   • MODERATE QUERIES: Core question answered
     Example: "Find files about gravity" -> Shell Agent found 3 files -> FINAL
   • COMPLEX QUERIES: All requested components delivered
-    Example: "Derive and explain X" -> Math Agent derived, Code Agent verified -> FINAL
+    Example: "Derive and explain X" -> Math Agent derived, Coding Agent verified -> FINAL
 
 - Use "loop" ONLY when:
   • Answer is INCOMPLETE: "User asked for X but we only have part of it"
@@ -1982,10 +1982,10 @@ You MUST respond in this EXACT JSON format:
   "query_assessment": "SPECIFIC assessment: Is this simple (like 2+2), moderate (like file search), or complex (like deriving equations)? WHY?",
   "thinking_process": "SPECIFIC to THIS query: 'User asks about X. This specifically requires Y because Z. I will use [specific agents] because [specific reasons].'",
   "final_answer": "The actual answer to the user's question (only if 'final')",
-  "additional_guidance": "SPECIFIC next action: 'Run Code Agent with THIS specific code' or 'Query SQL for THIS specific data' (only if 'loop')",
+  "additional_guidance": "SPECIFIC next action: 'Run Coding Agent with THIS specific code' or 'Query SQL for THIS specific data' (only if 'loop')"
   "clarification_question": "SPECIFIC question about ambiguity: 'When you say X, do you mean Y or Z?' (only if 'clarify')",
   "selected_agent": "Single agent name OR 'combined' if truly needed",
-  "reasoning": "SPECIFIC explanation: 'For calculating 2+2, I only need Code Agent' NOT generic statements",
+  "reasoning": "SPECIFIC explanation: 'For calculating 2+2, I only need Coding Agent' NOT generic statements",
   "efficiency_note": "Why this is the MINIMAL approach needed (not maximum)"
 }}
 
@@ -1997,9 +1997,9 @@ EFFICIENCY GUIDELINES:
 ✓ If query is simple, don't overthink it
 
 EXAMPLES OF GOOD REASONING:
-• "User asks '2+2' -> This is simple arithmetic -> Code Agent only -> One iteration"
+• "User asks '2+2' -> This is simple arithmetic -> Coding Agent only -> One iteration"
 • "User wants files about 'mond' -> Need Shell Agent with find command -> One iteration unless nothing found"
-• "User wants to derive Maxwell's equations -> Complex task -> Math Agent for theory + Code Agent for verification -> May need 2-3 iterations"
+• "User wants to derive Maxwell's equations -> Complex task -> Math Agent for theory + Coding Agent for verification -> May need 2-3 iterations"
 
 REMEMBER:
 - You have {remaining_loops} iterations - but DON'T use them unless needed!
@@ -2028,7 +2028,7 @@ Agent Responses from this iteration:
 ❌ Don't give generic explanations
 
 ✅ GOOD DECISIONS:
-• "User asked for 2+2, Code Agent returned 4, query answered -> FINAL"
+• "User asked for 2+2, Coding Agent returned 4, query answered -> FINAL"
 • "User wanted files about X, Shell Agent found them -> FINAL"
 • "User needs equation derived but Math Agent only gave partial answer -> LOOP with specific guidance"
 
@@ -2170,7 +2170,7 @@ class ThinkerOrchestrator:
             thinking_process["identified_type"] = "simple_calculation"
             thinking_process["analysis"] = f"Simple calculation: {message}"
             thinking_process["agents_to_use"] = ["CodeAgent"]
-            thinking_process["selection_reasoning"] = f"User asks '{message}' - this is a simple calculation that only needs Code Agent"
+            thinking_process["selection_reasoning"] = f"User asks '{message}' - this is a simple calculation that only needs Coding Agent"
             return thinking_process
         
         # Analyze the message for research context
@@ -2215,21 +2215,21 @@ class ThinkerOrchestrator:
             thinking_process["identified_type"] = "data_processing"
             thinking_process["analysis"] = f"Data processing task"
             thinking_process["agents_to_use"] = ["CodeAgent", "SQLAgent"]  # Only essential agents
-            thinking_process["selection_reasoning"] = f"Data task - Code Agent for analysis, SQL Agent for storage"
+            thinking_process["selection_reasoning"] = f"Data task - Coding Agent for analysis, SQL Agent for storage"
         # Complex mathematical derivation
         elif any(word in message.lower() for word in ['derive', 'proof', 'theorem', 'maxwell', 'equation']):
             thinking_process["complexity"] = "complex"
             thinking_process["identified_type"] = "mathematical_derivation"
             thinking_process["analysis"] = f"Complex derivation requested"
             thinking_process["agents_to_use"] = ["MathAgent", "CodeAgent"]
-            thinking_process["selection_reasoning"] = f"Mathematical derivation - Math Agent for theory, Code Agent for verification"
+            thinking_process["selection_reasoning"] = f"Mathematical derivation - Math Agent for theory, Coding Agent for verification"
         # Simple computation
         elif is_computation:
             thinking_process["complexity"] = "simple"
             thinking_process["identified_type"] = "computation"
             thinking_process["analysis"] = f"Computational task"
             thinking_process["agents_to_use"] = ["CodeAgent"]
-            thinking_process["selection_reasoning"] = f"Computation - only Code Agent needed"
+            thinking_process["selection_reasoning"] = f"Computation - only Coding Agent needed"
         # Shell commands
         elif has_shell_command:
             thinking_process["complexity"] = "simple"
@@ -2250,9 +2250,9 @@ class ThinkerOrchestrator:
             thinking_process["complexity"] = "moderate"
             thinking_process["identified_type"] = "general_query"
             thinking_process["analysis"] = f"General query: {message[:100]}"
-            # Default to just Code Agent for most things
+            # Default to just Coding Agent for most things
             thinking_process["agents_to_use"] = ["CodeAgent"]
-            thinking_process["selection_reasoning"] = f"General query - starting with Code Agent, can add more if needed"
+            thinking_process["selection_reasoning"] = f"General query - starting with Coding Agent, can add more if needed"
             
         return thinking_process
         
@@ -2439,7 +2439,7 @@ I've analyzed your request as a {thinking['identified_type'].replace('_', ' ')}.
                     agent_name = agent.__class__.__name__
                     # Map agent to display name
                     agent_display_names = {
-                        "CodeAgent": "Code Agent",
+                        "CodeAgent": "Coding Agent",
                         "ShellAgent": "Shell Executor",
                         "ReasoningAgent": "Logical Reasoner",
                         "SQLAgent": "SQL Agent",

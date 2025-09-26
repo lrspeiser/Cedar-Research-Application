@@ -127,7 +127,7 @@ async def test_code_generation():
     client = AsyncOpenAI(api_key=api_key)
     
     # Test code agent
-    print("\n1. Testing Code Agent...")
+    print("\n1. Testing Coding Agent...")
     code_agent = get_agent("code", client)
     context = AgentContext(
         query="write a Python function to calculate the nth fibonacci number",

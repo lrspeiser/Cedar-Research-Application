@@ -54,7 +54,7 @@ async def test_agent_selection():
         {
             "query": "Calculate the correlation between two variables in this dataset",
             "expected_agents": ["CodeAgent"],
-            "reason": "Should use Code Agent for statistical computation"
+            "reason": "Should use Coding Agent for statistical computation"
         },
         {
             "query": "Create a database schema for storing research papers",

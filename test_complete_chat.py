@@ -16,13 +16,13 @@ from typing import List, Dict, Any
 TEST_CASES = [
     {
         "query": "what is the square root of 3934934",
-        "expected_agents": ["Code Executor", "Logical Reasoner", "General Assistant"],
+        "expected_agents": ["Coding Agent", "Logical Reasoner", "General Assistant"],
         "expected_answer_contains": ["1983", "1984"],  # Either precise or approximate
         "type": "mathematical"
     },
     {
         "query": "calculate 25 * 17 + 93",
-        "expected_agents": ["Code Executor", "Logical Reasoner", "General Assistant"],
+        "expected_agents": ["Coding Agent", "Logical Reasoner", "General Assistant"],
         "expected_answer_contains": ["518"],
         "type": "mathematical"
     },
