@@ -1269,9 +1269,52 @@ def project_page_html(
               contE.title = 'Click to view full error details';
               contE.addEventListener('click', function() {
                 var details = '';
-                if (m.details) details += 'Details: ' + m.details + '\\n';
-                if (m.stack) details += 'Stack: ' + m.stack;
-                alert(details || 'No additional details available');
+                if (m.details) details += 'Details: ' + m.details + '\\n\\n';
+                if (m.stack) details += 'Stack:\\n' + m.stack;
+                
+                // Create a modal with copyable text instead of alert
+                var modal = document.createElement('div');
+                modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:10000;display:flex;align-items:center;justify-content:center;';
+                
+                var dialog = document.createElement('div');
+                dialog.style.cssText = 'background:white;border-radius:8px;padding:20px;max-width:80%;max-height:80%;overflow:auto;';
+                
+                var title = document.createElement('h3');
+                title.textContent = 'Error Details';
+                title.style.marginTop = '0';
+                dialog.appendChild(title);
+                
+                var textarea = document.createElement('textarea');
+                textarea.value = details || 'No additional details available';
+                textarea.style.cssText = 'width:500px;height:300px;font-family:monospace;font-size:12px;';
+                textarea.readOnly = true;
+                dialog.appendChild(textarea);
+                
+                var buttonDiv = document.createElement('div');
+                buttonDiv.style.marginTop = '10px';
+                
+                var copyBtn = document.createElement('button');
+                copyBtn.textContent = 'Copy to Clipboard';
+                copyBtn.onclick = function() {
+                  textarea.select();
+                  document.execCommand('copy');
+                  copyBtn.textContent = 'Copied!';
+                  setTimeout(function() { copyBtn.textContent = 'Copy to Clipboard'; }, 2000);
+                };
+                buttonDiv.appendChild(copyBtn);
+                
+                var closeBtn = document.createElement('button');
+                closeBtn.textContent = 'Close';
+                closeBtn.style.marginLeft = '10px';
+                closeBtn.onclick = function() { modal.remove(); };
+                buttonDiv.appendChild(closeBtn);
+                
+                dialog.appendChild(buttonDiv);
+                modal.appendChild(dialog);
+                document.body.appendChild(modal);
+                
+                // Select all text for easy copying
+                textarea.select();
               });
             }
             bubE.appendChild(contE); wrapE.appendChild(metaE); wrapE.appendChild(bubE);

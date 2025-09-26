@@ -7,16 +7,17 @@ This implements the true multi-agent pattern where:
 """
 
 import os
-import json
-import asyncio
-import logging
-import math
 import time
-import subprocess
-import sqlite3
+import json
+import math
 import re
-from typing import Any, Dict, List, Optional, Tuple
+import sqlite3
+import logging
+import asyncio
+import subprocess
+from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
+from openai import AsyncOpenAI
 from openai import AsyncOpenAI
 from fastapi import WebSocket
 
@@ -2620,7 +2621,6 @@ Please provide this information so I can better assist you."""
             # Check if the guidance contains a shell command (in backticks)
             if '`' in guidance:
                 # Extract command from guidance if present
-                import re
                 cmd_match = re.search(r'`([^`]+)`', guidance)
                 if cmd_match and 'ShellAgent' in thinking.get('agents_to_use', []):
                     # Pass the command directly for Shell Agent
