@@ -724,6 +724,20 @@ class SQLAgent:
                         - SELECT queries with JOINs, aggregations, and subqueries
                         - ALTER TABLE for schema modifications
                         - CREATE INDEX for performance optimization
+                        
+                        IMPORTANT: The project database includes a 'notes' table with the following schema:
+                        CREATE TABLE notes (
+                          id INTEGER PRIMARY KEY,
+                          project_id INTEGER NOT NULL,
+                          branch_id INTEGER NOT NULL,
+                          content TEXT NOT NULL,
+                          tags JSON,  -- list of strings
+                          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        );
+                        
+                        You can query the notes table to search for saved notes, agent findings, and research results.
+                        Example: SELECT * FROM notes WHERE content LIKE '%keyword%' ORDER BY created_at DESC;
+                        
                         - Output ONLY the SQL statements, no explanations
                         - Use standard SQL syntax (SQLite/PostgreSQL compatible)
                         - Include proper constraints (PRIMARY KEY, FOREIGN KEY, NOT NULL, UNIQUE)

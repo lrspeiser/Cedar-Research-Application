@@ -213,7 +213,19 @@ def project_page_html(
              <td class=\"small muted\">{d.created_at:%Y-%m-%d %H:%M:%S} UTC</td>
            </tr>
         """)
-    dataset_tbody = ''.join(dataset_rows) if dataset_rows else '<tr><td colspan="3" class="muted">No databases yet.</td></tr>'
+    # Add Notes database as a special entry
+    notes_count = len(notes) if notes else 0
+    notes_db_row = f'''
+        <tr style="background-color: #f0f9ff">
+            <td><strong>📝 Notes Database</strong></td>
+            <td>{escape(current.name)}</td>
+            <td class="small muted">{notes_count} notes</td>
+        </tr>
+    '''
+    
+    # Combine all database rows
+    all_db_rows = notes_db_row + ''.join(dataset_rows)
+    dataset_tbody = all_db_rows if (notes_count > 0 or dataset_rows) else '<tr><td colspan="3" class="muted">No databases yet.</td></tr>'
 
     # message
     flash = f"<div class='muted' style='margin-bottom:8px'>{escape(msg)}</div>" if msg else ""
@@ -429,8 +441,13 @@ def project_page_html(
         notes_items_html = []
     notes_panel_html = (
         "<div class='card' style='padding:12px'>"
-        "  <h3 style='margin-bottom:6px'>Notes</h3>"
+        "  <div style='display:flex; align-items:center; justify-content:space-between; margin-bottom:12px'>"
+        "    <h3 style='margin:0'>Notes</h3>"
+        f"    <button class='secondary' onclick='window.location.href=\"/project/{project.id}?branch_id={current.id}&refresh_notes=1#main-notes\"'>Refresh</button>"
+        "  </div>"
+        "  <div style='max-height:600px; overflow-y:auto'>"
         + ("".join(notes_items_html) or "<div class='muted small'>(No notes yet)</div>")
+        + "  </div>"
         + "</div>"
     )
 
@@ -1610,6 +1627,30 @@ def project_page_html(
     _ws_timeout_ms = max(1000, _ws_timeout_s * 1000)
     script_js = script_js.replace("__PID__", str(project.id)).replace("__BID__", str(current.id)).replace("__WS_TIMEOUT_MS__", str(_ws_timeout_ms))
     script_js = script_js.replace("__UPLOAD_AUTOCHAT__", "true" if UPLOAD_AUTOCHAT_ENABLED else "false")
+    
+    # Add script to handle refresh_notes parameter and switch to Notes tab
+    refresh_notes_script = """
+<script>
+(function() {
+  const urlParams = new URLSearchParams(window.location.search);
+  if (urlParams.get('refresh_notes') === '1') {
+    // Remove the refresh_notes parameter from URL
+    urlParams.delete('refresh_notes');
+    const newUrl = window.location.pathname + (urlParams.toString() ? '?' + urlParams.toString() : '') + window.location.hash;
+    window.history.replaceState({}, '', newUrl);
+    
+    // Switch to Notes tab after page load
+    window.addEventListener('DOMContentLoaded', function() {
+      setTimeout(function() {
+        const notesTab = document.querySelector('.tab[data-target="main-notes"]');
+        if (notesTab) notesTab.click();
+      }, 100);
+    });
+  }
+})();
+</script>
+    """
+    
     return f"""
       <h1>{escape(project.title)}</h1>
       <div class=\"muted small\">Project ID: {project.id}</div>
@@ -1709,6 +1750,8 @@ def project_page_html(
         </div>
       </div>
     </div>
+    
+    {refresh_notes_script}
     
     <!-- Delete button at bottom right corner -->
     <div style="position: fixed; bottom: 20px; right: 20px; z-index: 100;">
