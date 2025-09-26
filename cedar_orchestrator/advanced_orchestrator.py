@@ -1557,81 +1557,125 @@ class ChiefAgent:
                 "messages": [
                     {
                         "role": "system",
-                        "content": f"""You are the Chief Agent, the central decision-maker in a multi-agent system. You review all sub-agent responses and make the FINAL decision on what happens next.
+                        "content": f"""You are the Chief Agent coordinating a research team for RIGOROUS ACADEMIC RESEARCH. Your work will be used in academic papers and must meet the highest standards of reproducibility and citation.
+
+🎓 ACADEMIC RESEARCH CONTEXT:
+You are assisting academics with research that will be published. Every analysis, computation, and conclusion must be:
+• REPRODUCIBLE: Others must be able to replicate the work exactly
+• DOCUMENTED: Every step must be clearly documented with code/commands
+• CITED: All sources must be properly referenced
+• VERIFIABLE: Results must be independently verifiable
+• STRUCTURED: Data should be organized in queryable databases when possible
 
 CURRENT STATUS:
 - Iteration: {iteration + 1} of {max_iterations}
 - Remaining loops available: {remaining_loops}
-- You must provide a final answer within these remaining iterations
+- You can use ALL remaining iterations if needed for thoroughness
 
-AVAILABLE AGENTS AND THEIR SPECIALTIES:
-1. Coding Agent - Generates and executes Python code for calculations and programming tasks
-2. Shell Executor - Executes EXACT shell commands (MUST provide commands in backticks: `command`)
-   Examples: `grep -r "pattern" .`, `pip install package`, `ls -la`, `find . -name "*.py"`
-3. SQL Agent - Creates databases, tables, and executes all SQL operations
-4. Math Agent - Derives formulas from first principles with detailed mathematical proofs
-5. Research Agent - Web searches and finding relevant sources/citations
-6. Strategy Agent - Creates detailed action plans with agent coordination strategies
-7. Data Agent - Analyzes database schemas and suggests relevant SQL queries
-8. Notes Agent - Creates organized notes from findings without duplication
-9. File Agent - Downloads files from URLs or analyzes local file paths
-10. Reasoning Agent - Step-by-step logical analysis (use sparingly)
-11. General Assistant - General knowledge (use sparingly)
+AVAILABLE AGENTS (You can call ANY number simultaneously):
+1. Coding Agent - PREFERRED for ALL computations/analysis (creates reproducible artifacts)
+2. Shell Executor - System commands (MUST provide in backticks: `command`)
+3. SQL Agent - Creates structured databases from raw data (HIGHLY PREFERRED for data organization)
+4. Math Agent - Mathematical proofs and derivations (with LaTeX formulas)
+5. Research Agent - Finds academic sources and builds citations
+6. Strategy Agent - Plans comprehensive research approaches
+7. Data Agent - Analyzes and structures data for research
+8. Notes Agent - Documents methodology and findings
+9. File Agent - Processes research materials and datasets
+10. Reasoning Agent - Logical analysis with formal reasoning
+11. General Assistant - Background information only
 
-IMPORTANT FOR SHELL COMMANDS:
-- When sending work to Shell Executor, you MUST provide the exact command in backticks
-- Format: "Execute: `exact command here`" or just "`command`"
-- Examples:
-  * For grep: "Execute: `grep -r 'pattern' /path/to/search`"
-  * For installation: "Run: `pip install numpy`"
-  * For file operations: "`find . -type f -name '*.txt'`"
-- The Shell Agent needs the EXACT command, not a description of what to do
+📋 RESEARCH PRIORITIES:
+1. USE CODE FOR EVERYTHING: All computations, data processing, and analysis MUST use Code Agent
+   - This ensures reproducibility - others can run the exact same code
+   - Document all parameters, assumptions, and methods in code comments
+   - Save all generated data to structured formats (CSV, JSON, databases)
 
-Your RESPONSIBILITIES:
-1. EXPLAIN YOUR THINKING: Describe how you're analyzing the problem and what you expect from each agent
-2. DECIDE NEXT ACTION: Choose "final" to send answer to user, "loop" for more processing, or "clarify" to ask the user a question
-3. PROVIDE CONTEXT: If looping, pass all relevant context to help agents succeed
-4. SUGGEST NEXT STEPS: Always include "Suggested Next Steps" in your final answer
+2. BUILD STRUCTURED DATABASES: Convert raw data into queryable SQL databases
+   - Use SQL Agent to create well-documented schemas
+   - This allows systematic querying and analysis later
+   - Include metadata tables documenting sources and methods
 
-DECISION CRITERIA:
+3. GATHER CITATIONS: Use Research Agent extensively
+   - Find peer-reviewed sources for all claims
+   - Build comprehensive literature reviews
+   - Document conflicting findings in the literature
+
+4. DOCUMENT EVERYTHING: Use Notes Agent to create detailed methodology
+   - Record every decision and assumption
+   - Note limitations and potential biases
+   - Create reproducibility instructions
+
+5. ITERATE THOROUGHLY: Use ALL available iterations if needed
+   - Call multiple agents simultaneously for comprehensive analysis
+   - Re-run with different approaches if results are inconsistent
+   - Ask for user clarification if stuck after several attempts
+
+SHELL COMMANDS FORMAT:
+- MUST provide exact commands in backticks: `grep -r "pattern" .`
+- Examples: `pip install pandas`, `find . -name "*.csv"`, `curl -O [url]`
+
+Your DECISION PROCESS:
+1. EXPLAIN YOUR THINKING: Describe your research approach and methodology
+2. DECIDE NEXT ACTION: "final" (complete), "loop" (continue research), "clarify" (need user input)
+3. COORDINATE AGENTS: Call multiple agents simultaneously when appropriate
+4. ENSURE RIGOR: Every result must be verifiable and reproducible
+
+DECISION CRITERIA FOR ACADEMIC RIGOR:
 - Use "final" when:
-  * Agents have provided a complete, correct answer
-  * The user's query is fully addressed
-  * Further processing won't meaningfully improve the answer
-  * You're running low on iterations ({remaining_loops} remaining)
+  * Results are REPRODUCIBLE with provided code/commands
+  * All claims have CITATIONS from credible sources
+  * Data is STRUCTURED in queryable format (database/CSV)
+  * Methodology is DOCUMENTED and can be peer-reviewed
+  * Statistical significance/confidence is established where applicable
+  * Limitations and biases are acknowledged
 
-- Use "loop" when (AND you have iterations remaining):
-  * Critical information is missing that agents can find
-  * A specific agent's expertise hasn't been utilized
-  * You have clear guidance for improvement
-  * The current answer has errors or gaps
+- Use "loop" when (utilize ALL {remaining_loops} iterations if needed):
+  * Need to verify results with different methods
+  * Missing citations for key claims
+  * Data needs to be structured into databases
+  * Code hasn't been written for reproducible analysis
+  * Need multiple agents working simultaneously
+  * Results seem inconsistent - need validation
+  * Haven't documented methodology sufficiently
 
 - Use "clarify" when:
-  * The user's intent is ambiguous
-  * Critical details are missing that only the user can provide
-  * Multiple valid interpretations exist and you need the user's preference
-  * The request is too broad and needs to be narrowed down
+  * Research question needs refinement
+  * Conflicting requirements need resolution
+  * After multiple iterations, same error persists (ask user for help)
+  * Need access to specific datasets or resources
+  * Ethical considerations require user input
+  * Statistical assumptions need validation
 
 You MUST respond in this EXACT JSON format:
 {{
   "decision": "final" or "loop" or "clarify",
-  "thinking_process": "Your analysis of the problem and what each agent should contribute",
-  "final_answer": "Complete answer with 'Suggested Next Steps:' section (required for all decisions)",
-  "additional_guidance": "Specific instructions for next iteration including all context (only if 'loop')",
-  "clarification_question": "Specific question to ask the user (only if 'clarify')",
-  "selected_agent": "Best performing agent or 'combined'",
-  "reasoning": "Why you made this decision and what you expect to achieve"
+  "thinking_process": "Your research methodology and how agents will contribute to reproducible results",
+  "final_answer": "Complete answer with sections: Results, Methodology, Citations, Code/Data, Limitations, Suggested Next Steps",
+  "additional_guidance": "Specific research tasks for next iteration with all context (only if 'loop')",
+  "clarification_question": "Specific research question needing user input (only if 'clarify')",
+  "selected_agent": "Best performing agent or 'combined' for multi-agent collaboration",
+  "reasoning": "Research rationale and expected contribution to academic rigor"
 }}
 
+ACADEMIC STANDARDS CHECKLIST:
+✅ Every computation has reproducible code
+✅ All data is in structured, queryable format
+✅ Citations provided for all claims
+✅ Methodology fully documented
+✅ Multiple verification methods used when possible
+✅ Limitations explicitly stated
+
 REMEMBER: 
-- You have {remaining_loops} loops remaining - use them wisely
-- Always include "Suggested Next Steps:" in your final_answer
-- Provide detailed thinking_process explaining your approach
-- Pass complete context in additional_guidance for loops"""
+- You have {remaining_loops} iterations - USE THEM ALL for thoroughness
+- Call MULTIPLE agents simultaneously for comprehensive analysis
+- ALWAYS prefer Code Agent for computations (reproducibility)
+- ALWAYS structure data in databases when possible
+- If stuck after multiple attempts, ask user for help"""
                     },
                     {
                         "role": "user",
-                        "content": f"""User Query: {user_query}
+                        "content": f"""Research Query: {user_query}
 
 Current Iteration: {iteration + 1} of {max_iterations}
 Remaining Loops: {remaining_loops}
@@ -1640,11 +1684,20 @@ Remaining Loops: {remaining_loops}
 Agent Responses from this iteration:
 {''.join(results_summary)}
 
-Review these responses and make your decision. Remember:
-- You have {remaining_loops} loops remaining
-- Explain your thinking process and what you expect from each agent
-- Always include "Suggested Next Steps:" in your final answer
-- If looping, provide complete context to help agents succeed"""
+🎓 ACADEMIC RESEARCH REVIEW:
+Evaluate responses for academic rigor. Ensure:
+1. All computations have reproducible code
+2. Data is being structured for future queries
+3. Citations support all claims
+4. Multiple verification methods when appropriate
+5. Clear documentation of methodology
+
+DECISION GUIDANCE:
+- You have {remaining_loops} iterations - use them ALL if needed for rigor
+- Call MULTIPLE agents simultaneously for comprehensive analysis
+- If the same problem occurs repeatedly, ask the user for help
+- Prioritize reproducibility over quick answers
+- Structure all data into databases for systematic analysis"""
                     }
                 ]
             }
@@ -1759,78 +1812,110 @@ class ThinkerOrchestrator:
         return await self.file_processor.process_file(file_path, file_type, websocket)
     
     async def think(self, message: str) -> Dict[str, Any]:
-        """Thinker phase: Analyze the request and plan the approach"""
+        """Thinker phase: Analyze the request for academic research approach"""
         thinking_process = {
             "input": message,
             "analysis": "",
             "identified_type": "",
             "agents_to_use": [],
-            "selection_reasoning": ""  # Add reasoning for agent selection
+            "selection_reasoning": "",
+            "research_priority": "reproducibility"  # Default research priority
         }
         
-        # Analyze the message
+        # Analyze the message for research context
         import re
         has_url = bool(re.search(r'https?://[^\s]+', message))
         has_file_path = bool(re.search(r'(/[^\s]+\.[a-zA-Z]{2,4}|[A-Za-z]:\\[^\s]+|\./[^\s]+)', message))
         has_shell_command = bool(re.search(r'`[^`]+`', message)) or any(cmd in message.lower() for cmd in ['grep', 'find', 'ls', 'cat', 'brew install', 'pip install', 'npm install', 'apt-get', 'chmod', 'mkdir', 'rm', 'cp', 'mv'])
         
-        # Shell commands take priority
-        if has_shell_command or any(word in message.lower() for word in ['run command', 'execute', 'shell', 'terminal', 'install package', 'grep for']):
+        # Check for research-specific keywords
+        is_data_task = any(word in message.lower() for word in ['data', 'dataset', 'csv', 'excel', 'json', 'analyze', 'statistics', 'correlation'])
+        is_research_task = any(word in message.lower() for word in ['research', 'paper', 'study', 'literature', 'review', 'citation', 'reference', 'peer-review'])
+        is_computation = any(word in message.lower() for word in ['calculate', 'compute', 'analyze', 'model', 'simulate', 'algorithm'])
+        
+        # RESEARCH DATA PROCESSING (Highest Priority)
+        if is_data_task or has_file_path and any(ext in message.lower() for ext in ['.csv', '.json', '.xlsx', '.txt', '.pdf']):
+            thinking_process["identified_type"] = "research_data_processing"
+            thinking_process["analysis"] = "Research data needs to be processed, structured, and analyzed"
+            thinking_process["agents_to_use"] = ["FileAgent", "CodeAgent", "SQLAgent", "DataAgent", "NotesAgent"]
+            thinking_process["selection_reasoning"] = "Multi-agent: File processing, Code for analysis, SQL for structuring, Data for schema, Notes for documentation"
+            thinking_process["research_priority"] = "data_structuring"
+        # ACADEMIC RESEARCH TASKS
+        elif is_research_task:
+            thinking_process["identified_type"] = "academic_research"
+            thinking_process["analysis"] = "Academic research requiring citations and reproducible methodology"
+            thinking_process["agents_to_use"] = ["ResearchAgent", "CodeAgent", "NotesAgent", "StrategyAgent"]
+            thinking_process["selection_reasoning"] = "Multi-agent: Research for citations, Code for reproducible analysis, Notes for methodology, Strategy for approach"
+            thinking_process["research_priority"] = "citations_and_reproducibility"
+        # COMPUTATIONAL RESEARCH
+        elif is_computation:
+            thinking_process["identified_type"] = "computational_research"
+            thinking_process["analysis"] = "Computational task requiring reproducible code and verification"
+            thinking_process["agents_to_use"] = ["CodeAgent", "MathAgent", "SQLAgent", "NotesAgent"]
+            thinking_process["selection_reasoning"] = "Multi-agent: Code for computation, Math for verification, SQL for results storage, Notes for documentation"
+            thinking_process["research_priority"] = "computational_reproducibility"
+        # Shell commands (when explicit)
+        elif has_shell_command or any(word in message.lower() for word in ['run command', 'execute', 'shell', 'terminal', 'install package', 'grep for']):
             thinking_process["identified_type"] = "shell_command"
-            thinking_process["analysis"] = "This requires executing shell commands on the system"
-            thinking_process["agents_to_use"] = ["ShellAgent"]
-            thinking_process["selection_reasoning"] = "Shell Agent for system command execution with full access"
-        # File handling 
+            thinking_process["analysis"] = "System commands for research infrastructure"
+            thinking_process["agents_to_use"] = ["ShellAgent", "NotesAgent"]
+            thinking_process["selection_reasoning"] = "Shell for execution, Notes to document system setup"
+        # File handling with research context
         elif has_url or has_file_path or any(word in message.lower() for word in ["download", "file", "upload", "save file"]):
             thinking_process["identified_type"] = "file_operation"
-            thinking_process["analysis"] = "This requires file download or management"
-            thinking_process["agents_to_use"] = ["FileAgent", "NotesAgent"]
-            thinking_process["selection_reasoning"] = "File Agent for downloading/processing, Notes Agent to document the files"
+            thinking_process["analysis"] = "File operations for research materials"
+            thinking_process["agents_to_use"] = ["FileAgent", "CodeAgent", "SQLAgent", "NotesAgent"]
+            thinking_process["selection_reasoning"] = "Multi-agent: File processing, Code for analysis, SQL for data storage, Notes for documentation"
+            thinking_process["research_priority"] = "data_organization"
+        # Mathematical research
         elif any(word in message.lower() for word in ["derive", "proof", "theorem", "formula from first principles", "mathematical derivation"]):
             thinking_process["identified_type"] = "mathematical_derivation"
-            thinking_process["analysis"] = "This requires mathematical derivation from first principles"
-            thinking_process["agents_to_use"] = ["MathAgent", "CodeAgent"]
-            thinking_process["selection_reasoning"] = "Math Agent for derivations, Code Agent for verification"
-        elif any(word in message.lower() for word in ["research", "sources", "citations", "find information", "web search", "literature"]):
-            thinking_process["identified_type"] = "research_task"
-            thinking_process["analysis"] = "This requires web research and finding sources"
-            thinking_process["agents_to_use"] = ["ResearchAgent", "NotesAgent"]
-            thinking_process["selection_reasoning"] = "Research Agent for finding sources, Notes Agent to document findings"
-        elif any(word in message.lower() for word in ["plan", "strategy", "steps to", "approach", "how should i", "coordinate"]):
-            thinking_process["identified_type"] = "strategic_planning"
-            thinking_process["analysis"] = "This requires strategic planning and coordination"
-            thinking_process["agents_to_use"] = ["StrategyAgent"]
-            thinking_process["selection_reasoning"] = "Strategy Agent specialized for planning tasks"
-        elif any(word in message.lower() for word in ["calculate", "compute", "square root", "sqrt", "multiply", "divide", "add", "subtract", "sum", "product"]):
-            thinking_process["identified_type"] = "mathematical_computation"
-            thinking_process["analysis"] = "This is a mathematical computation requiring precise calculation"
-            thinking_process["agents_to_use"] = ["CodeAgent", "MathAgent"]
-            thinking_process["selection_reasoning"] = "Code for execution, Math for formula verification"
-        elif any(word in message.lower() for word in ["code", "program", "function", "script", "algorithm"]):
-            thinking_process["identified_type"] = "coding_task"
-            thinking_process["analysis"] = "This requires code generation or programming"
-            thinking_process["agents_to_use"] = ["CodeAgent", "StrategyAgent"]
-            thinking_process["selection_reasoning"] = "Code Agent for implementation, Strategy Agent for design approach"
-        elif any(word in message.lower() for word in ["sql", "database", "query", "table", "select from", "data analysis"]):
-            thinking_process["identified_type"] = "database_query"
-            thinking_process["analysis"] = "This requires SQL query generation and execution"
-            thinking_process["agents_to_use"] = ["DataAgent", "SQLAgent"]
-            thinking_process["selection_reasoning"] = "Data Agent for schema analysis, SQL Agent for query generation"
-        elif any(word in message.lower() for word in ["note", "remember", "save for later", "document", "summarize findings"]):
-            thinking_process["identified_type"] = "note_taking"
-            thinking_process["analysis"] = "This requires creating or managing notes"
-            thinking_process["agents_to_use"] = ["NotesAgent"]
-            thinking_process["selection_reasoning"] = "Notes Agent specialized for documentation"
-        elif any(word in message.lower() for word in ["explain", "why", "how", "what is", "define"]):
-            thinking_process["identified_type"] = "explanation_query"
-            thinking_process["analysis"] = "This requires detailed explanation or reasoning"
-            thinking_process["agents_to_use"] = ["ResearchAgent", "ReasoningAgent"]
-            thinking_process["selection_reasoning"] = "Research Agent for sources, Reasoning Agent for logical analysis"
+            thinking_process["analysis"] = "Mathematical research requiring proofs and verification"
+            thinking_process["agents_to_use"] = ["MathAgent", "CodeAgent", "ResearchAgent", "NotesAgent"]
+            thinking_process["selection_reasoning"] = "Multi-agent: Math for proofs, Code for verification, Research for references, Notes for documentation"
+            thinking_process["research_priority"] = "mathematical_rigor"
+        # Literature and citations
+        elif any(word in message.lower() for word in ["sources", "citations", "literature review", "bibliography", "references"]):
+            thinking_process["identified_type"] = "literature_research"
+            thinking_process["analysis"] = "Literature research and citation building"
+            thinking_process["agents_to_use"] = ["ResearchAgent", "NotesAgent", "SQLAgent"]
+            thinking_process["selection_reasoning"] = "Multi-agent: Research for sources, Notes for bibliography, SQL to store citation database"
+            thinking_process["research_priority"] = "citation_management"
+        # Strategic research planning
+        elif any(word in message.lower() for word in ["plan", "methodology", "research design", "hypothesis", "experiment"]):
+            thinking_process["identified_type"] = "research_planning"
+            thinking_process["analysis"] = "Research methodology and experimental design"
+            thinking_process["agents_to_use"] = ["StrategyAgent", "ResearchAgent", "CodeAgent", "NotesAgent"]
+            thinking_process["selection_reasoning"] = "Multi-agent: Strategy for methodology, Research for precedents, Code for analysis plan, Notes for protocol"
+            thinking_process["research_priority"] = "methodology_design"
+        # Statistical analysis
+        elif any(word in message.lower() for word in ["statistical", "significance", "p-value", "correlation", "regression", "anova"]):
+            thinking_process["identified_type"] = "statistical_analysis"
+            thinking_process["analysis"] = "Statistical analysis requiring reproducible code"
+            thinking_process["agents_to_use"] = ["CodeAgent", "MathAgent", "SQLAgent", "NotesAgent", "ResearchAgent"]
+            thinking_process["selection_reasoning"] = "Multi-agent: Code for statistics, Math for theory, SQL for data, Notes for interpretation, Research for methods"
+            thinking_process["research_priority"] = "statistical_rigor"
+        # Database operations
+        elif any(word in message.lower() for word in ["sql", "database", "query", "table", "schema"]):
+            thinking_process["identified_type"] = "database_operations"
+            thinking_process["analysis"] = "Database operations for research data management"
+            thinking_process["agents_to_use"] = ["SQLAgent", "DataAgent", "CodeAgent", "NotesAgent"]
+            thinking_process["selection_reasoning"] = "Multi-agent: SQL for database, Data for schema design, Code for ETL, Notes for data dictionary"
+            thinking_process["research_priority"] = "data_management"
+        # Documentation
+        elif any(word in message.lower() for word in ["document", "methodology", "protocol", "procedure"]):
+            thinking_process["identified_type"] = "research_documentation"
+            thinking_process["analysis"] = "Research documentation and protocol development"
+            thinking_process["agents_to_use"] = ["NotesAgent", "ResearchAgent", "CodeAgent"]
+            thinking_process["selection_reasoning"] = "Multi-agent: Notes for documentation, Research for standards, Code for reproducible procedures"
+            thinking_process["research_priority"] = "documentation"
+        # Default: comprehensive research approach
         else:
-            thinking_process["identified_type"] = "general_query"
-            thinking_process["analysis"] = "This is a general query"
-            thinking_process["agents_to_use"] = ["StrategyAgent", "GeneralAgent"]
-            thinking_process["selection_reasoning"] = "Strategy Agent for approach, General Agent as fallback"
+            thinking_process["identified_type"] = "comprehensive_research"
+            thinking_process["analysis"] = "Comprehensive research requiring multiple perspectives"
+            thinking_process["agents_to_use"] = ["StrategyAgent", "CodeAgent", "ResearchAgent", "NotesAgent"]
+            thinking_process["selection_reasoning"] = "Multi-agent collaboration: Strategy for approach, Code for analysis, Research for context, Notes for documentation"
+            thinking_process["research_priority"] = "comprehensive_analysis"
             
         return thinking_process
         
