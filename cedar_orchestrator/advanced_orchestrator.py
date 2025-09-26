@@ -1572,48 +1572,163 @@ CURRENT STATUS:
 - Remaining loops available: {remaining_loops}
 - You can use ALL remaining iterations if needed for thoroughness
 
-AVAILABLE AGENTS (You can call ANY number simultaneously):
-1. Coding Agent - PREFERRED for ALL computations/analysis (creates reproducible artifacts)
-2. Shell Executor - System commands (MUST provide in backticks: `command`)
-3. SQL Agent - Creates structured databases from raw data (HIGHLY PREFERRED for data organization)
-4. Math Agent - Mathematical proofs and derivations (with LaTeX formulas)
-5. Research Agent - Finds academic sources and builds citations
-6. Strategy Agent - Plans comprehensive research approaches
-7. Data Agent - Analyzes and structures data for research
-8. Notes Agent - Documents methodology and findings
-9. File Agent - Processes research materials and datasets
-10. Reasoning Agent - Logical analysis with formal reasoning
-11. General Assistant - Background information only
+DETAILED AGENT CAPABILITIES - READ CAREFULLY:
 
-📋 RESEARCH PRIORITIES:
-1. USE CODE FOR EVERYTHING: All computations, data processing, and analysis MUST use Code Agent
-   - This ensures reproducibility - others can run the exact same code
-   - Document all parameters, assumptions, and methods in code comments
-   - Save all generated data to structured formats (CSV, JSON, databases)
+1. 💻 CODING AGENT (Code Executor)
+   ✅ CAN: Write and execute Python code, perform calculations, data analysis, create visualizations
+   ✅ CAN: Process data, run statistical tests, implement algorithms, generate plots
+   ❌ CANNOT: Access files on disk, search the filesystem, run shell commands
+   📝 REQUIRES: Clear computational task or analysis request
+   USE FOR: All computations, data processing, statistical analysis, algorithm implementation
 
-2. BUILD STRUCTURED DATABASES: Convert raw data into queryable SQL databases
-   - Use SQL Agent to create well-documented schemas
-   - This allows systematic querying and analysis later
-   - Include metadata tables documenting sources and methods
+2. 🖥️ SHELL EXECUTOR (Shell Agent) - ONLY AGENT THAT CAN SEARCH YOUR MACHINE!
+   ✅ CAN: Execute ANY shell command on the system (grep, find, ls, cat, etc.)
+   ✅ CAN: Search for files on your computer: `find ~ -name "*mond*"`
+   ✅ CAN: Search file contents: `grep -r "pattern" /path`
+   ✅ CAN: Install packages: `pip install package`, `brew install tool`
+   ✅ CAN: Navigate filesystem, read files, check what's installed
+   ❌ CANNOT: Write complex programs (use Code Agent instead)
+   📝 REQUIRES: Exact shell command in backticks: `command here`
+   USE FOR: Finding files on your machine, searching content, system operations
 
-3. GATHER CITATIONS: Use Research Agent extensively
-   - Find peer-reviewed sources for all claims
-   - Build comprehensive literature reviews
-   - Document conflicting findings in the literature
+3. 🗄️ SQL AGENT (Database Creator)
+   ✅ CAN: Create SQL databases, tables, indexes, and schemas
+   ✅ CAN: Execute SQL queries (SELECT, INSERT, UPDATE, DELETE)
+   ✅ CAN: Import CSV/JSON data into structured database tables
+   ❌ CANNOT: Search filesystem or download files
+   📝 REQUIRES: Data to structure or SQL operations to perform
+   USE FOR: Creating structured databases from raw data, querying data
 
-4. DOCUMENT EVERYTHING: Use Notes Agent to create detailed methodology
-   - Record every decision and assumption
-   - Note limitations and potential biases
-   - Create reproducibility instructions
+4. 🔬 MATH AGENT (Mathematical Prover)
+   ✅ CAN: Derive formulas from first principles, write proofs
+   ✅ CAN: Create LaTeX mathematical expressions
+   ❌ CANNOT: Execute calculations (use Code Agent for actual computation)
+   📝 REQUIRES: Mathematical concept to prove or derive
+   USE FOR: Mathematical proofs, theorem derivation, formula explanation
 
-5. ITERATE THOROUGHLY: Use ALL available iterations if needed
-   - Call multiple agents simultaneously for comprehensive analysis
-   - Re-run with different approaches if results are inconsistent
-   - Ask for user clarification if stuck after several attempts
+5. 📚 RESEARCH AGENT (Citation Finder)
+   ✅ CAN: Find academic papers and sources (simulated web search)
+   ✅ CAN: Build bibliographies and citation lists
+   ❌ CANNOT: Access actual internet or download papers
+   📝 REQUIRES: Research topic or claim to find sources for
+   USE FOR: Finding citations, building literature reviews
 
-SHELL COMMANDS FORMAT:
-- MUST provide exact commands in backticks: `grep -r "pattern" .`
-- Examples: `pip install pandas`, `find . -name "*.csv"`, `curl -O [url]`
+6. 📋 STRATEGY AGENT (Research Planner)
+   ✅ CAN: Create detailed research plans and methodologies
+   ✅ CAN: Design experimental protocols and workflows
+   ❌ CANNOT: Execute any actual operations
+   📝 REQUIRES: Research goal or problem to plan
+   USE FOR: Planning research approach, designing methodology
+
+7. 📊 DATA AGENT (Schema Analyzer)
+   ✅ CAN: Analyze database schemas, suggest SQL queries
+   ✅ CAN: Design data structures and relationships
+   ❌ CANNOT: Actually create databases (use SQL Agent)
+   ❌ CANNOT: Search for files (use Shell Agent)
+   📝 REQUIRES: Database or data structure to analyze
+   USE FOR: Schema design, query optimization suggestions
+
+8. 📝 NOTES AGENT (Documentation Creator)
+   ✅ CAN: Create structured notes and documentation
+   ✅ CAN: Organize findings into readable format
+   ❌ CANNOT: Search for information or execute operations
+   📝 REQUIRES: Content to document or findings to organize
+   USE FOR: Creating research notes, documenting methodology
+
+9. 📥 FILE AGENT (URL Downloader ONLY!)
+   ✅ CAN: Download files from URLs (http/https)
+   ✅ CAN: Save downloaded files to project directory
+   ❌ CANNOT: Search your computer for files (use Shell Agent!)
+   ❌ CANNOT: Browse local filesystem or find existing files
+   ❌ CANNOT: Access files already on your machine
+   📝 REQUIRES: Valid URL to download from
+   USE FOR: ONLY downloading files from the internet
+
+10. 🤔 REASONING AGENT (Logical Analyzer)
+    ✅ CAN: Provide step-by-step logical analysis
+    ✅ CAN: Break down complex problems
+    ❌ CANNOT: Access data or execute operations
+    📝 REQUIRES: Problem requiring logical analysis
+    USE FOR: Logical reasoning, problem decomposition
+
+11. 💬 GENERAL ASSISTANT (Knowledge Base)
+    ✅ CAN: Provide general information and explanations
+    ❌ CANNOT: Access current data or execute operations
+    📝 REQUIRES: General question
+    USE FOR: Background information only
+
+⚠️ CRITICAL DISTINCTIONS:
+- To FIND FILES ON THE COMPUTER: Use Shell Agent with `find` or `grep` commands
+- To DOWNLOAD FROM INTERNET: Use File Agent with URL
+- To ANALYZE EXISTING DATA: Use Code Agent for computation
+- To CREATE DATABASES: Use SQL Agent
+- To SEARCH YOUR MACHINE: ONLY Shell Agent can do this!
+
+📋 AGENT SELECTION GUIDE:
+
+1. FOR FINDING FILES ON THE USER'S COMPUTER:
+   ➡️ USE: Shell Agent with commands like:
+      - `find ~ -name "*keyword*"` to find files by name
+      - `grep -r "content" /path` to search file contents
+      - `ls -la /directory` to list files
+   ❌ NOT: File Agent (only downloads from URLs)
+   ❌ NOT: Notes Agent (only creates documentation)
+
+2. FOR COMPUTATIONS AND ANALYSIS:
+   ➡️ USE: Code Agent for all calculations, data processing, statistics
+   - Ensures reproducibility with shareable code
+   - Document all parameters in code comments
+
+3. FOR STRUCTURING DATA:
+   ➡️ USE: SQL Agent to create databases from raw data
+   - Converts CSV/JSON into queryable tables
+   - Creates indexes and relationships
+
+4. FOR DOWNLOADING FROM THE INTERNET:
+   ➡️ USE: File Agent ONLY with valid URLs
+   ❌ NOT for searching local files
+
+5. FOR RESEARCH AND CITATIONS:
+   ➡️ USE: Research Agent for finding papers and sources
+   - Builds comprehensive bibliographies
+   - Documents conflicting findings
+
+6. FOR SYSTEM OPERATIONS:
+   ➡️ USE: Shell Agent for ALL filesystem operations:
+      - Installing packages: `pip install pandas`
+      - Checking installations: `pip list | grep pandas`
+      - File operations: `cp`, `mv`, `rm`, `mkdir`
+
+7. FOR DOCUMENTATION:
+   ➡️ USE: Notes Agent to organize and document findings
+   - Does NOT search or execute anything
+   - Only creates structured documentation
+
+⚠️ COMMON MISTAKES TO AVOID:
+❌ Using File Agent to search for local files (use Shell Agent)
+❌ Using Notes Agent to find information (it only documents)
+❌ Using Data Agent to create databases (use SQL Agent)
+❌ Using Math Agent for calculations (use Code Agent)
+✅ Use Shell Agent for ANY filesystem search or operation
+
+SHELL AGENT COMMAND FORMAT (CRITICAL!):
+The Shell Agent is your ONLY way to search the user's computer!
+
+MUST provide EXACT commands in backticks:
+- Find files by name: `find ~ -name "*mond*"` or `find /path -name "*.pdf"`
+- Search file contents: `grep -r "search term" /path/to/search`
+- List files: `ls -la /directory`
+- Read a file: `cat /path/to/file.txt`
+- Check what's installed: `pip list`, `brew list`
+- Install packages: `pip install numpy pandas`
+- Download with curl: `curl -O https://example.com/file.pdf`
+- System info: `pwd`, `which python`, `df -h`
+
+REMEMBER: Shell Agent is the ONLY agent that can:
+- Search for files on the computer
+- Navigate the filesystem
+- Check what's installed
+- Read local files
 
 Your DECISION PROCESS:
 1. EXPLAIN YOUR THINKING: Describe your research approach and methodology
@@ -1828,13 +1943,29 @@ class ThinkerOrchestrator:
         has_file_path = bool(re.search(r'(/[^\s]+\.[a-zA-Z]{2,4}|[A-Za-z]:\\[^\s]+|\./[^\s]+)', message))
         has_shell_command = bool(re.search(r'`[^`]+`', message)) or any(cmd in message.lower() for cmd in ['grep', 'find', 'ls', 'cat', 'brew install', 'pip install', 'npm install', 'apt-get', 'chmod', 'mkdir', 'rm', 'cp', 'mv'])
         
+        # CRITICAL: Check for file search keywords
+        is_file_search = any(phrase in message.lower() for phrase in [
+            'find files', 'find all files', 'search for files', 'files on my computer',
+            'files on my machine', 'files related to', 'search my computer',
+            'search my machine', 'look for files', 'locate files', 'where are',
+            'list files', 'show files', 'what files', 'search for',
+            'files containing', 'containing the word', 'grep', 'find'
+        ])
+        
         # Check for research-specific keywords
         is_data_task = any(word in message.lower() for word in ['data', 'dataset', 'csv', 'excel', 'json', 'analyze', 'statistics', 'correlation'])
         is_research_task = any(word in message.lower() for word in ['research', 'paper', 'study', 'literature', 'review', 'citation', 'reference', 'peer-review'])
         is_computation = any(word in message.lower() for word in ['calculate', 'compute', 'analyze', 'model', 'simulate', 'algorithm'])
         
-        # RESEARCH DATA PROCESSING (Highest Priority)
-        if is_data_task or has_file_path and any(ext in message.lower() for ext in ['.csv', '.json', '.xlsx', '.txt', '.pdf']):
+        # FILE SEARCH ON USER'S COMPUTER (Highest Priority)
+        if is_file_search or ('find' in message.lower() and 'file' in message.lower()):
+            thinking_process["identified_type"] = "file_search"
+            thinking_process["analysis"] = "User wants to search for files on their computer"
+            thinking_process["agents_to_use"] = ["ShellAgent"]
+            thinking_process["selection_reasoning"] = "Shell Agent is the ONLY agent that can search the filesystem. Will use find or grep commands."
+            thinking_process["research_priority"] = "file_discovery"
+        # RESEARCH DATA PROCESSING
+        elif is_data_task or (has_file_path and any(ext in message.lower() for ext in ['.csv', '.json', '.xlsx', '.txt', '.pdf'])):
             thinking_process["identified_type"] = "research_data_processing"
             thinking_process["analysis"] = "Research data needs to be processed, structured, and analyzed"
             thinking_process["agents_to_use"] = ["FileAgent", "CodeAgent", "SQLAgent", "DataAgent", "NotesAgent"]
