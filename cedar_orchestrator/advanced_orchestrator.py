@@ -475,11 +475,131 @@ Why: Provided a direct response based on the query context"""
                 explanation=f"Processing error"
             )
 
+class ChiefAgent:
+    """Chief Agent that reviews all sub-agent responses and makes final decisions"""
+    
+    def __init__(self, llm_client: Optional[AsyncOpenAI]):
+        self.llm_client = llm_client
+        
+    async def review_and_decide(self, user_query: str, agent_results: List[AgentResult]) -> Dict[str, Any]:
+        """Review all agent results and decide what to show the user"""
+        start_time = time.time()
+        logger.info(f"[ChiefAgent] Starting review of {len(agent_results)} agent results")
+        
+        if not self.llm_client:
+            # Fallback: pick highest confidence result
+            best_result = max(agent_results, key=lambda r: r.confidence) if agent_results else None
+            return {
+                "decision": "show_result",
+                "selected_agent": best_result.display_name if best_result else "None",
+                "final_answer": best_result.result if best_result else "No results available",
+                "reasoning": "No LLM available - selected highest confidence result"
+            }
+        
+        try:
+            # Prepare agent results summary for Chief Agent review
+            results_summary = []
+            for result in agent_results:
+                results_summary.append(f"""
+                Agent: {result.display_name}
+                Confidence: {result.confidence}
+                Method: {result.method}
+                Response: {result.result[:500]}
+                """)
+            
+            # Get model from environment
+            model = os.getenv("CEDARPY_OPENAI_MODEL") or os.getenv("OPENAI_API_KEY_MODEL") or "gpt-5"
+            logger.info(f"[ChiefAgent] Using LLM for decision making with model: {model}")
+            
+            # Ask Chief Agent to review and decide
+            completion_params = {
+                "model": model,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": """You are the Chief Agent, responsible for reviewing responses from multiple specialized agents and making the final decision on what to present to the user.
+
+Your responsibilities:
+1. Review all agent responses for accuracy and completeness
+2. Identify if any agent has provided a satisfactory answer
+3. Decide whether to:
+   - Present one agent's response as the final answer
+   - Combine multiple agent responses into a comprehensive answer
+   - Request additional processing with specific guidance
+4. Ensure the final response is clear, accurate, and addresses the user's query
+5. Prefer concrete, factual answers over vague responses
+6. If mathematical: verify calculations are correct
+7. If coding: ensure code is syntactically correct and solves the problem
+
+Respond in JSON format:
+{
+  "decision": "show_result" or "need_more_processing",
+  "selected_agent": "agent_name" or "combined",
+  "final_answer": "the complete answer to show the user",
+  "reasoning": "why you made this decision",
+  "additional_guidance": "specific instructions if more processing needed"
+}"""
+                    },
+                    {
+                        "role": "user",
+                        "content": f"""User Query: {user_query}
+
+Agent Responses:
+{''.join(results_summary)}
+
+Review these responses and decide what to present to the user."""
+                    }
+                ]
+            }
+            
+            # GPT-5 models have different parameters
+            if "gpt-5" in model or "gpt-4.1" in model:
+                completion_params["max_completion_tokens"] = 800
+            else:
+                completion_params["max_tokens"] = 800
+                completion_params["temperature"] = 0.3
+                
+            response = await self.llm_client.chat.completions.create(**completion_params)
+            
+            chief_response = response.choices[0].message.content
+            logger.info(f"[ChiefAgent] Response: {chief_response[:300]}...")
+            
+            # Parse JSON response
+            try:
+                decision_data = json.loads(chief_response)
+            except json.JSONDecodeError:
+                # Fallback if JSON parsing fails
+                logger.warning("[ChiefAgent] Failed to parse JSON response, using fallback")
+                best_result = max(agent_results, key=lambda r: r.confidence) if agent_results else None
+                decision_data = {
+                    "decision": "show_result",
+                    "selected_agent": best_result.display_name if best_result else "None",
+                    "final_answer": best_result.result if best_result else "No results available",
+                    "reasoning": "JSON parsing failed - selected highest confidence result"
+                }
+            
+            logger.info(f"[ChiefAgent] Decision: {decision_data.get('decision')}, Selected: {decision_data.get('selected_agent')}")
+            logger.info(f"[ChiefAgent] Completed in {time.time() - start_time:.3f}s")
+            
+            return decision_data
+            
+        except Exception as e:
+            logger.error(f"[ChiefAgent] Error: {e}")
+            # Fallback: pick highest confidence result
+            best_result = max(agent_results, key=lambda r: r.confidence) if agent_results else None
+            return {
+                "decision": "show_result",
+                "selected_agent": best_result.display_name if best_result else "None",
+                "final_answer": best_result.result if best_result else "No results available",
+                "reasoning": f"Chief Agent error: {str(e)[:100]}"
+            }
+
 class ThinkerOrchestrator:
     """The main orchestrator that coordinates all agents"""
     
     def __init__(self, api_key: str):
         self.llm_client = AsyncOpenAI(api_key=api_key) if api_key else None
+        self.chief_agent = ChiefAgent(self.llm_client)  # Chief Agent is primary
         self.code_agent = CodeAgent(self.llm_client)
         self.reasoning_agent = ReasoningAgent(self.llm_client)
         self.general_agent = GeneralAgent(self.llm_client)
@@ -628,9 +748,19 @@ class ThinkerOrchestrator:
             elif isinstance(result, Exception):
                 logger.error(f"[ORCHESTRATOR] Agent {i+1} failed with exception: {result}")
                 
-        # Phase 3: Select best result and check for reruns
-        logger.info("[ORCHESTRATOR] PHASE 3: Result Selection and Rerun Check")
-        logger.info(f"[ORCHESTRATOR] Comparing {len(valid_results)} valid results")
+        # Phase 3: Chief Agent Review and Decision
+        logger.info("[ORCHESTRATOR] PHASE 3: Chief Agent Review and Decision")
+        logger.info(f"[ORCHESTRATOR] Chief Agent reviewing {len(valid_results)} valid results")
+        
+        # Update stream to show Chief Agent processing
+        await websocket.send_json({
+            "type": "stream",
+            "text": "Chief Agent reviewing all responses and making final decision..."
+        })
+        
+        # Have Chief Agent review all results and make a decision
+        chief_decision = await self.chief_agent.review_and_decide(message, valid_results)
+        logger.info(f"[ORCHESTRATOR] Chief Agent decision: {chief_decision.get('decision')}")
         
         # Check if any agent needs clarification
         needs_clarification = any(r.needs_clarification for r in valid_results)
@@ -671,9 +801,27 @@ class ThinkerOrchestrator:
             await asyncio.sleep(0.5)
             return await self.orchestrate(context, websocket, rerun_count + 1, valid_results)
         
-        best_result = await self.select_best_result(valid_results, thinking)
-        logger.info(f"[ORCHESTRATOR] Selected best result: {best_result.agent_name} with confidence {best_result.confidence}")
-        logger.info(f"[ORCHESTRATOR] Selection reasoning: Method={best_result.method}")
+        # Check if Chief Agent wants more processing
+        if chief_decision.get('decision') == 'need_more_processing' and rerun_count < 30:
+            guidance = chief_decision.get('additional_guidance', '')
+            await websocket.send_json({
+                "type": "agent_result",
+                "agent_name": "Chief Agent",
+                "text": f"Status: Requesting additional processing (attempt {rerun_count + 2}/30)\n\nGuidance: {guidance}"
+            })
+            
+            # Rerun with Chief Agent's guidance
+            enhanced_message = f"{message}\n\nAdditional context from Chief Agent: {guidance}"
+            await asyncio.sleep(0.5)
+            return await self.orchestrate(enhanced_message, websocket, rerun_count + 1, valid_results)
+        
+        # Use Chief Agent's selected result or combined answer
+        final_answer = chief_decision.get('final_answer', '')
+        selected_agent = chief_decision.get('selected_agent', 'Chief Agent')
+        reasoning = chief_decision.get('reasoning', '')
+        
+        logger.info(f"[ORCHESTRATOR] Chief Agent selected: {selected_agent}")
+        logger.info(f"[ORCHESTRATOR] Chief Agent reasoning: {reasoning}")
         
         # Send stream update before final
         await websocket.send_json({
@@ -684,19 +832,26 @@ class ThinkerOrchestrator:
         # Calculate total time before using it
         total_time = time.time() - orchestration_start
         
-        # Extract the structured parts from the best result
-        result_text = best_result.result
+        # Use Chief Agent's final answer
+        result_text = final_answer
         
-        # Parse out the structured sections
+        # Parse out the structured sections if they exist
         answer_match = re.search(r'Answer:\s*(.+?)(?=\n\n|\n(?:Why:|Potential Issues:|Suggested Next Steps:)|$)', result_text, re.DOTALL)
         why_match = re.search(r'Why:\s*(.+?)(?=\n\n|\n(?:Potential Issues:|Suggested Next Steps:)|$)', result_text, re.DOTALL)
         issues_match = re.search(r'Potential Issues:\s*(.+?)(?=\n\n|\nSuggested Next Steps:|$)', result_text, re.DOTALL)
         next_steps_match = re.search(r'Suggested Next Steps:\s*(.+?)(?=\n\n|$)', result_text, re.DOTALL)
         
-        answer = answer_match.group(1).strip() if answer_match else result_text.split('\n')[0]
-        why = why_match.group(1).strip() if why_match else f"Processed using {best_result.display_name}"
-        issues = issues_match.group(1).strip() if issues_match else None
-        next_steps = next_steps_match.group(1).strip() if next_steps_match else None
+        # If Chief Agent provided a plain answer, use it directly
+        if not answer_match and not why_match:
+            answer = result_text
+            why = reasoning
+            issues = None
+            next_steps = None
+        else:
+            answer = answer_match.group(1).strip() if answer_match else result_text.split('\n')[0]
+            why = why_match.group(1).strip() if why_match else reasoning
+            issues = issues_match.group(1).strip() if issues_match else None
+            next_steps = next_steps_match.group(1).strip() if next_steps_match else None
         
         # Build final structured response
         final_text = f"**Answer:** {answer}\n\n"
@@ -714,15 +869,16 @@ class ThinkerOrchestrator:
         else:
             final_text += f"\n_Processed in {total_time:.1f}s_"
         
-        # Send final response with proper agent attribution
+        # Send final response with Chief Agent attribution
         await websocket.send_json({
             "type": "message",
-            "role": best_result.display_name,  # Show which agent provided the answer
+            "role": selected_agent if selected_agent != 'combined' else 'Chief Agent',
             "text": final_text,
             "metadata": {
-                "selected_agent": best_result.agent_name,
-                "confidence": best_result.confidence,
-                "method": best_result.method,
+                "selected_agent": selected_agent,
+                "chief_reasoning": reasoning,
+                "confidence": max([r.confidence for r in valid_results]) if valid_results else 0.0,
+                "method": "Chief Agent Decision",
                 "orchestration_time": total_time,
                 "all_results": [
                     {
