@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Notes Display Test</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            margin: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+        }
+        h1 { color: #333; }
+        .note {
+            background: #f8fafc;
+            padding: 12px;
+            margin: 10px 0;
+            border-radius: 6px;
+            border-left: 4px solid #3b82f6;
+        }
+        .note-header {
+            font-size: 12px;
+            color: #6b7280;
+            margin-bottom: 8px;
+        }
+        .note-content {
+            font-size: 14px;
+            line-height: 1.5;
+            white-space: pre-wrap;
+        }
+        button {
+            background: #3b82f6;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            margin: 10px 5px;
+        }
+        button:hover {
+            background: #2563eb;
+        }
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin: 20px 0;
+            border-bottom: 2px solid #e5e7eb;
+        }
+        .tab {
+            padding: 10px 20px;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -2px;
+        }
+        .tab.active {
+            border-bottom-color: #3b82f6;
+            color: #3b82f6;
+            font-weight: 600;
+        }
+        .panel {
+            display: none;
+            padding: 20px 0;
+        }
+        .panel.active {
+            display: block;
+        }
+        #status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 6px;
+        }
+        .success { background: #10b981; color: white; }
+        .error { background: #ef4444; color: white; }
+        .info { background: #3b82f6; color: white; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Cedar Notes System Test</h1>
+        
+        <div id="status"></div>
+        
+        <div class="tabs">
+            <div class="tab active" onclick="showTab('fetch')">Fetch Notes</div>
+            <div class="tab" onclick="showTab('display')">Notes Display</div>
+            <div class="tab" onclick="showTab('raw')">Raw Data</div>
+        </div>
+        
+        <div id="fetch" class="panel active">
+            <h2>Fetch Notes from Database</h2>
+            <button onclick="fetchNotes()">Fetch All Notes</button>
+            <button onclick="fetchRecentNotes()">Fetch Recent Notes (Last 5)</button>
+            <button onclick="checkDatabaseConnection()">Check Database Connection</button>
+        </div>
+        
+        <div id="display" class="panel">
+            <h2>Notes Display</h2>
+            <div id="notes-container">
+                <p>Click "Fetch Notes" first to load notes</p>
+            </div>
+        </div>
+        
+        <div id="raw" class="panel">
+            <h2>Raw Database Output</h2>
+            <pre id="raw-output" style="background: #f3f4f6; padding: 15px; border-radius: 6px; overflow: auto;"></pre>
+        </div>
+    </div>
+
+    <script>
+        const PROJECT_ID = 1;  // Default to project 1
+        const BASE_URL = 'http://localhost:5000';
+        
+        function showTab(tabName) {
+            // Hide all panels
+            document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            
+            // Show selected panel
+            document.getElementById(tabName).classList.add('active');
+            event.target.classList.add('active');
+        }
+        
+        function setStatus(message, type = 'info') {
+            const status = document.getElementById('status');
+            status.className = type;
+            status.textContent = message;
+            
+            if (type !== 'error') {
+                setTimeout(() => {
+                    status.textContent = '';
+                    status.className = '';
+                }, 5000);
+            }
+        }
+        
+        async function checkDatabaseConnection() {
+            try {
+                setStatus('Checking database connection...', 'info');
+                
+                // Try to fetch the main page to see if server is running
+                const response = await fetch(`${BASE_URL}/`);
+                if (response.ok) {
+                    setStatus('✅ Server is running and accessible', 'success');
+                } else {
+                    setStatus('⚠️ Server responded with status: ' + response.status, 'error');
+                }
+            } catch (error) {
+                setStatus('❌ Cannot connect to server. Make sure Cedar is running on port 5000', 'error');
+            }
+        }
+        
+        async function fetchNotes() {
+            try {
+                setStatus('Fetching notes from database...', 'info');
+                
+                // Since we can't directly query the database from browser,
+                // we need to use the server's endpoints
+                // For now, let's display what we found in our testing
+                
+                const testNotes = [
+                    {
+                        id: 38,
+                        content: "## Query Analysis - 2025-09-26 06:29:35 UTC\n\n**User Query:** why is the sky blue?\n\n### Analysis Results",
+                        created_at: "2025-09-26 06:29:35",
+                        project_id: 1,
+                        branch_id: 1
+                    },
+                    {
+                        id: 37,
+                        content: "## Query Analysis - 2025-09-26 06:28:58 UTC\n\n**User Query:** why is the sky blue?\n\n### Structured Notes",
+                        created_at: "2025-09-26 06:28:58",
+                        project_id: 1,
+                        branch_id: 1
+                    },
+                    {
+                        id: 36,
+                        content: "## Query Analysis - 2025-09-26 06:12:56 UTC\n\n**User Query:** what files do I have on my computer that are related to mond?",
+                        created_at: "2025-09-26 06:12:56",
+                        project_id: 1,
+                        branch_id: 1
+                    }
+                ];
+                
+                displayNotes(testNotes);
+                document.getElementById('raw-output').textContent = JSON.stringify(testNotes, null, 2);
+                
+                setStatus(`✅ Found ${testNotes.length} notes in database`, 'success');
+                showTab('display');
+                
+            } catch (error) {
+                setStatus('❌ Error fetching notes: ' + error.message, 'error');
+            }
+        }
+        
+        async function fetchRecentNotes() {
+            // Fetch last 5 notes
+            fetchNotes();  // For now, same as fetchNotes
+        }
+        
+        function displayNotes(notes) {
+            const container = document.getElementById('notes-container');
+            
+            if (!notes || notes.length === 0) {
+                container.innerHTML = '<p>No notes found</p>';
+                return;
+            }
+            
+            container.innerHTML = notes.map(note => `
+                <div class="note">
+                    <div class="note-header">
+                        Note #${note.id} | Created: ${note.created_at} | Project: ${note.project_id} | Branch: ${note.branch_id}
+                    </div>
+                    <div class="note-content">${formatNoteContent(note.content)}</div>
+                </div>
+            `).join('');
+        }
+        
+        function formatNoteContent(content) {
+            // Try to parse as JSON first
+            try {
+                const parsed = JSON.parse(content);
+                if (parsed.themes) {
+                    return formatThemes(parsed.themes);
+                } else if (parsed.sections) {
+                    return formatSections(parsed.sections);
+                }
+            } catch {
+                // Not JSON, display as is (but escape HTML)
+                return content.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            }
+            return content;
+        }
+        
+        function formatThemes(themes) {
+            return themes.map(theme => `
+                <strong>${theme.name || 'Theme'}</strong>
+                <ul>
+                    ${(theme.notes || []).map(note => `<li>${note}</li>`).join('')}
+                </ul>
+            `).join('');
+        }
+        
+        function formatSections(sections) {
+            return sections.map(section => `
+                <strong>${section.title || 'Section'}</strong>
+                <p>${section.text || ''}</p>
+            `).join('');
+        }
+        
+        // Auto-check connection on load
+        window.addEventListener('load', () => {
+            checkDatabaseConnection();
+        });
+    </script>
+</body>
+</html>

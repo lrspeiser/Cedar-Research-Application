@@ -60,6 +60,7 @@ class AgentResult:
     confidence: float
     method: str
     explanation: str = ""  # User-facing explanation of what the agent did
+    summary: str = ""  # User-facing summary of what the agent did and key findings
     needs_rerun: bool = False  # Whether this agent needs to be rerun
     rerun_reason: str = ""  # Why a rerun is needed
     needs_clarification: bool = False  # Whether the agent needs user clarification
@@ -196,8 +197,9 @@ Conversation Context:
 Previous Commands in Session:
 {self._format_history()}
 
-Analyze the results and:
-1. Summarize what happened (success/failure)
+Analyze the results and provide:
+1. A brief SUMMARY of what you did and key findings (2-3 sentences)
+2. Details about what happened (success/failure)
 2. Extract key information from the output
 3. Identify any errors or warnings
 4. Recommend specific follow-up shell commands if needed
@@ -222,6 +224,16 @@ Format follow-up commands exactly as they should be run."""
                     response = await self.llm_client.chat.completions.create(**completion_params)
                     analysis = response.choices[0].message.content.strip()
                     
+                    # Extract summary if present (look for SUMMARY: or similar)
+                    summary = ""
+                    summary_match = re.search(r'SUMMARY[:\s]+(.+?)(?:\n\n|\n(?:[A-Z]|\d\.)|$)', analysis, re.IGNORECASE | re.DOTALL)
+                    if summary_match:
+                        summary = summary_match.group(1).strip()
+                    else:
+                        # Fallback: use first paragraph as summary
+                        first_para = analysis.split('\n\n')[0] if '\n\n' in analysis else analysis.split('\n')[0]
+                        summary = first_para[:200] + "..." if len(first_para) > 200 else first_para
+                    
                     # Extract follow-up commands if mentioned
                     followup_matches = re.findall(r'`([^`]+)`', analysis)
                     if followup_matches:
@@ -230,9 +242,11 @@ Format follow-up commands exactly as they should be run."""
                 except Exception as e:
                     logger.warning(f"[ShellAgent] Failed to analyze results: {e}")
                     analysis = self._basic_analysis(shell_command, exit_code, output, error)
+                    summary = f"Executed shell command '{shell_command}' with exit code {exit_code}"
             else:
                 # Provide basic analysis without LLM
                 analysis = self._basic_analysis(shell_command, exit_code, output, error)
+                summary = f"Executed shell command '{shell_command}' with exit code {exit_code}"
             
             # Format the final response
             if exit_code == 0:
@@ -291,7 +305,8 @@ Format follow-up commands exactly as they should be run."""
                 result=formatted_output,
                 confidence=confidence,
                 method=f"Shell execution (exit code: {exit_code})",
-                explanation=f"Executed: {shell_command[:50]}{'...' if len(shell_command) > 50 else ''}"
+                explanation=f"Executed: {shell_command[:50]}{'...' if len(shell_command) > 50 else ''}",
+                summary=summary if 'summary' in locals() else f"Executed shell command '{shell_command[:50]}{'...' if len(shell_command) > 50 else ''}' with {'success' if exit_code == 0 else f'exit code {exit_code}'}"
             )
             
         except subprocess.TimeoutExpired:
@@ -311,7 +326,8 @@ Format follow-up commands exactly as they should be run."""
 - Run the command with `&` to run in background if it's a long process""",
                 confidence=0.3,
                 method="Timeout",
-                explanation="Command timed out"
+                explanation="Command timed out",
+                summary=f"Command '{shell_command[:50]}{'...' if len(shell_command) > 50 else ''}' timed out after 60 seconds"
             )
         except Exception as e:
             logger.error(f"[ShellAgent] Execution error: {e}")
@@ -335,7 +351,8 @@ Format follow-up commands exactly as they should be run."""
 - Try a simpler version of the command first""",
                 confidence=0.2,
                 method="Execution error",
-                explanation=f"Error: {str(e)[:100]}"
+                explanation=f"Error: {str(e)[:100]}",
+                summary=f"Failed to execute '{shell_command[:50]}{'...' if len(shell_command) > 50 else ''}' - {str(e)[:50]}"
             )
     
     def _format_history(self) -> str:
@@ -408,12 +425,22 @@ class CodeAgent:
                 "messages": [
                     {
                         "role": "system", 
-                        "content": """You are a Python code generator. Generate ONLY executable Python code to solve the given problem.
-                        - Output ONLY the Python code, no explanations or markdown
+                        "content": """You are a Python code generator. Your response should have two parts:
+                        
+                        1. SUMMARY: A brief 2-3 sentence description of what the code does and key computations/operations
+                        
+                        2. CODE: The executable Python code (no markdown, just raw Python)
+                        
+                        Requirements for the code:
                         - The code should print the final result
                         - Use proper error handling
                         - For mathematical expressions, parse them correctly (e.g., 'square root of 5*10' means sqrt(5*10))
-                        - The code must be complete and runnable as-is"""
+                        - The code must be complete and runnable as-is
+                        
+                        Format:
+                        SUMMARY: [Your summary here]
+                        
+                        [Your Python code here]"""
                     },
                     {"role": "user", "content": task}
                 ]
@@ -442,12 +469,37 @@ class CodeAgent:
                 
             response = await self.llm_client.chat.completions.create(**completion_params)
             
-            generated_code = response.choices[0].message.content.strip()
-            # Remove markdown code blocks if present
+            full_response = response.choices[0].message.content.strip()
+            
+            # Extract summary and code
+            summary = ""
+            generated_code = full_response
+            
+            # Look for SUMMARY section
+            if "SUMMARY:" in full_response:
+                parts = full_response.split("SUMMARY:", 1)[1]
+                if "\n\n" in parts:
+                    summary_part, code_part = parts.split("\n\n", 1)
+                    summary = summary_part.strip()
+                    generated_code = code_part.strip()
+                elif "\n" in parts:
+                    lines = parts.split("\n")
+                    # Find where code starts (non-empty line after summary)
+                    for i, line in enumerate(lines):
+                        if i > 0 and line.strip() and not line.startswith("SUMMARY"):
+                            summary = lines[0].strip()
+                            generated_code = "\n".join(lines[i:]).strip()
+                            break
+            
+            # Remove markdown code blocks if present in code
             if generated_code.startswith("```"):
                 generated_code = generated_code.split("\n", 1)[1]
                 if generated_code.endswith("```"):
                     generated_code = generated_code.rsplit("```", 1)[0]
+            
+            # Fallback summary if not extracted
+            if not summary:
+                summary = f"Generated and executed Python code to solve: {task[:100]}"
             
             logger.info(f"[CodeAgent] Generated code:\n{generated_code}")
             
@@ -499,7 +551,8 @@ Why: Generated and executed Python code to compute the exact result"""
                     result=formatted_output,
                     confidence=0.95 if output else 0.5,
                     method="LLM-generated and executed Python code",
-                    explanation=f"Generated and executed Python code"
+                    explanation=f"Generated and executed Python code",
+                    summary=summary
                 )
                 
             except Exception as exec_error:
@@ -521,6 +574,7 @@ Suggested Next Steps: Review the code and error, then provide a more specific qu
                     confidence=0.3,
                     method="LLM code generation with execution error",
                     explanation=f"Code execution error",
+                    summary=summary if 'summary' in locals() else f"Failed to execute generated code: {str(exec_error)[:100]}",
                     needs_rerun=True,
                     rerun_reason=f"Execution error: {str(exec_error)[:100]}"
                 )
@@ -533,7 +587,8 @@ Suggested Next Steps: Review the code and error, then provide a more specific qu
                 result=f"Answer: Failed to generate code\n\nPotential issues: {str(e)}",
                 confidence=0.1,
                 method="Error in code generation",
-                explanation=f"Code generation failed"
+                explanation=f"Code generation failed",
+                summary=f"Failed to generate code: {str(e)[:100]}"
             )
 
 class ReasoningAgent:
@@ -736,7 +791,8 @@ Suggested Next Steps:
                 result=formatted_output,
                 confidence=0.9 if "CREATE" in sql_upper else 0.85,
                 method=f"LLM-generated {operation_type}",
-                explanation=f"Generated {operation_type} SQL"
+                explanation=f"Generated {operation_type} SQL",
+                summary=f"Generated {operation_type} SQL for {task[:50]}{'...' if len(task) > 50 else ''}"
             )
             
         except Exception as e:
@@ -818,7 +874,8 @@ Why: Provided a direct response based on the query context"""
                 result=formatted_output,
                 confidence=0.75,
                 method="Direct LLM response",
-                explanation=f"Direct AI answer"
+                explanation=f"Direct AI answer",
+                summary=f"Provided direct answer to: {task[:100]}{'...' if len(task) > 100 else ''}"
             )
             
         except Exception as e:
@@ -897,7 +954,8 @@ Why: Derived the formula step-by-step from fundamental mathematical principles""
                 result=formatted_output,
                 confidence=0.85,
                 method="First principles derivation",
-                explanation="Mathematical derivation from axioms"
+                explanation="Mathematical derivation from axioms",
+                summary=f"Derived formula from first principles for: {task[:80]}{'...' if len(task) > 80 else ''}"
             )
             
         except Exception as e:
@@ -1542,6 +1600,7 @@ class ChiefAgent:
             for result in agent_results:
                 results_summary.append(f"""
                 Agent: {result.display_name}
+                Summary: {result.summary if result.summary else 'No summary provided'}
                 Confidence: {result.confidence}
                 Method: {result.method}
                 Response: {result.result[:500]}
@@ -2211,11 +2270,13 @@ I've analyzed your request as a {thinking['identified_type'].replace('_', ' ')}.
                     "type": "agent_result",
                     "agent_name": result.display_name,  # Use display name for UI
                     "text": status_text,
+                    "summary": result.summary,  # Include summary for user visibility
                     "metadata": {
                         "agent": result.agent_name,
                         "confidence": result.confidence,
                         "method": result.method,
-                        "needs_rerun": result.needs_rerun
+                        "needs_rerun": result.needs_rerun,
+                        "summary": result.summary  # Also include in metadata
                     }
                 })
                 valid_results.append(result)
@@ -2394,6 +2455,14 @@ Please provide this information so I can better assist you."""
         final_text = f"**Answer:** {answer}\n\n"
         final_text += f"**Why:** {why}\n\n"
         
+        # Add Agent Summaries section if we have results with summaries
+        agent_summaries = [r for r in valid_results if r.summary]
+        if agent_summaries:
+            final_text += "**What Each Agent Found:**\n"
+            for result in agent_summaries:
+                final_text += f"• **{result.display_name}:** {result.summary}\n"
+            final_text += "\n"
+        
         if issues and issues.lower() != 'none':
             final_text += f"**Potential Issues:** {issues}\n\n"
             
@@ -2433,6 +2502,7 @@ Please provide this information so I can better assist you."""
                     {
                         "agent": r.agent_name,
                         "result": r.result,
+                        "summary": r.summary,
                         "confidence": r.confidence,
                         "method": r.method,
                         "explanation": r.explanation
