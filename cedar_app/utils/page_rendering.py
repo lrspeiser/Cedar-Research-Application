@@ -172,6 +172,54 @@ def project_page_html(
 
     # Build plan panel content (fallback when no plan yet)
     plan_panel_html = plan_card_html or "<div class='card' style='padding:12px'><h3>Plan</h3><div class='muted small'>(No plan yet)</div></div>"
+    
+    # Build History panel with numbered chats
+    from cedar_app.utils.chat_persistence import get_chat_manager
+    chat_manager = get_chat_manager()
+    chat_list = chat_manager.list_chats(project.id, current.id, limit=20)
+    
+    history_items = []
+    for chat in chat_list:
+        chat_num = chat['chat_number']
+        title = escape(chat['title'])
+        created = chat['created_at'][:19] if chat['created_at'] else 'Unknown'
+        status = chat['status']
+        msg_count = chat['message_count']
+        
+        # Status indicator
+        if status == 'processing':
+            status_icon = "<span class='spinner' style='width:10px; height:10px'></span>"
+        elif status == 'error':
+            status_icon = "<span style='color:#ef4444'>⚠</span>"
+        elif status == 'complete':
+            status_icon = "<span style='color:#10b981'>✓</span>"
+        else:  # active
+            status_icon = "<span style='color:#3b82f6'>•</span>"
+        
+        history_items.append(f'''
+            <div class="chat-history-item" style="border-bottom:1px solid var(--border); padding:8px 0; cursor:pointer"
+                 onclick="loadChat({project.id}, {current.id}, {chat_num})">
+                <div style="display:flex; align-items:center; gap:8px">
+                    {status_icon}
+                    <span class="pill" style="min-width:30px; text-align:center">{chat_num}</span>
+                    <span style="flex:1">{title}</span>
+                    <span class="small muted">{msg_count} msgs</span>
+                </div>
+                <div class="small muted" style="margin-left:50px">{created}</div>
+            </div>
+        ''')
+    
+    history_panel_html = f'''
+        <div class="card" style="padding:12px">
+            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px">
+                <h3 style="margin:0">Chat History</h3>
+                <button class="secondary" onclick="startNewChat({project.id}, {current.id})">New Chat</button>
+            </div>
+            <div style="max-height:400px; overflow-y:auto">
+                {''.join(history_items) if history_items else '<div class="muted small">No chat history yet. Click "New Chat" to start.</div>'}
+            </div>
+        </div>
+    '''
 
     # threads table
     thread_rows = []
@@ -1299,6 +1347,75 @@ SELECT * FROM demo LIMIT 10;""")
   }
 
   // Using WebSocket for all communication
+  
+  // Chat history management functions
+  window.currentChatNumber = null;
+  
+  function startNewChat(projectId, branchId) {
+    // Create a new chat and start it
+    fetch(`/api/chat/new`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({project_id: projectId, branch_id: branchId})
+    }).then(function(r) {
+      return r.json();
+    }).then(function(data) {
+      window.currentChatNumber = data.chat_number;
+      // Clear current messages
+      var msgs = document.getElementById('msgs');
+      if (msgs) msgs.innerHTML = '<div class="muted small">Chat ' + data.chat_number + ' started</div>';
+      // Refresh history panel
+      refreshHistoryPanel();
+    }).catch(function(e) {
+      console.error('Failed to create new chat:', e);
+    });
+  }
+  
+  function loadChat(projectId, branchId, chatNumber) {
+    // Load a specific chat's history
+    window.currentChatNumber = chatNumber;
+    fetch(`/api/chat/load`, {
+      method: 'POST', 
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({project_id: projectId, branch_id: branchId, chat_number: chatNumber})
+    }).then(function(r) {
+      return r.json();
+    }).then(function(data) {
+      // Display the loaded chat messages
+      var msgs = document.getElementById('msgs');
+      if (msgs) {
+        msgs.innerHTML = '';
+        if (data.messages) {
+          data.messages.forEach(function(msg) {
+            var roleClass = msg.role === 'user' ? 'user' : (msg.role === 'system' ? 'system' : 'assistant');
+            var wrap = document.createElement('div');
+            wrap.className = 'msg ' + roleClass;
+            var meta = document.createElement('div');
+            meta.className = 'meta small';
+            meta.innerHTML = '<span class="pill">' + msg.role + '</span>';
+            var bub = document.createElement('div');
+            bub.className = 'bubble ' + roleClass;
+            var cont = document.createElement('div');
+            cont.className = 'content';
+            cont.style.whiteSpace = 'pre-wrap';
+            cont.textContent = msg.content;
+            bub.appendChild(cont);
+            wrap.appendChild(meta);
+            wrap.appendChild(bub);
+            msgs.appendChild(wrap);
+          });
+        }
+      }
+    }).catch(function(e) {
+      console.error('Failed to load chat:', e);
+    });
+  }
+  
+  function refreshHistoryPanel() {
+    // Refresh the history panel to show updated chat list
+    // This would ideally reload just the history panel content
+    // For now, we'll rely on page refresh or dynamic updates
+  }
   document.addEventListener('DOMContentLoaded', function(){
     try {
       var chatForm = document.getElementById('chatForm');
@@ -1574,6 +1691,7 @@ SELECT * FROM demo LIMIT 10;""")
               {''}
               {''}
               <a href="#" class="{('tab active' if not (selected_code or False) else 'tab')}" data-target="right-plan">Plan</a>
+              <a href="#" class="tab" data-target="right-history">History</a>
               <a href="#" class="tab" data-target="right-files">Files</a>
               <a href="#" class="{('tab active' if (selected_code or False) else 'tab')}" data-target="right-code">Code</a>
               <a href=\"#\" class=\"tab\" data-target=\"right-upload\" data-testid=\"open-uploader\">Upload</a>
@@ -1583,6 +1701,9 @@ SELECT * FROM demo LIMIT 10;""")
             <div class="tab-panels">
               <div id="right-plan" class="{('panel' if not (selected_code or False) else 'panel hidden')}">
                 {plan_panel_html}
+              </div>
+              <div id="right-history" class="panel hidden">
+                {history_panel_html}
               </div>
               <div id="right-files" class="panel">
                 <div class="card" style="max-height:220px; overflow:auto; padding:12px">

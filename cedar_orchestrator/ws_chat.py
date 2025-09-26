@@ -83,8 +83,10 @@ async def handle_ws_chat(
     try:
         await websocket.accept()
         
-        # Don't send initial connection message - UI doesn't expect it
-        # The UI will send the first message
+        # Import chat manager for persistence
+        from cedar_app.utils.chat_persistence import get_chat_manager
+        chat_manager = get_chat_manager()
+        current_chat_number = None
         
         logger.info(f"WebSocket connected: project_id={project_id}")
         
@@ -100,10 +102,34 @@ async def handle_ws_chat(
                 
                 if message_type == "message" or action == "chat":
                     content = data.get("content", "").strip()
+                    branch_id = data.get("branch_id", 1)  # Default to branch 1
+                    chat_number = data.get("chat_number", current_chat_number)
+                    
+                    # Create or get chat
+                    if not chat_number and project_id:
+                        # Create a new chat if none specified
+                        chat_data = chat_manager.create_chat(
+                            project_id=project_id,
+                            branch_id=branch_id,
+                            title=f"Chat {content[:30]}..." if content else "New Chat"
+                        )
+                        chat_number = chat_data['chat_number']
+                        current_chat_number = chat_number
+                        logger.info(f"[WebSocket] Created new chat #{chat_number}")
+                        
+                        # Notify client about new chat
+                        await websocket.send_json({
+                            "type": "chat_created",
+                            "chat_number": chat_number,
+                            "title": chat_data['title']
+                        })
+                    elif chat_number and project_id:
+                        current_chat_number = chat_number
+                        logger.info(f"[WebSocket] Using existing chat #{chat_number}")
                     
                     logger.info("*"*80)
                     logger.info(f"[WebSocket] New message received from client")
-                    logger.info(f"[WebSocket] Project ID: {project_id}")
+                    logger.info(f"[WebSocket] Project ID: {project_id}, Chat #{chat_number}")
                     logger.info(f"[WebSocket] Message content: {content}")
                     logger.info(f"[WebSocket] Message length: {len(content)} characters")
                     logger.info("*"*80)
@@ -116,11 +142,61 @@ async def handle_ws_chat(
                         })
                         continue
                     
+                    # Save user message to chat
+                    if project_id and chat_number:
+                        chat_manager.add_message(
+                            project_id=project_id,
+                            branch_id=branch_id,
+                            chat_number=chat_number,
+                            role="user",
+                            content=content
+                        )
+                        chat_manager.set_chat_status(project_id, branch_id, chat_number, "processing")
+                    
                     logger.info(f"[WebSocket] Initiating orchestration for: {content[:100]}...")
                     orchestration_start = time.time()
                     
+                    # Create a wrapper to capture messages sent to WebSocket
+                    class PersistentWebSocket:
+                        def __init__(self, ws, chat_mgr, proj_id, br_id, chat_num):
+                            self.ws = ws
+                            self.chat_mgr = chat_mgr
+                            self.proj_id = proj_id
+                            self.br_id = br_id
+                            self.chat_num = chat_num
+                        
+                        async def send_json(self, data):
+                            # Send to client
+                            await self.ws.send_json(data)
+                            
+                            # Persist certain message types
+                            if self.proj_id and self.chat_num:
+                                msg_type = data.get('type', '')
+                                if msg_type == 'message':
+                                    self.chat_mgr.add_message(
+                                        self.proj_id, self.br_id, self.chat_num,
+                                        role=data.get('role', 'assistant'),
+                                        content=data.get('text', ''),
+                                        metadata={'type': 'agent_response'}
+                                    )
+                                elif msg_type == 'final':
+                                    self.chat_mgr.add_message(
+                                        self.proj_id, self.br_id, self.chat_num,
+                                        role='assistant',
+                                        content=data.get('text', ''),
+                                        metadata={'type': 'final_answer'}
+                                    )
+                                    self.chat_mgr.set_chat_status(self.proj_id, self.br_id, self.chat_num, "complete")
+                                elif msg_type == 'error':
+                                    self.chat_mgr.set_chat_status(self.proj_id, self.br_id, self.chat_num, "error")
+                    
+                    # Use wrapper if we have persistence context
+                    ws_to_use = websocket
+                    if project_id and chat_number:
+                        ws_to_use = PersistentWebSocket(websocket, chat_manager, project_id, branch_id, chat_number)
+                    
                     # Process with advanced orchestrator
-                    await orchestrator.orchestrate(content, websocket)
+                    await orchestrator.orchestrate(content, ws_to_use)
                     
                     orchestration_time = time.time() - orchestration_start
                     logger.info("*"*80)
