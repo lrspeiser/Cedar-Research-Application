@@ -407,10 +407,12 @@ class CodeAgent:
         if not self.llm_client:
             return AgentResult(
                 agent_name="CodeAgent",
+                display_name="Code Executor",
                 result="No LLM client available",
                 confidence=0.0,
                 method="Error",
-                explanation="Cannot generate code without LLM access."
+                explanation="Cannot generate code without LLM access.",
+                summary="Unable to process - no LLM configured"
             )
         
         try:
@@ -1908,7 +1910,7 @@ EXAMPLES OF GOOD REASONING:
 REMEMBER:
 - You have {remaining_loops} iterations - but DON'T use them unless needed!
 - Send to SINGLE agents when one agent suffices
-- Only use multiple agents if the query SPECIFICALLY requires different capabilities
+- Only use multiple agents if the query SPECIFICALLY requires different capabilities"""
                     },
                     {
                         "role": "user",
@@ -2063,7 +2065,8 @@ class ThinkerOrchestrator:
             "identified_type": "",
             "agents_to_use": [],
             "selection_reasoning": "",
-            "complexity": "simple"  # simple, moderate, or complex
+            "complexity": "simple",  # simple, moderate, or complex
+            "research_priority": "minimal"  # Keep this for compatibility
         }
         
         # First: Assess query complexity
