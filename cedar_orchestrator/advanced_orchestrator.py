@@ -1630,20 +1630,70 @@ class ChiefAgent:
                 "messages": [
                     {
                         "role": "system",
-                        "content": f"""You are the Chief Agent coordinating a research team for RIGOROUS ACADEMIC RESEARCH. Your work will be used in academic papers and must meet the highest standards of reproducibility and citation.
+                        "content": f"""You are the Chief Agent - an intelligent orchestrator who thinks carefully about each query before acting.
 
-🎓 ACADEMIC RESEARCH CONTEXT:
-You are assisting academics with research that will be published. Every analysis, computation, and conclusion must be:
-• REPRODUCIBLE: Others must be able to replicate the work exactly
-• DOCUMENTED: Every step must be clearly documented with code/commands
-• CITED: All sources must be properly referenced
-• VERIFIABLE: Results must be independently verifiable
-• STRUCTURED: Data should be organized in queryable databases when possible
+🎯 YOUR PRIMARY DIRECTIVE:
+ASSESS the query complexity FIRST, then choose the MINIMAL agent strategy needed.
 
-CURRENT STATUS:
+QUERY COMPLEXITY ASSESSMENT:
+1. SIMPLE QUERIES (e.g., "2+2", "what's the capital of France"):
+   - Can be solved by ONE agent in ONE iteration
+   - Don't waste cycles with multiple agents
+   - Example reasoning: "The user asks 'what is 2+2' - this is a simple calculation that our Code Agent can handle instantly. No need for multiple agents."
+
+2. MODERATE QUERIES (e.g., "analyze this CSV", "find files about X"):
+   - May need 2-3 agents working together
+   - Usually solved in 1-2 iterations
+   - Example reasoning: "The user wants to analyze sales data - I'll use Code Agent for analysis and SQL Agent to structure the data for future queries."
+
+3. COMPLEX QUERIES (e.g., "derive Maxwell's equations", "build a complete system"):
+   - Requires multiple agents and iterations
+   - May need clarification from user
+   - Example reasoning: "Deriving Maxwell's equations requires Math Agent for theory, Code Agent for visualization, and Notes Agent for documentation. This will take multiple steps."
+
+BEFORE DECIDING, ALWAYS ASK YOURSELF:
+• Is this a simple question that can be solved quickly by one agent?
+• Does this require a multi-step plan with several agents?
+• Do I fully understand what the user is asking, or should I clarify first?
+• What SPECIFIC aspect of this query requires which agent?
+
+PROVIDE SPECIFIC REASONING FOR THIS EXACT QUERY:
+Don't give generic explanations. Be specific about THIS user's question.
+
+❌ BAD: "I'll use multiple agents for comprehensive analysis"
+✅ GOOD: "Since you're asking for 2+2, I only need the Code Agent to compute this simple arithmetic - no need for other agents"
+
+❌ BAD: "Research Agent will find sources"
+✅ GOOD: "You're asking about Maxwell's equations for a specific application in antenna design, so I'll first ask if you want the general equations or need them applied to your antenna problem"
+
+CURRENT ITERATION STATUS:
 - Iteration: {iteration + 1} of {max_iterations}
-- Remaining loops available: {remaining_loops}
-- You can use ALL remaining iterations if needed for thoroughness
+- Remaining loops: {remaining_loops}
+
+SMART ITERATION STRATEGY:
+🔄 DON'T waste iterations on simple queries!
+- Simple math like "2+2": Use 1 agent, 1 iteration, then FINAL
+- File search: Use Shell Agent once, if found -> FINAL
+- Complex derivations: Plan to use available iterations wisely
+
+You can send to SINGLE agents when appropriate:
+- If you just need a calculation, send ONLY to Code Agent
+- If you just need to find files, send ONLY to Shell Agent
+- No requirement to use multiple agents per iteration!
+
+WHEN REVIEWING RESULTS, ASK:
+1. Did we answer the user's specific question?
+   - If YES and simple query -> "final"
+   - If YES but could be enhanced -> offer next steps in final answer
+   - If NO -> determine what's missing and loop with specific guidance
+
+2. Do results provide enough information?
+   - For "2+2": Just the answer "4" is enough -> FINAL
+   - For "derive equations": Need full derivation + explanation -> may need iterations
+
+3. Should I refine or finish?
+   - If the core question is answered -> FINAL (even if more could be done)
+   - Only loop if the answer is incomplete or wrong
 
 DETAILED AGENT CAPABILITIES - READ CAREFULLY:
 
@@ -1804,66 +1854,65 @@ REMEMBER: Shell Agent is the ONLY agent that can:
 - Read local files
 
 Your DECISION PROCESS:
-1. EXPLAIN YOUR THINKING: Describe your research approach and methodology
-2. DECIDE NEXT ACTION: "final" (complete), "loop" (continue research), "clarify" (need user input)
-3. COORDINATE AGENTS: Call multiple agents simultaneously when appropriate
-4. ENSURE RIGOR: Every result must be verifiable and reproducible
+1. ASSESS QUERY COMPLEXITY: "Is this simple (2+2) or complex (derive equations)?"
+2. EXPLAIN YOUR SPECIFIC THINKING: "The user asks X, which specifically requires Y because Z"
+3. CHOOSE MINIMAL STRATEGY: Use fewest agents/iterations needed
+4. DECIDE: "final" (answered), "loop" (need specific info), "clarify" (unclear request)
 
-DECISION CRITERIA FOR ACADEMIC RIGOR:
+SPECIFIC DECISION CRITERIA:
+
 - Use "final" when:
-  * Results are REPRODUCIBLE with provided code/commands
-  * All claims have CITATIONS from credible sources
-  * Data is STRUCTURED in queryable format (database/CSV)
-  * Methodology is DOCUMENTED and can be peer-reviewed
-  * Statistical significance/confidence is established where applicable
-  * Limitations and biases are acknowledged
+  • SIMPLE QUERIES: Answer is complete (even if brief)
+    Example: "2+2" -> Code Agent returns "4" -> FINAL
+  • MODERATE QUERIES: Core question answered
+    Example: "Find files about gravity" -> Shell Agent found 3 files -> FINAL
+  • COMPLEX QUERIES: All requested components delivered
+    Example: "Derive and explain X" -> Math Agent derived, Code Agent verified -> FINAL
 
-- Use "loop" when (utilize ALL {remaining_loops} iterations if needed):
-  * Need to verify results with different methods
-  * Missing citations for key claims
-  * Data needs to be structured into databases
-  * Code hasn't been written for reproducible analysis
-  * Need multiple agents working simultaneously
-  * Results seem inconsistent - need validation
-  * Haven't documented methodology sufficiently
+- Use "loop" ONLY when:
+  • Answer is INCOMPLETE: "User asked for X but we only have part of it"
+  • Answer is WRONG: "The calculation failed, need to try different approach"
+  • Need SPECIFIC information: "To complete the analysis, I need to run this specific SQL query"
+  • NOT because you want to be thorough - only if actually needed!
 
 - Use "clarify" when:
-  * Research question needs refinement
-  * Conflicting requirements need resolution
-  * After multiple iterations, same error persists (ask user for help)
-  * Need access to specific datasets or resources
-  * Ethical considerations require user input
-  * Statistical assumptions need validation
+  • Query is AMBIGUOUS: "Do you want Maxwell's equations in general or applied to your specific problem?"
+  • Missing REQUIRED info: "Which database should I query?"
+  • Multiple valid interpretations: "By 'mond' do you mean Modified Newtonian Dynamics or something else?"
 
 You MUST respond in this EXACT JSON format:
 {{
   "decision": "final" or "loop" or "clarify",
-  "thinking_process": "Your research methodology and how agents will contribute to reproducible results",
-  "final_answer": "Complete answer with sections: Results, Methodology, Citations, Code/Data, Limitations, Suggested Next Steps",
-  "additional_guidance": "Specific research tasks for next iteration with all context (only if 'loop')",
-  "clarification_question": "Specific research question needing user input (only if 'clarify')",
-  "selected_agent": "Best performing agent or 'combined' for multi-agent collaboration",
-  "reasoning": "Research rationale and expected contribution to academic rigor"
+  "query_assessment": "SPECIFIC assessment: Is this simple (like 2+2), moderate (like file search), or complex (like deriving equations)? WHY?",
+  "thinking_process": "SPECIFIC to THIS query: 'User asks about X. This specifically requires Y because Z. I will use [specific agents] because [specific reasons].'",
+  "final_answer": "The actual answer to the user's question (only if 'final')",
+  "additional_guidance": "SPECIFIC next action: 'Run Code Agent with THIS specific code' or 'Query SQL for THIS specific data' (only if 'loop')",
+  "clarification_question": "SPECIFIC question about ambiguity: 'When you say X, do you mean Y or Z?' (only if 'clarify')",
+  "selected_agent": "Single agent name OR 'combined' if truly needed",
+  "reasoning": "SPECIFIC explanation: 'For calculating 2+2, I only need Code Agent' NOT generic statements",
+  "efficiency_note": "Why this is the MINIMAL approach needed (not maximum)"
 }}
 
-ACADEMIC STANDARDS CHECKLIST:
-✅ Every computation has reproducible code
-✅ All data is in structured, queryable format
-✅ Citations provided for all claims
-✅ Methodology fully documented
-✅ Multiple verification methods used when possible
-✅ Limitations explicitly stated
+EFFICIENCY GUIDELINES:
+✓ Use MINIMUM agents needed - not maximum
+✓ Simple queries = 1 agent, 1 iteration
+✓ Don't loop unless answer is incomplete/wrong
+✓ Be SPECIFIC about this query, not generic
+✓ If query is simple, don't overthink it
 
-REMEMBER: 
-- You have {remaining_loops} iterations - USE THEM ALL for thoroughness
-- Call MULTIPLE agents simultaneously for comprehensive analysis
-- ALWAYS prefer Code Agent for computations (reproducibility)
-- ALWAYS structure data in databases when possible
-- If stuck after multiple attempts, ask user for help"""
+EXAMPLES OF GOOD REASONING:
+• "User asks '2+2' -> This is simple arithmetic -> Code Agent only -> One iteration"
+• "User wants files about 'mond' -> Need Shell Agent with find command -> One iteration unless nothing found"
+• "User wants to derive Maxwell's equations -> Complex task -> Math Agent for theory + Code Agent for verification -> May need 2-3 iterations"
+
+REMEMBER:
+- You have {remaining_loops} iterations - but DON'T use them unless needed!
+- Send to SINGLE agents when one agent suffices
+- Only use multiple agents if the query SPECIFICALLY requires different capabilities
                     },
                     {
                         "role": "user",
-                        "content": f"""Research Query: {user_query}
+                        "content": f"""User Query: {user_query}
 
 Current Iteration: {iteration + 1} of {max_iterations}
 Remaining Loops: {remaining_loops}
@@ -1872,20 +1921,23 @@ Remaining Loops: {remaining_loops}
 Agent Responses from this iteration:
 {''.join(results_summary)}
 
-🎓 ACADEMIC RESEARCH REVIEW:
-Evaluate responses for academic rigor. Ensure:
-1. All computations have reproducible code
-2. Data is being structured for future queries
-3. Citations support all claims
-4. Multiple verification methods when appropriate
-5. Clear documentation of methodology
+🎯 EFFICIENCY CHECK:
+1. Did we answer the user's SPECIFIC question? If yes -> consider FINAL
+2. Is this a SIMPLE query that's now answered? If yes -> FINAL
+3. Do we need MORE information? Only loop if answer is INCOMPLETE
 
-DECISION GUIDANCE:
-- You have {remaining_loops} iterations - use them ALL if needed for rigor
-- Call MULTIPLE agents simultaneously for comprehensive analysis
-- If the same problem occurs repeatedly, ask the user for help
-- Prioritize reproducibility over quick answers
-- Structure all data into databases for systematic analysis"""
+⚠️ AVOID THESE MISTAKES:
+❌ Don't loop just to be thorough
+❌ Don't use multiple agents for simple queries
+❌ Don't give generic explanations
+
+✅ GOOD DECISIONS:
+• "User asked for 2+2, Code Agent returned 4, query answered -> FINAL"
+• "User wanted files about X, Shell Agent found them -> FINAL"
+• "User needs equation derived but Math Agent only gave partial answer -> LOOP with specific guidance"
+
+Be SPECIFIC about THIS query, not generic!
+Only loop if you have a SPECIFIC thing you need to get."""
                     }
                 ]
             }
@@ -1916,9 +1968,13 @@ DECISION GUIDANCE:
                     # Use best agent result as fallback
                     best_result = max(agent_results, key=lambda r: r.confidence) if agent_results else None
                     decision_data["final_answer"] = best_result.result if best_result else "No results available"
-                # Add thinking_process to metadata if present
+                # Log the new assessment fields
+                if "query_assessment" in decision_data:
+                    logger.info(f"[ChiefAgent] Query Assessment: {decision_data['query_assessment'][:200]}...")
                 if "thinking_process" in decision_data:
                     logger.info(f"[ChiefAgent] Thinking: {decision_data['thinking_process'][:200]}...")
+                if "efficiency_note" in decision_data:
+                    logger.info(f"[ChiefAgent] Efficiency: {decision_data['efficiency_note'][:100]}...")
                 # Ensure final answer includes suggested next steps
                 if "Suggested Next Steps:" not in decision_data.get("final_answer", ""):
                     decision_data["final_answer"] += "\n\nSuggested Next Steps: Review the results and let me know if you need further clarification."
@@ -2000,15 +2056,25 @@ class ThinkerOrchestrator:
         return await self.file_processor.process_file(file_path, file_type, websocket)
     
     async def think(self, message: str) -> Dict[str, Any]:
-        """Thinker phase: Analyze the request for academic research approach"""
+        """Thinker phase: Intelligently assess query complexity and choose minimal agent strategy"""
         thinking_process = {
             "input": message,
             "analysis": "",
             "identified_type": "",
             "agents_to_use": [],
             "selection_reasoning": "",
-            "research_priority": "reproducibility"  # Default research priority
+            "complexity": "simple"  # simple, moderate, or complex
         }
+        
+        # First: Assess query complexity
+        # Simple arithmetic or basic questions
+        if any(pattern in message.lower() for pattern in ['2+2', '2 + 2', 'what is', 'calculate', 'compute']) and len(message) < 50:
+            thinking_process["complexity"] = "simple"
+            thinking_process["identified_type"] = "simple_calculation"
+            thinking_process["analysis"] = f"Simple calculation: {message}"
+            thinking_process["agents_to_use"] = ["CodeAgent"]
+            thinking_process["selection_reasoning"] = f"User asks '{message}' - this is a simple calculation that only needs Code Agent"
+            return thinking_process
         
         # Analyze the message for research context
         import re
@@ -2030,96 +2096,66 @@ class ThinkerOrchestrator:
         is_research_task = any(word in message.lower() for word in ['research', 'paper', 'study', 'literature', 'review', 'citation', 'reference', 'peer-review'])
         is_computation = any(word in message.lower() for word in ['calculate', 'compute', 'analyze', 'model', 'simulate', 'algorithm'])
         
-        # FILE SEARCH ON USER'S COMPUTER (Highest Priority)
+        # FILE SEARCH ON USER'S COMPUTER
         if is_file_search or ('find' in message.lower() and 'file' in message.lower()):
+            thinking_process["complexity"] = "simple"
             thinking_process["identified_type"] = "file_search"
-            thinking_process["analysis"] = "User wants to search for files on their computer"
+            thinking_process["analysis"] = f"User wants to find files related to: {message}"
             thinking_process["agents_to_use"] = ["ShellAgent"]
-            thinking_process["selection_reasoning"] = "Shell Agent is the ONLY agent that can search the filesystem. Will use find or grep commands."
-            thinking_process["research_priority"] = "file_discovery"
-        # RESEARCH DATA PROCESSING
-        elif is_data_task or (has_file_path and any(ext in message.lower() for ext in ['.csv', '.json', '.xlsx', '.txt', '.pdf'])):
-            thinking_process["identified_type"] = "research_data_processing"
-            thinking_process["analysis"] = "Research data needs to be processed, structured, and analyzed"
-            thinking_process["agents_to_use"] = ["FileAgent", "CodeAgent", "SQLAgent", "DataAgent", "NotesAgent"]
-            thinking_process["selection_reasoning"] = "Multi-agent: File processing, Code for analysis, SQL for structuring, Data for schema, Notes for documentation"
-            thinking_process["research_priority"] = "data_structuring"
-        # ACADEMIC RESEARCH TASKS
-        elif is_research_task:
-            thinking_process["identified_type"] = "academic_research"
-            thinking_process["analysis"] = "Academic research requiring citations and reproducible methodology"
-            thinking_process["agents_to_use"] = ["ResearchAgent", "CodeAgent", "NotesAgent", "StrategyAgent"]
-            thinking_process["selection_reasoning"] = "Multi-agent: Research for citations, Code for reproducible analysis, Notes for methodology, Strategy for approach"
-            thinking_process["research_priority"] = "citations_and_reproducibility"
-        # COMPUTATIONAL RESEARCH
-        elif is_computation:
-            thinking_process["identified_type"] = "computational_research"
-            thinking_process["analysis"] = "Computational task requiring reproducible code and verification"
-            thinking_process["agents_to_use"] = ["CodeAgent", "MathAgent", "SQLAgent", "NotesAgent"]
-            thinking_process["selection_reasoning"] = "Multi-agent: Code for computation, Math for verification, SQL for results storage, Notes for documentation"
-            thinking_process["research_priority"] = "computational_reproducibility"
-        # Shell commands (when explicit)
-        elif has_shell_command or any(word in message.lower() for word in ['run command', 'execute', 'shell', 'terminal', 'install package', 'grep for']):
-            thinking_process["identified_type"] = "shell_command"
-            thinking_process["analysis"] = "System commands for research infrastructure"
-            thinking_process["agents_to_use"] = ["ShellAgent", "NotesAgent"]
-            thinking_process["selection_reasoning"] = "Shell for execution, Notes to document system setup"
-        # File handling with research context
-        elif has_url or has_file_path or any(word in message.lower() for word in ["download", "file", "upload", "save file"]):
-            thinking_process["identified_type"] = "file_operation"
-            thinking_process["analysis"] = "File operations for research materials"
-            thinking_process["agents_to_use"] = ["FileAgent", "CodeAgent", "SQLAgent", "NotesAgent"]
-            thinking_process["selection_reasoning"] = "Multi-agent: File processing, Code for analysis, SQL for data storage, Notes for documentation"
-            thinking_process["research_priority"] = "data_organization"
-        # Mathematical research
-        elif any(word in message.lower() for word in ["derive", "proof", "theorem", "formula from first principles", "mathematical derivation"]):
+            thinking_process["selection_reasoning"] = f"File search query - only Shell Agent needed with find/grep commands"
+            return thinking_process
+        # Simple SQL query
+        elif any(word in message.lower() for word in ['sql', 'select', 'create table', 'database']):
+            thinking_process["complexity"] = "simple"
+            thinking_process["identified_type"] = "sql_query"
+            thinking_process["analysis"] = f"SQL operation requested"
+            thinking_process["agents_to_use"] = ["SQLAgent"]
+            thinking_process["selection_reasoning"] = f"SQL query - only SQL Agent needed"
+            return thinking_process
+        # Data processing - moderate complexity
+        elif is_data_task or (has_file_path and any(ext in message.lower() for ext in ['.csv', '.json', '.xlsx'])):
+            thinking_process["complexity"] = "moderate"
+            thinking_process["identified_type"] = "data_processing"
+            thinking_process["analysis"] = f"Data processing task"
+            thinking_process["agents_to_use"] = ["CodeAgent", "SQLAgent"]  # Only essential agents
+            thinking_process["selection_reasoning"] = f"Data task - Code Agent for analysis, SQL Agent for storage"
+        # Complex mathematical derivation
+        elif any(word in message.lower() for word in ['derive', 'proof', 'theorem', 'maxwell', 'equation']):
+            thinking_process["complexity"] = "complex"
             thinking_process["identified_type"] = "mathematical_derivation"
-            thinking_process["analysis"] = "Mathematical research requiring proofs and verification"
-            thinking_process["agents_to_use"] = ["MathAgent", "CodeAgent", "ResearchAgent", "NotesAgent"]
-            thinking_process["selection_reasoning"] = "Multi-agent: Math for proofs, Code for verification, Research for references, Notes for documentation"
-            thinking_process["research_priority"] = "mathematical_rigor"
-        # Literature and citations
-        elif any(word in message.lower() for word in ["sources", "citations", "literature review", "bibliography", "references"]):
-            thinking_process["identified_type"] = "literature_research"
-            thinking_process["analysis"] = "Literature research and citation building"
-            thinking_process["agents_to_use"] = ["ResearchAgent", "NotesAgent", "SQLAgent"]
-            thinking_process["selection_reasoning"] = "Multi-agent: Research for sources, Notes for bibliography, SQL to store citation database"
-            thinking_process["research_priority"] = "citation_management"
-        # Strategic research planning
-        elif any(word in message.lower() for word in ["plan", "methodology", "research design", "hypothesis", "experiment"]):
-            thinking_process["identified_type"] = "research_planning"
-            thinking_process["analysis"] = "Research methodology and experimental design"
-            thinking_process["agents_to_use"] = ["StrategyAgent", "ResearchAgent", "CodeAgent", "NotesAgent"]
-            thinking_process["selection_reasoning"] = "Multi-agent: Strategy for methodology, Research for precedents, Code for analysis plan, Notes for protocol"
-            thinking_process["research_priority"] = "methodology_design"
-        # Statistical analysis
-        elif any(word in message.lower() for word in ["statistical", "significance", "p-value", "correlation", "regression", "anova"]):
-            thinking_process["identified_type"] = "statistical_analysis"
-            thinking_process["analysis"] = "Statistical analysis requiring reproducible code"
-            thinking_process["agents_to_use"] = ["CodeAgent", "MathAgent", "SQLAgent", "NotesAgent", "ResearchAgent"]
-            thinking_process["selection_reasoning"] = "Multi-agent: Code for statistics, Math for theory, SQL for data, Notes for interpretation, Research for methods"
-            thinking_process["research_priority"] = "statistical_rigor"
-        # Database operations
-        elif any(word in message.lower() for word in ["sql", "database", "query", "table", "schema"]):
-            thinking_process["identified_type"] = "database_operations"
-            thinking_process["analysis"] = "Database operations for research data management"
-            thinking_process["agents_to_use"] = ["SQLAgent", "DataAgent", "CodeAgent", "NotesAgent"]
-            thinking_process["selection_reasoning"] = "Multi-agent: SQL for database, Data for schema design, Code for ETL, Notes for data dictionary"
-            thinking_process["research_priority"] = "data_management"
-        # Documentation
-        elif any(word in message.lower() for word in ["document", "methodology", "protocol", "procedure"]):
-            thinking_process["identified_type"] = "research_documentation"
-            thinking_process["analysis"] = "Research documentation and protocol development"
-            thinking_process["agents_to_use"] = ["NotesAgent", "ResearchAgent", "CodeAgent"]
-            thinking_process["selection_reasoning"] = "Multi-agent: Notes for documentation, Research for standards, Code for reproducible procedures"
-            thinking_process["research_priority"] = "documentation"
-        # Default: comprehensive research approach
+            thinking_process["analysis"] = f"Complex derivation requested"
+            thinking_process["agents_to_use"] = ["MathAgent", "CodeAgent"]
+            thinking_process["selection_reasoning"] = f"Mathematical derivation - Math Agent for theory, Code Agent for verification"
+        # Simple computation
+        elif is_computation:
+            thinking_process["complexity"] = "simple"
+            thinking_process["identified_type"] = "computation"
+            thinking_process["analysis"] = f"Computational task"
+            thinking_process["agents_to_use"] = ["CodeAgent"]
+            thinking_process["selection_reasoning"] = f"Computation - only Code Agent needed"
+        # Shell commands
+        elif has_shell_command:
+            thinking_process["complexity"] = "simple"
+            thinking_process["identified_type"] = "shell_command"
+            thinking_process["analysis"] = f"Shell command execution"
+            thinking_process["agents_to_use"] = ["ShellAgent"]
+            thinking_process["selection_reasoning"] = f"Shell command - only Shell Agent needed"
+        # File download
+        elif has_url:
+            thinking_process["complexity"] = "simple"
+            thinking_process["identified_type"] = "file_download"
+            thinking_process["analysis"] = f"File download from URL"
+            thinking_process["agents_to_use"] = ["FileAgent"]
+            thinking_process["selection_reasoning"] = f"URL download - only File Agent needed"
+        # Default: Use minimal agents based on keywords
         else:
-            thinking_process["identified_type"] = "comprehensive_research"
-            thinking_process["analysis"] = "Comprehensive research requiring multiple perspectives"
-            thinking_process["agents_to_use"] = ["StrategyAgent", "CodeAgent", "ResearchAgent", "NotesAgent"]
-            thinking_process["selection_reasoning"] = "Multi-agent collaboration: Strategy for approach, Code for analysis, Research for context, Notes for documentation"
-            thinking_process["research_priority"] = "comprehensive_analysis"
+            # Try to be smart about the default
+            thinking_process["complexity"] = "moderate"
+            thinking_process["identified_type"] = "general_query"
+            thinking_process["analysis"] = f"General query: {message[:100]}"
+            # Default to just Code Agent for most things
+            thinking_process["agents_to_use"] = ["CodeAgent"]
+            thinking_process["selection_reasoning"] = f"General query - starting with Code Agent, can add more if needed"
             
         return thinking_process
         
