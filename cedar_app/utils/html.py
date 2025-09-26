@@ -151,33 +151,28 @@ def layout(title: str, body: str, header_label: Optional[str] = None, header_lin
     .spinner {{ display:inline-block; width:12px; height:12px; border:2px solid #cbd5e1; border-top-color:#334155; border-radius:50%; animation: spin 1s linear infinite; }}
     @keyframes spin {{ from {{ transform: rotate(0deg);}} to {{ transform: rotate(360deg);}} }}
 
-    /* Two-column layout and tabs */
-    .two-col {{ display: grid; grid-template-columns: 1fr 420px; gap: 16px; align-items: start; }}
-    .pane {{ display: flex; flex-direction: column; gap: 8px; }}
-    .pane.right {{ display:flex; flex-direction:column; min-height:0; }}
-    .pane.right .tab-panels {{ display:flex; flex-direction:column; flex:1; min-height:0; overflow:auto; }}
+    /* Single column layout with tabs */
     .tabs {{ display: flex; gap: 6px; border-bottom: 1px solid var(--border); }}
     .tab {{ display:inline-block; padding:6px 10px; border:1px solid var(--border); border-bottom:none; border-radius:6px 6px 0 0; background:#f3f4f6; color:#111; cursor:pointer; user-select:none; }}
     .tab.active {{ background:#fff; font-weight:600; }}
-    .tab-panels {{ border:1px solid var(--border); border-radius:0 6px 6px 6px; background:#fff; padding:12px; }}
+    .tab-panels {{ border:1px solid var(--border); border-radius:0 6px 6px 6px; background:#fff; padding:12px; display:flex; flex-direction:column; height:100%; }}
+    .panel {{ display:flex; flex-direction:column; height:100%; }}
     .panel.hidden {{ display:none !important; }}
-    @media (max-width: 900px) {{ .two-col {{ grid-template-columns: 1fr; }} }}
   </style>
   {client_log_js}
   <script>
   (function(){{
     function activateTab(tab) {{
       try {{
-        var pane = tab.closest('.pane') || document;
         var tabs = tab.parentElement.querySelectorAll('.tab');
         tabs.forEach(function(t){{ t.classList.remove('active'); }});
         tab.classList.add('active');
         var target = tab.getAttribute('data-target');
         if (!target) return;
-        var panelsRoot = pane.querySelector('.tab-panels');
+        var panelsRoot = document.querySelector('.tab-panels');
         if (!panelsRoot) return;
         panelsRoot.querySelectorAll('.panel').forEach(function(p){{ p.classList.add('hidden'); }});
-        var el = pane.querySelector('#' + target);
+        var el = document.querySelector('#' + target);
         if (el) el.classList.remove('hidden');
       }} catch(e) {{ try {{ console.error('[ui] tab error', e); }} catch(_) {{}} }}
     }}

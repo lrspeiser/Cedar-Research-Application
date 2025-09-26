@@ -221,6 +221,24 @@ def _migrate_project_langextract_tables(engine_obj):
         pass
 
 
+def _migrate_project_notes_table(engine_obj):
+    """Ensure the notes table exists in the project database."""
+    try:
+        from sqlalchemy import inspect
+        from main_models import Note
+        
+        inspector = inspect(engine_obj)
+        existing_tables = inspector.get_table_names()
+        
+        if 'notes' not in existing_tables:
+            print(f"[notes-migration] Creating notes table")
+            Note.__table__.create(engine_obj)
+            print(f"[notes-migration] Notes table created successfully")
+    except Exception as e:
+        print(f"[notes-migration] Failed to create notes table: {e}")
+        # Best-effort; don't fail the whole initialization
+
+
 def _migrate_registry_metadata_json(engine_obj):
     """Add metadata_json and AI columns to registry files table."""
     try:
@@ -288,6 +306,7 @@ def ensure_project_initialized(project_id: int) -> None:
         _migrate_project_files_ai_columns(eng)
         _migrate_thread_messages_columns(eng)
         _migrate_project_langextract_tables(eng)
+        _migrate_project_notes_table(eng)  # Add notes table migration
         # Seed project row and Main branch if missing
         SessionLocal = sessionmaker(bind=eng, autoflush=False, autocommit=False, future=True)
         pdb = SessionLocal()
@@ -313,6 +332,7 @@ def ensure_project_initialized(project_id: int) -> None:
         _migrate_project_files_ai_columns(eng)
         _migrate_thread_messages_columns(eng)
         _migrate_project_langextract_tables(eng)
+        _migrate_project_notes_table(eng)  # Add notes table migration
     except Exception as e:
         print(f"[ensure-project-error] Failed to initialize project {project_id}: {type(e).__name__}: {e}")
         raise  # Re-raise to surface the error

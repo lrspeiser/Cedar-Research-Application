@@ -1250,6 +1250,39 @@ def api_threads_session(thread_id: int, project_id: int):
     from cedar_app.utils.thread_management import api_threads_session as _api_threads_session
     return _api_threads_session(app, thread_id, project_id)
 
+@app.get("/api/files/{file_id}/extracted")
+def api_file_extracted_content(file_id: int, db: Session = Depends(get_project_db)):
+    """Get the extracted content and schema for a file."""
+    try:
+        from cedar_app.db_models.models import FileEntry
+        
+        # Get the file record
+        file_rec = db.query(FileEntry).filter_by(id=file_id).first()
+        
+        if not file_rec:
+            return JSONResponse({"error": "File not found"}, status_code=404)
+        
+        # Extract the content from metadata
+        metadata = file_rec.metadata or {}
+        extracted_content = metadata.get('extracted_content')
+        data_schema = metadata.get('data_schema')
+        
+        return {
+            "file_id": file_id,
+            "filename": file_rec.filename,
+            "ai_title": file_rec.ai_title,
+            "ai_category": file_rec.ai_category,
+            "extracted_content": extracted_content,
+            "data_schema": data_schema,
+            "has_content": bool(extracted_content),
+            "has_schema": bool(data_schema)
+        }
+        
+    except Exception as e:
+        import traceback
+        logger.error(f"Error fetching extracted content: {str(e)}\n{traceback.format_exc()}")
+        return JSONResponse({"error": f"Failed to fetch extracted content: {str(e)}"}, status_code=500)
+
 @app.get("/log", response_class=HTMLResponse)
 def view_logs(project_id: Optional[int] = None, branch_id: Optional[int] = None):
     """View application logs."""

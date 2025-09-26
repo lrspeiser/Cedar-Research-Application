@@ -153,13 +153,19 @@ def run_import(src_path, sqlite_path, table_name, project_id, branch_id):
         return None, None
 
 
-def _llm_classify_file(meta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _llm_classify_file(meta: Dict[str, Any], file_content: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """
-    Calls GPT model to classify a file into one of: images | sources | code | tabular
-    and produce ai_title (<=100), ai_description (<=350), ai_category (<=100).
+    Calls GPT model to classify a file and extract its content intelligently.
+    For files under 20MB, sends full content for extraction.
+    For larger files, uses sample for classification only.
+    
+    Produces:
+    - structure: images | sources | code | tabular 
+    - ai_title (<=100), ai_description (<=350), ai_category (<=100)
+    - extracted_content: markdown or SQL depending on file type
+    - data_schema: for tabular data, includes column descriptions
 
-    Input: metadata produced by interpret_file(), including:
-    - extension, mime_guess, format, language, is_text, size_bytes, line_count, sample_text
+    Input: metadata produced by interpret_file() and optionally file content
 
     Returns dict or None on error. Errors are logged verbosely.
     """
@@ -176,31 +182,59 @@ def _llm_classify_file(meta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         except Exception:
             pass
         return None
-    # Prepare a bounded sample
+    # Determine if we should send full content or just sample
+    size_bytes = meta.get("size_bytes", 0)
+    send_full_content = size_bytes < 20 * 1024 * 1024  # 20MB limit
+    
+    # Prepare content to send
+    content_to_analyze = file_content if (file_content and send_full_content) else ""
     sample_text = (meta.get("sample_text") or "")
-    if len(sample_text) > 8000:
-        sample_text = sample_text[:8000]
+    
+    # If we have full content but it's still too large for a single request, truncate
+    if content_to_analyze and len(content_to_analyze) > 100000:  # ~100KB text limit for GPT
+        content_to_analyze = content_to_analyze[:100000]
+        send_full_content = False  # Mark as truncated
+    elif not content_to_analyze and sample_text:
+        content_to_analyze = sample_text[:8000]
+    
     info = {
         k: meta.get(k) for k in [
-            "extension","mime_guess","format","language","is_text","size_bytes","line_count","json_valid","json_top_level_keys","csv_dialect"
+            "extension","mime_guess","format","language","is_text","size_bytes","line_count",
+            "json_valid","json_top_level_keys","csv_dialect","csv_headers"
         ] if k in meta
     }
+    
+    # Enhanced prompt for content extraction
     sys_prompt = (
-        "You are an expert data librarian. Classify incoming files and produce short, friendly labels.\n"
-        "Output strict JSON with keys: structure, ai_title, ai_description, ai_category.\n"
-        "Rules: structure must be one of: images | sources | code | tabular.\n"
-        "ai_title <= 100 chars. ai_description <= 350 chars. ai_category <= 100 chars.\n"
-        "Do not include newlines in values. If in doubt, choose the best fit."
+        "You are an expert data analyst and librarian. Analyze files and extract their content intelligently.\n"
+        "Output strict JSON with these keys:\n"
+        "- structure: must be one of: images | sources | code | tabular\n"
+        "- ai_title: <= 100 chars, friendly title\n"
+        "- ai_description: <= 350 chars, what the file contains\n"
+        "- ai_category: <= 100 chars, general category\n"
+        "- extracted_content: For text/code files, provide markdown formatted version. "
+        "For tabular data, provide SQL CREATE TABLE statement with proper types.\n"
+        "- data_schema: For tabular data only, provide object with 'columns' array containing "
+        "{name, type, description, sample_values} for each column.\n"
+        "\nRules:\n"
+        "- For code files, preserve formatting in markdown code blocks\n"
+        "- For documents, convert to clean markdown\n" 
+        "- For CSVs/tabular, infer column types and provide DDL\n"
+        "- For images, just classify (no extraction)\n"
+        "- Limit extracted_content to 50KB characters\n"
+        "- Do not include newlines in title/description/category values"
     )
     user_payload = {
         "metadata": info,
         "display_name": meta.get("display_name"),
-        "snippet_utf8": sample_text,
+        "file_content": content_to_analyze if send_full_content else None,
+        "content_sample": content_to_analyze if not send_full_content else None,
+        "is_full_content": send_full_content
     }
     import json as _json
     messages = [
         {"role": "system", "content": sys_prompt},
-        {"role": "user", "content": "Classify this file and produce JSON as specified. Input:"},
+        {"role": "user", "content": "Analyze this file and produce JSON as specified. Input:"},
         {"role": "user", "content": _json.dumps(user_payload, ensure_ascii=False)},
     ]
     try:
@@ -217,7 +251,17 @@ def _llm_classify_file(meta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         title = _clip(result.get("ai_title"), 100)
         desc = _clip(result.get("ai_description"), 350)
         cat = _clip(result.get("ai_category"), 100)
-        out = {"structure": struct, "ai_title": title, "ai_description": desc, "ai_category": cat}
+        
+        # Include extracted content and schema if provided
+        out = {
+            "structure": struct, 
+            "ai_title": title, 
+            "ai_description": desc, 
+            "ai_category": cat,
+            "extracted_content": result.get("extracted_content"),
+            "data_schema": result.get("data_schema"),
+            "was_full_content": send_full_content
+        }
         try:
             print(f"[llm] model={model} structure={struct} title={len(title)} chars cat={cat}")
         except Exception:

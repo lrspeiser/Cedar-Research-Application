@@ -1480,7 +1480,7 @@ AVAILABLE AGENTS AND THEIR SPECIALTIES:
 
 Your RESPONSIBILITIES:
 1. EXPLAIN YOUR THINKING: Describe how you're analyzing the problem and what you expect from each agent
-2. DECIDE NEXT ACTION: Choose "final" to send answer to user, or "loop" for more processing
+2. DECIDE NEXT ACTION: Choose "final" to send answer to user, "loop" for more processing, or "clarify" to ask the user a question
 3. PROVIDE CONTEXT: If looping, pass all relevant context to help agents succeed
 4. SUGGEST NEXT STEPS: Always include "Suggested Next Steps" in your final answer
 
@@ -1492,17 +1492,24 @@ DECISION CRITERIA:
   * You're running low on iterations ({remaining_loops} remaining)
 
 - Use "loop" when (AND you have iterations remaining):
-  * Critical information is missing
+  * Critical information is missing that agents can find
   * A specific agent's expertise hasn't been utilized
   * You have clear guidance for improvement
   * The current answer has errors or gaps
 
+- Use "clarify" when:
+  * The user's intent is ambiguous
+  * Critical details are missing that only the user can provide
+  * Multiple valid interpretations exist and you need the user's preference
+  * The request is too broad and needs to be narrowed down
+
 You MUST respond in this EXACT JSON format:
 {{
-  "decision": "final" or "loop",
+  "decision": "final" or "loop" or "clarify",
   "thinking_process": "Your analysis of the problem and what each agent should contribute",
-  "final_answer": "Complete answer with 'Suggested Next Steps:' section (required for both decisions)",
+  "final_answer": "Complete answer with 'Suggested Next Steps:' section (required for all decisions)",
   "additional_guidance": "Specific instructions for next iteration including all context (only if 'loop')",
+  "clarification_question": "Specific question to ask the user (only if 'clarify')",
   "selected_agent": "Best performing agent or 'combined'",
   "reasoning": "Why you made this decision and what you expect to achieve"
 }}
@@ -1566,7 +1573,7 @@ Review these responses and make your decision. Remember:
                 if "Suggested Next Steps:" not in decision_data.get("final_answer", ""):
                     decision_data["final_answer"] += "\n\nSuggested Next Steps: Review the results and let me know if you need further clarification."
                 # Normalize decision value
-                if decision_data["decision"] not in ["final", "loop"]:
+                if decision_data["decision"] not in ["final", "loop", "clarify"]:
                     logger.warning(f"[ChiefAgent] Invalid decision value: {decision_data['decision']}, defaulting to 'final'")
                     decision_data["decision"] = "final"
             except json.JSONDecodeError:
@@ -1747,28 +1754,55 @@ class ThinkerOrchestrator:
         thinking = await self.think(message)
         logger.info(f"[ORCHESTRATOR] Thinking result: Type={thinking['identified_type']}, Agents={thinking['agents_to_use']}")
         
+        # Build detailed explanation of what each agent will do
+        agent_explanations = []
+        for agent_name in thinking['agents_to_use']:
+            if agent_name == "CodeAgent":
+                agent_explanations.append("• **Coding Agent**: Will generate and execute Python code to compute the exact result")
+            elif agent_name == "ShellAgent":
+                agent_explanations.append("• **Shell Executor**: Will run system commands to complete the requested operation")
+            elif agent_name == "SQLAgent":
+                agent_explanations.append("• **SQL Agent**: Will create database queries or schema modifications as needed")
+            elif agent_name == "MathAgent":
+                agent_explanations.append("• **Math Agent**: Will derive formulas from first principles and show mathematical proofs")
+            elif agent_name == "ResearchAgent":
+                agent_explanations.append("• **Research Agent**: Will search for relevant sources and compile information")
+            elif agent_name == "StrategyAgent":
+                agent_explanations.append("• **Strategy Agent**: Will create a detailed action plan for solving this problem")
+            elif agent_name == "DataAgent":
+                agent_explanations.append("• **Data Agent**: Will analyze database schemas and suggest appropriate queries")
+            elif agent_name == "NotesAgent":
+                agent_explanations.append("• **Notes Agent**: Will document findings and create organized notes")
+            elif agent_name == "FileAgent":
+                agent_explanations.append("• **File Agent**: Will download files or analyze file paths as requested")
+            elif agent_name == "ReasoningAgent":
+                agent_explanations.append("• **Reasoning Agent**: Will apply step-by-step logical analysis")
+            elif agent_name == "GeneralAgent":
+                agent_explanations.append("• **General Assistant**: Will provide direct answers using general knowledge")
+        
+        agent_details = "\n".join(agent_explanations)
+        
         # Send processing action that UI expects - this sets up streamText variable
-        agents_list = ", ".join(thinking['agents_to_use'])
         await websocket.send_json({
             "type": "action",
             "function": "processing",
-            "text": f"""🤔 Chief Agent Analysis (Iteration {iteration + 1}/{self.MAX_ITERATIONS}):
+            "text": f"""🤔 **Chief Agent Analysis** (Iteration {iteration + 1}/{self.MAX_ITERATIONS})
 
-📋 Query Type: {thinking['identified_type']}
-🔍 Problem Analysis: {thinking['analysis']}
+📊 **Problem Assessment:**
+I've analyzed your request as a {thinking['identified_type'].replace('_', ' ')}.
+{thinking['analysis']}.
 
-🤖 Agents Selected: {agents_list}
-💭 Strategy: {thinking['selection_reasoning']}
+🎯 **Solution Approach:**
+{thinking['selection_reasoning']}.
 
-⏳ Processing with {len(thinking['agents_to_use'])} specialized agents..."""
+🤖 **Agent Assignments:**
+{agent_details}
+
+⏳ Now coordinating these agents to solve your request..."""
         })
         await asyncio.sleep(0.5)  # Allow UI to set up streaming
         
-        # Send initial streaming update
-        await websocket.send_json({
-            "type": "stream",
-            "text": "Processing with multiple specialized agents..."
-        })
+        # No need for redundant streaming update
         
         # Phase 2: Parallel agent processing
         logger.info("[ORCHESTRATOR] PHASE 2: Parallel Agent Processing")
@@ -1817,11 +1851,8 @@ class ThinkerOrchestrator:
         logger.info(f"[ORCHESTRATOR] Starting parallel processing with {len(agents)} agents")
         parallel_start = time.time()
         
-        # Update stream to show agents running
-        await websocket.send_json({
-            "type": "stream",
-            "text": f"Running {len(agents)} specialized agents in parallel..."
-        })
+        # Don't send stream updates that would overwrite the Chief Agent analysis
+        # The detailed analysis message is complete and should stand on its own
         
         agent_tasks = [agent.process(message) for agent in agents]
         results = await asyncio.gather(*agent_tasks, return_exceptions=True)
@@ -1858,11 +1889,7 @@ class ThinkerOrchestrator:
         logger.info("[ORCHESTRATOR] PHASE 3: Chief Agent Review and Decision")
         logger.info(f"[ORCHESTRATOR] Chief Agent reviewing {len(valid_results)} valid results")
         
-        # Update stream to show Chief Agent processing
-        await websocket.send_json({
-            "type": "stream",
-            "text": "Chief Agent reviewing all responses and making final decision..."
-        })
+        # Don't send stream updates - let agent results speak for themselves
         
         # Build context from previous iterations
         previous_context = ""
@@ -1923,6 +1950,27 @@ class ThinkerOrchestrator:
                         "text": clarification_text
                     })
                     return
+        
+        # Handle Chief Agent's clarification request
+        if chief_decision.get('decision') == 'clarify':
+            clarification_question = chief_decision.get('clarification_question', 'Could you please provide more details about your request?')
+            thinking = chief_decision.get('thinking_process', 'Need more information from user')
+            logger.info(f"[ORCHESTRATOR] Chief Agent requesting clarification: {clarification_question}")
+            
+            await websocket.send_json({
+                "type": "message",
+                "role": "The Chief Agent",
+                "text": f"""🤔 **Clarification Needed**
+
+{thinking}
+
+**Question:** {clarification_question}
+
+**Why I'm asking:** {chief_decision.get('reasoning', 'This information will help me provide a more accurate and helpful response.')}
+
+Please provide this information so I can better assist you."""
+            })
+            return
         
         # Chief Agent makes the final decision
         if chief_decision.get('decision') == 'loop' and iteration < self.MAX_ITERATIONS - 1:

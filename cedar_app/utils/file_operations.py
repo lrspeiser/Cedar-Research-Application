@@ -166,15 +166,41 @@ def _run_upload_postprocess_background(project_id: int, branch_id: int, file_id:
         # Build meta for LLM
         meta_for_llm = dict(meta or {})
         meta_for_llm["display_name"] = original_name
-        # LLM classification (best-effort)
+        # LLM classification with content extraction (best-effort)
         ai_result = None
         try:
-            ai_result = _llm_classify_file(meta_for_llm)
+            # Read file content if under 20MB and text-based  
+            file_content = None
+            if rec.size_bytes and rec.size_bytes < 20 * 1024 * 1024:
+                try:
+                    is_text = meta_for_llm.get("is_text", False)
+                    ftype = rec.file_type or ""
+                    is_tabular = ftype in ["csv", "tsv", "json", "xml", "yaml"]
+                    is_code = ftype in ["python", "javascript", "java", "cpp", "go", "rust", "ruby", "php"]
+                    is_doc = ftype in ["markdown", "text", "rst", "asciidoc"]
+                    
+                    if is_text or is_tabular or is_code or is_doc:
+                        if rec.storage_path and os.path.exists(rec.storage_path):
+                            with open(rec.storage_path, 'r', encoding='utf-8', errors='ignore') as f:
+                                file_content = f.read()
+                except Exception as e:
+                    print(f"[background] Could not read file content: {e}")
+            
+            ai_result = _llm_classify_file(meta_for_llm, file_content)
             if ai_result:
                 rec.structure = ai_result.get("structure")
                 rec.ai_title = ai_result.get("ai_title")
                 rec.ai_description = ai_result.get("ai_description")
                 rec.ai_category = ai_result.get("ai_category")
+                
+                # Store extracted content in metadata
+                if ai_result.get("extracted_content") or ai_result.get("data_schema"):
+                    if not rec.metadata_json:
+                        rec.metadata_json = {}
+                    if ai_result.get("extracted_content"):
+                        rec.metadata_json["extracted_content"] = ai_result["extracted_content"]
+                    if ai_result.get("data_schema"):
+                        rec.metadata_json["data_schema"] = ai_result["data_schema"]
             rec.ai_processing = False
             dbj.commit(); dbj.refresh(rec)
         except Exception:
@@ -187,19 +213,31 @@ def _run_upload_postprocess_background(project_id: int, branch_id: int, file_id:
         try:
             if ai_result:
                 disp_title = f"File analyzed — {rec.structure or 'unknown'}"
+                
+                # Build content message with extracted data
+                content_data = {
+                    "event": "file_analyzed",
+                    "file_id": file_id,
+                    "structure": rec.structure,
+                    "ai_title": rec.ai_title,
+                    "ai_category": rec.ai_category,
+                }
+                
+                # Add summary of extraction if available
+                if ai_result.get("extracted_content"):
+                    content_data["has_extracted_content"] = True
+                    content_data["content_preview"] = ai_result["extracted_content"][:500] + "..." if len(ai_result["extracted_content"]) > 500 else ai_result["extracted_content"]
+                if ai_result.get("data_schema"):
+                    content_data["has_data_schema"] = True
+                    content_data["column_count"] = len(ai_result["data_schema"].get("columns", []))
+                
                 dbj.add(ThreadMessage(
                     project_id=project_id,
                     branch_id=branch_id,
                     thread_id=thread_id,
                     role="assistant",
                     display_title=disp_title,
-                    content=_json.dumps({
-                        "event": "file_analyzed",
-                        "file_id": file_id,
-                        "structure": rec.structure,
-                        "ai_title": rec.ai_title,
-                        "ai_category": rec.ai_category,
-                    }),
+                    content=_json.dumps(content_data),
                     payload_json=ai_result,
                 ))
                 dbj.commit()
@@ -377,12 +415,29 @@ def upload_file(project_id: int, request: Request, file: UploadFile = File(...),
             from starlette.responses import HTMLResponse as _HTML  # type: ignore
             return _HTML(content=body, status_code=200)
 
-    # LLM classification (best-effort, no fallbacks). See README for details.
+    # LLM classification with content extraction (best-effort, no fallbacks). See README for details.
     ai_result = None
     try:
         meta_for_llm = dict(meta)
         meta_for_llm["display_name"] = original_name
-        ai = _llm_classify_file(meta_for_llm)
+        
+        # Read file content if it's under 20MB and text-based
+        file_content = None
+        if size < 20 * 1024 * 1024:  # 20MB limit
+            try:
+                # Check if it's likely a text file
+                is_text = meta.get("is_text", False)
+                is_tabular = ftype in ["csv", "tsv", "json", "xml", "yaml"]
+                is_code = ftype in ["python", "javascript", "java", "cpp", "go", "rust", "ruby", "php"]
+                is_doc = ftype in ["markdown", "text", "rst", "asciidoc"]
+                
+                if is_text or is_tabular or is_code or is_doc:
+                    with open(disk_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        file_content = f.read()
+            except Exception as e:
+                print(f"[upload] Could not read file content for LLM: {e}")
+        
+        ai = _llm_classify_file(meta_for_llm, file_content)
         ai_result = ai
         if ai:
             struct = ai.get("structure") if isinstance(ai, dict) else None
@@ -391,6 +446,15 @@ def upload_file(project_id: int, request: Request, file: UploadFile = File(...),
             record.ai_description = ai.get("ai_description")
             record.ai_category = ai.get("ai_category")
             record.ai_processing = False
+            
+            # Store extracted content and schema if available
+            if ai.get("extracted_content") or ai.get("data_schema"):
+                if not record.metadata_json:
+                    record.metadata_json = {}
+                if ai.get("extracted_content"):
+                    record.metadata_json["extracted_content"] = ai["extracted_content"]
+                if ai.get("data_schema"):
+                    record.metadata_json["data_schema"] = ai["data_schema"]
             db.commit(); db.refresh(record)
             try:
                 print(f"[upload-api] classified structure={record.structure or ''} ai_title={(record.ai_title or '')[:80]}")

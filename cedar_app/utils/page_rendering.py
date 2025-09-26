@@ -606,7 +606,7 @@ def project_page_html(
             try {
               var rec = { project: PROJECT_ID, thread: threadId||null, from: currentStep.label, to: String(label||''), dt_ms: Math.round(dt) };
               stepsHistory.push({ from: rec.from, to: rec.to, dt_ms: rec.dt_ms });
-              console.log('[perf] ' + JSON.stringify(rec));
+              // Performance tracking stored internally but not logged to console
             } catch(_) {}
           }
         } catch(_){ }
@@ -648,7 +648,7 @@ def project_page_html(
         if (msgs && text && !replay) {
           var wrapU = document.createElement('div'); wrapU.className = 'msg user';
           wrapU.setAttribute('data-temp', '1');
-          var metaU = document.createElement('div'); metaU.className = 'meta small'; metaU.innerHTML = "<span class='pill'>user</span> <span class='title' style='font-weight:600'>USER</span>";
+          var metaU = document.createElement('div'); metaU.className = 'meta small'; metaU.style.height = '1px'; // Empty meta for user messages
           var bubU = document.createElement('div'); bubU.className = 'bubble user';
           var contU = document.createElement('div'); contU.className='content'; contU.style.whiteSpace='pre-wrap';
           contU.textContent = String(text||'');
@@ -743,13 +743,17 @@ def project_page_html(
             
             // For display, show the actual role/agent name
             var displayRole = r;
-            var pillText = rLower.includes('agent') || rLower.includes('executor') || rLower.includes('reasoner') ? 'agent' : rLower;
             
             var wrapM = document.createElement('div'); 
             wrapM.className = 'msg ' + roleClass;
             var metaM = document.createElement('div'); 
-            metaM.className = 'meta small'; 
-            metaM.innerHTML = "<span class='pill'>" + pillText + "</span> <span class='title' style='font-weight:600'>" + displayRole + "</span>";
+            metaM.className = 'meta small';
+            // Only show name for non-user messages
+            if (roleClass === 'user') {
+              metaM.style.height = '1px'; // Empty meta for user
+            } else {
+              metaM.innerHTML = "<span class='title' style='font-weight:600'>" + displayRole + "</span>";
+            }
             var bubM = document.createElement('div'); 
             bubM.className = 'bubble ' + roleClass;
             var contM = document.createElement('div'); 
@@ -794,7 +798,7 @@ def project_page_html(
             } catch(_){}
             var detIdP = 'det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
             var wrapP = document.createElement('div'); wrapP.className = 'msg assistant';
-            var metaP = document.createElement('div'); metaP.className = 'meta small'; metaP.innerHTML = "<span class='pill'>assistant</span> <span class='title' style='font-weight:600'>Assistant</span>";
+            var metaP = document.createElement('div'); metaP.className = 'meta small'; metaP.innerHTML = "<span class='title' style='font-weight:600'>System Debug</span>";
             var bubP = document.createElement('div'); bubP.className = 'bubble assistant'; bubP.setAttribute('data-details-id', detIdP);
             var contP = document.createElement('div'); contP.className='content'; contP.style.whiteSpace='pre-wrap';
             try { contP.textContent = 'Prepared LLM prompt (click to view JSON).'; } catch(_){}
@@ -842,7 +846,7 @@ def project_page_html(
             wrapA.className = 'msg assistant';
             var metaA = document.createElement('div');
             metaA.className = 'meta small';
-            metaA.innerHTML = "<span class='pill'>agent</span> <span class='title' style='font-weight:600; cursor:pointer' role='button' tabindex='0'>" + agentName + "</span>";
+            metaA.innerHTML = "<span class='title' style='font-weight:600; cursor:pointer' role='button' tabindex='0'>" + agentName + "</span>";
             
             var bubA = document.createElement('div');
             bubA.className = 'bubble assistant';
@@ -924,7 +928,7 @@ def project_page_html(
                 try { var first = msgs.firstElementChild; if (first && first.classList.contains('muted')) { first.remove(); } } catch(_){ }
                 stream = document.createElement('div');
                 stream.className = 'msg assistant';
-                var meta0 = document.createElement('div'); meta0.className = 'meta small'; meta0.innerHTML = "<span class='pill'>assistant</span> <span class='title' style='font-weight:600'>processing</span>";
+                var meta0 = document.createElement('div'); meta0.className = 'meta small'; meta0.innerHTML = "<span class='title' style='font-weight:600'>Chief Agent</span>";
                 var bub0 = document.createElement('div'); bub0.className = 'bubble assistant';
                 var cont0 = document.createElement('div'); cont0.className = 'content'; cont0.style.whiteSpace='pre-wrap'; cont0.textContent = text || 'Processing…';
                 // Use this content node as the streaming target for main assistant tokens
@@ -1406,6 +1410,16 @@ def project_page_html(
         }
       } catch(_) {}
 
+      // Load file content if file_id is in URL on page load
+      try {
+        var sp = new URLSearchParams(location.search || '');
+        var fileId = sp.get('file_id');
+        if (fileId && !window.__fileContentLoaded) {
+          window.__fileContentLoaded = true;
+          window.displayFileContent(fileId);
+        }
+      } catch(_) {}
+
       // Auto-scroll behavior similar to modern chat apps: scroll to bottom on new messages unless user scrolled up
       function initAutoScroll(){
         try {
@@ -1464,6 +1478,72 @@ def project_page_html(
         }
       } catch(_){ }
 
+      // Function to display file extracted content
+      window.displayFileContent = async function(fileId) {
+        try {
+          var response = await fetch('/api/files/' + fileId + '/extracted');
+          if (!response.ok) throw new Error('Failed to fetch file content');
+          var data = await response.json();
+          
+          // Find or create a content display area
+          var contentPanel = document.getElementById('file-content-panel');
+          if (!contentPanel) {
+            // Create a new panel if it doesn't exist
+            var chatPanel = document.getElementById('main-chat');
+            if (!chatPanel) return;
+            
+            contentPanel = document.createElement('div');
+            contentPanel.id = 'file-content-panel';
+            contentPanel.className = 'card';
+            contentPanel.style.cssText = 'margin-bottom:12px; padding:12px; background:#f8fafc; border-radius:8px; max-height:400px; overflow:auto;';
+            
+            // Insert before the messages
+            var msgs = document.getElementById('msgs');
+            if (msgs && msgs.parentNode) {
+              msgs.parentNode.insertBefore(contentPanel, msgs);
+            }
+          }
+          
+          // Display the content
+          var html = '<h4 style="margin:0 0 8px 0; font-size:14px; color:#1a2332">' + (data.ai_title || data.filename || 'File Content') + '</h4>';
+          
+          if (data.has_schema && data.data_schema) {
+            // Display schema for structured data
+            html += '<div class="small muted" style="margin-bottom:8px">Data Structure: ' + (data.data_schema.table_name || 'Table') + '</div>';
+            html += '<div style="background:white; padding:8px; border-radius:4px; margin-bottom:8px">';
+            html += '<table style="width:100%; font-size:13px">';
+            html += '<thead><tr><th style="text-align:left; padding:4px; border-bottom:1px solid #e0e6ed">Column</th><th style="text-align:left; padding:4px; border-bottom:1px solid #e0e6ed">Type</th></tr></thead>';
+            html += '<tbody>';
+            if (data.data_schema.columns) {
+              data.data_schema.columns.forEach(function(col) {
+                html += '<tr><td style="padding:4px">' + (col.name || '') + '</td><td style="padding:4px; color:#6b7280">' + (col.type || '') + '</td></tr>';
+              });
+            }
+            html += '</tbody></table>';
+            if (data.data_schema.sql_create) {
+              html += '<details style="margin-top:8px"><summary class="small muted" style="cursor:pointer">SQL Schema</summary>';
+              html += '<pre style="margin-top:4px; padding:8px; background:#f1f5f9; border-radius:4px; font-size:12px; overflow:auto">' + data.data_schema.sql_create + '</pre>';
+              html += '</details>';
+            }
+            html += '</div>';
+          }
+          
+          if (data.has_content && data.extracted_content) {
+            // Display extracted content
+            html += '<div class="small" style="background:white; padding:8px; border-radius:4px">';
+            html += '<div class="muted" style="margin-bottom:4px">Extracted Content:</div>';
+            html += '<div style="white-space:pre-wrap; font-family:ui-monospace,monospace; font-size:12px; line-height:1.5; max-height:250px; overflow:auto">' + data.extracted_content + '</div>';
+            html += '</div>';
+          }
+          
+          contentPanel.innerHTML = html;
+          contentPanel.style.display = 'block';
+          
+        } catch(e) {
+          console.error('Failed to load file content:', e);
+        }
+      }
+
       // Intercept clicks on file/db links to create a new tab without navigation
       document.addEventListener('click', function(ev){
         var a = ev.target && ev.target.closest ? ev.target.closest('a.thread-create') : null;
@@ -1495,6 +1575,12 @@ def project_page_html(
               var hidD = f.querySelector("input[name='dataset_id']"); if (dsid) { if (hidD) hidD.value = dsid; else { var k=document.createElement('input'); k.type='hidden'; k.name='dataset_id'; k.value=dsid; f.appendChild(k);} } else if (hidD) { hidD.remove(); }
             }
           } catch(_){ }
+          
+          // Load and display file content if file ID is present
+          if (fid) {
+            window.displayFileContent(fid);
+          }
+          
           // Clear messages panel to indicate a fresh thread
           try {
             var msgs = document.getElementById('msgs');
@@ -1549,19 +1635,23 @@ def project_page_html(
       </script>
 
       <div id="page-root" style="min-height:100vh; display:flex; flex-direction:column">
-        <div class="two-col" style="margin-top:8px; flex:1; min-height:0">
-          <div class="pane" style="display:flex; flex-direction:column; min-height:0">
-            <div class="tabs" data-pane="left">
-              <a href="#" class="tab active" data-target="left-chat">Chat</a>
-            </div>
-            <div class="tab-panels" style="flex:1; min-height:0">
-              <div id="left-chat" class="panel">
+        <div style="margin-top:8px; flex:1; min-height:0; display:flex; flex-direction:column">
+          <div class="tabs" data-pane="main">
+            <a href="#" class="tab active" data-target="main-chat">Chat</a>
+            <a href="#" class="tab" data-target="main-files">Files</a>
+            <a href="#" class="tab" data-target="main-history">History</a>
+            <a href="#" class="tab" data-target="main-code">Code</a>
+            <a href="#" class="tab" data-target="main-dbs">Databases</a>
+            <a href="#" class="tab" data-target="main-notes">Notes</a>
+          </div>
+          <div class="tab-panels" style="flex:1; min-height:0">
+            <div id="main-chat" class="panel" style="height:100%">
                 <h3>Chat <span id="chat-number-display" style="display:none">- <span id="chat-number"></span></span></h3>
                 <style>
                 /* Chat area grows to fill viewport; input stays at bottom regardless of window size */
-                  #left-chat {{ display:flex; flex-direction:column; flex:1; min-height:0; }}
-                  #left-chat .chat-log {{ flex:1; display:flex; flex-direction:column; gap:8px; overflow-y:auto; padding-bottom:80px; }}
-                  #left-chat .chat-input {{ position: sticky; bottom: 0; margin-top:auto; padding-top:6px; background:#fff; border-top:1px solid var(--border); }}
+                  #main-chat {{ display:flex; flex-direction:column; flex:1; min-height:0; height:100%; }}
+                  #main-chat .chat-log {{ flex:1; display:flex; flex-direction:column; gap:8px; overflow-y:auto; padding-bottom:80px; }}
+                  #main-chat .chat-input {{ position: sticky; bottom: 0; margin-top:auto; padding-top:6px; background:#fff; border-top:1px solid var(--border); }}
                   .msg {{ display:flex; flex-direction:column; max-width:80%; }}
                   .msg.user {{ align-self:flex-end; }}
                   .msg.assistant {{ align-self:flex-start; }}
@@ -1579,22 +1669,10 @@ def project_page_html(
                 { ("<div class='card' style='margin-top:8px; padding:12px'><h3>File Details</h3>" + left_details + "</div>") if selected_file else "" }
                 {code_details_html}
               </div>
-            </div>
-          </div>
-
-          <div class="pane right">
-            <div class="tabs" data-pane="right">
-              <a href="#" class="tab active" data-target="right-files">Files</a>
-              <a href="#" class="tab" data-target="right-history">History</a>
-              <a href="#" class="tab" data-target="right-code">Code</a>
-              <a href="#" class="tab" data-target="right-dbs">Databases</a>
-              <a href="#" class="tab" data-target="right-notes">Notes</a>
-            </div>
-            <div class="tab-panels">
-              <div id="right-history" class="panel hidden">
+              <div id="main-history" class="panel hidden">
                 {history_panel_html}
               </div>
-              <div id="right-files" class="panel">
+              <div id="main-files" class="panel hidden">
                 <div class="card" style="padding:12px">
                   <h3 style='margin-bottom:6px'>Files</h3>
                   <!-- Upload form at the top of Files tab -->
@@ -1602,18 +1680,20 @@ def project_page_html(
                     <input type="file" name="file" required data-testid="upload-input" style="margin-right:8px" />
                     <button type="submit" data-testid="upload-submit" style="display:inline-block">Upload</button>
                   </form>
-                  <div style="max-height:180px; overflow:auto">
+                  <div style="max-height:400px; overflow:auto">
                     {file_list_html}
                   </div>
                 </div>
               </div>
-              <div id="right-code" class="panel hidden">
-                <div class="card" style="max-height:220px; overflow:auto; padding:12px">
+              <div id="main-code" class="panel hidden">
+                <div class="card" style="padding:12px">
                   <h3 style='margin-bottom:6px'>Code</h3>
-                  {code_list_html}
+                  <div style="max-height:600px; overflow:auto">
+                    {code_list_html}
+                  </div>
                 </div>
               </div>
-              <div id="right-dbs" class="panel hidden">
+              <div id="main-dbs" class="panel hidden">
                 <div class="card" style="padding:12px">
                   <h3>Databases</h3>
                   <table class="table">
@@ -1622,11 +1702,11 @@ def project_page_html(
                   </table>
                 </div>
               </div>
-              <div id="right-notes" class="panel hidden">
+              <div id="main-notes" class="panel hidden">
                 {notes_panel_html}
               </div>
-            </div>
           </div>
+        </div>
       </div>
     </div>
     
