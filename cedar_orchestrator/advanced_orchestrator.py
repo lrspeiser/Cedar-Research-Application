@@ -405,14 +405,21 @@ class CodeAgent:
         logger.info(f"[CodeAgent] Starting processing for task: {task[:100]}...")
         
         if not self.llm_client:
+            error_details = f"""Agent: CodeAgent
+Task: {task}
+Error: No LLM client configured
+API Key Status: {'Not provided' if not os.getenv('OPENAI_API_KEY') else 'Provided but client not initialized'}
+Environment Variables: OPENAI_API_KEY={'SET' if os.getenv('OPENAI_API_KEY') else 'NOT SET'}, CEDARPY_OPENAI_MODEL={os.getenv('CEDARPY_OPENAI_MODEL', 'NOT SET')}
+Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is properly initialized"""
+            
             return AgentResult(
                 agent_name="CodeAgent",
                 display_name="Code Executor",
-                result="No LLM client available",
+                result=f"**Agent Failure Report:**\n\nThe Code Agent was unable to process your request due to missing LLM configuration.\n\n**Error Details:**\n{error_details}\n\n**What the Chief Agent should know:**\nThis agent requires an LLM to generate and execute code. Without it, no code generation is possible.",
                 confidence=0.0,
-                method="Error",
-                explanation="Cannot generate code without LLM access.",
-                summary="Unable to process - no LLM configured"
+                method="Configuration Error",
+                explanation="LLM client not available - cannot generate code",
+                summary="Code Agent failed: No LLM configured"
             )
         
         try:
@@ -583,14 +590,20 @@ Suggested Next Steps: Review the code and error, then provide a more specific qu
                 
         except Exception as e:
             logger.error(f"[CodeAgent] Error: {e}")
+            error_type = type(e).__name__
+            error_details = f"""Exception Type: {error_type}
+Error Message: {str(e)}
+Task: {task[:200]}{'...' if len(task) > 200 else ''}
+Model: {model if 'model' in locals() else 'Not determined'}"""
+            
             return AgentResult(
                 agent_name="CodeAgent",
                 display_name="Code Executor",
-                result=f"Answer: Failed to generate code\n\nPotential issues: {str(e)}",
+                result=f"**Code Generation Failed:**\n\nThe Code Agent encountered an error while generating code.\n\n**Error Details:**\n```\n{error_details}\n```\n\n**Common Causes:**\n- OpenAI API rate limit or timeout\n- Invalid API key or permissions\n- Network connectivity issues\n- Model-specific parameter errors\n\n**Suggested Fix:**\nCheck the error message above and ensure your API configuration is correct.",
                 confidence=0.1,
-                method="Error in code generation",
-                explanation=f"Code generation failed",
-                summary=f"Failed to generate code: {str(e)[:100]}"
+                method=f"Error: {error_type}",
+                explanation=f"Code generation failed: {error_type}",
+                summary=f"Failed to generate code - {error_type}: {str(e)[:100]}"
             )
 
 class ReasoningAgent:
@@ -605,12 +618,21 @@ class ReasoningAgent:
         logger.info(f"[ReasoningAgent] Starting processing for task: {task[:100]}...")
         
         if not self.llm_client:
+            error_details = f"""Agent: ReasoningAgent
+Task: {task}
+Error: No LLM client configured
+API Key Status: {'Not provided' if not os.getenv('OPENAI_API_KEY') else 'Provided but client not initialized'}
+Environment Variables: OPENAI_API_KEY={'SET' if os.getenv('OPENAI_API_KEY') else 'NOT SET'}, CEDARPY_OPENAI_MODEL={os.getenv('CEDARPY_OPENAI_MODEL', 'NOT SET')}
+Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is properly initialized"""
+            
             return AgentResult(
                 agent_name="ReasoningAgent",
-                result="No LLM client available",
+                display_name="Logical Reasoner",
+                result=f"**Agent Failure Report:**\n\nThe Reasoning Agent was unable to process your request due to missing LLM configuration.\n\n**Error Details:**\n{error_details}\n\n**What the Chief Agent should know:**\nThis agent requires an LLM to perform step-by-step logical reasoning. Without it, no reasoning analysis is possible.",
                 confidence=0.0,
-                method="Error",
-                explanation="Cannot perform reasoning without LLM access."
+                method="Configuration Error",
+                explanation="LLM client not available - cannot perform reasoning",
+                summary="Reasoning Agent failed: No LLM configured"
             )
         
         try:
@@ -667,13 +689,20 @@ Why: Applied step-by-step logical reasoning to analyze the problem"""
             
         except Exception as e:
             logger.error(f"[ReasoningAgent] Error: {e}")
+            error_type = type(e).__name__
+            error_details = f"""Exception Type: {error_type}
+Error Message: {str(e)}
+Task: {task[:200]}{'...' if len(task) > 200 else ''}
+Model: {model if 'model' in locals() else 'Not determined'}"""
+            
             return AgentResult(
                 agent_name="ReasoningAgent",
                 display_name="Logical Reasoner",
-                result=f"Answer: Reasoning failed\n\nPotential issues: {str(e)}",
+                result=f"**Reasoning Failed:**\n\nThe Reasoning Agent encountered an error during logical analysis.\n\n**Error Details:**\n```\n{error_details}\n```\n\n**Troubleshooting:**\n- Check if the OpenAI API is responding\n- Verify API key permissions\n- Ensure network connectivity",
                 confidence=0.1,
-                method="Error in reasoning",
-                explanation=f"Reasoning error"
+                method=f"Error: {error_type}",
+                explanation=f"Reasoning failed: {error_type}",
+                summary=f"Reasoning failed - {error_type}: {str(e)[:100]}"
             )
 
 class SQLAgent:
@@ -688,13 +717,21 @@ class SQLAgent:
         logger.info(f"[SQLAgent] Starting processing for task: {task[:100]}...")
         
         if not self.llm_client:
+            error_details = f"""Agent: SQLAgent
+Task: {task}
+Error: No LLM client configured
+API Key Status: {'Not provided' if not os.getenv('OPENAI_API_KEY') else 'Provided but client not initialized'}
+Environment Variables: OPENAI_API_KEY={'SET' if os.getenv('OPENAI_API_KEY') else 'NOT SET'}, CEDARPY_OPENAI_MODEL={os.getenv('CEDARPY_OPENAI_MODEL', 'NOT SET')}
+Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is properly initialized"""
+            
             return AgentResult(
                 agent_name="SQLAgent",
                 display_name="SQL Agent",
-                result="No LLM client available",
+                result=f"**Agent Failure Report:**\n\nThe SQL Agent was unable to process your request due to missing LLM configuration.\n\n**Error Details:**\n{error_details}\n\n**What the Chief Agent should know:**\nThis agent requires an LLM to generate SQL queries. Without it, no SQL generation is possible.",
                 confidence=0.0,
-                method="Error",
-                explanation="Cannot generate SQL without LLM access."
+                method="Configuration Error",
+                explanation="LLM client not available - cannot generate SQL",
+                summary="SQL Agent failed: No LLM configured"
             )
         
         # Check if this is actually a SQL/database task
@@ -834,12 +871,21 @@ class GeneralAgent:
         logger.info(f"[GeneralAgent] Starting processing for task: {task[:100]}...")
         
         if not self.llm_client:
+            error_details = f"""Agent: GeneralAgent
+Task: {task}
+Error: No LLM client configured
+API Key Status: {'Not provided' if not os.getenv('OPENAI_API_KEY') else 'Provided but client not initialized'}
+Environment Variables: OPENAI_API_KEY={'SET' if os.getenv('OPENAI_API_KEY') else 'NOT SET'}, CEDARPY_OPENAI_MODEL={os.getenv('CEDARPY_OPENAI_MODEL', 'NOT SET')}
+Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is properly initialized"""
+            
             return AgentResult(
                 agent_name="GeneralAgent",
-                result="No LLM client available",
+                display_name="General Assistant",
+                result=f"**Agent Failure Report:**\n\nThe General Agent was unable to process your request due to missing LLM configuration.\n\n**Error Details:**\n{error_details}\n\n**What the Chief Agent should know:**\nThis agent requires an LLM to provide direct answers. Without it, no response is possible.",
                 confidence=0.0,
-                method="Error",
-                explanation="Cannot process without LLM access."
+                method="Configuration Error",
+                explanation="LLM client not available - cannot process",
+                summary="General Agent failed: No LLM configured"
             )
         
         try:
@@ -896,13 +942,20 @@ Why: Provided a direct response based on the query context"""
             
         except Exception as e:
             logger.error(f"[GeneralAgent] Error: {e}")
+            error_type = type(e).__name__
+            error_details = f"""Exception Type: {error_type}
+Error Message: {str(e)}
+Task: {task[:200]}{'...' if len(task) > 200 else ''}
+Model: {model if 'model' in locals() else 'Not determined'}"""
+            
             return AgentResult(
                 agent_name="GeneralAgent",
                 display_name="General Assistant",
-                result=f"Answer: Processing failed\n\nPotential issues: {str(e)}",
+                result=f"**Processing Failed:**\n\nThe General Agent encountered an error.\n\n**Error Details:**\n```\n{error_details}\n```\n\n**Troubleshooting:**\n- Check OpenAI API status and limits\n- Verify your API key is valid\n- Review the error message for specific issues",
                 confidence=0.1,
-                method="Error",
-                explanation=f"Processing error"
+                method=f"Error: {error_type}",
+                explanation=f"Processing failed: {error_type}",
+                summary=f"Processing failed - {error_type}: {str(e)[:100]}"
             )
 
 class MathAgent:
@@ -917,13 +970,21 @@ class MathAgent:
         logger.info(f"[MathAgent] Starting mathematical derivation for: {task[:100]}...")
         
         if not self.llm_client:
+            error_details = f"""Agent: MathAgent
+Task: {task}
+Error: No LLM client configured
+API Key Status: {'Not provided' if not os.getenv('OPENAI_API_KEY') else 'Provided but client not initialized'}
+Environment Variables: OPENAI_API_KEY={'SET' if os.getenv('OPENAI_API_KEY') else 'NOT SET'}, CEDARPY_OPENAI_MODEL={os.getenv('CEDARPY_OPENAI_MODEL', 'NOT SET')}
+Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is properly initialized"""
+            
             return AgentResult(
                 agent_name="MathAgent",
                 display_name="Math Agent",
-                result="No LLM client available for mathematical derivation",
+                result=f"**Agent Failure Report:**\n\nThe Math Agent was unable to process your request due to missing LLM configuration.\n\n**Error Details:**\n{error_details}\n\n**What the Chief Agent should know:**\nThis agent requires an LLM to derive mathematical formulas from first principles. Without it, no derivation is possible.",
                 confidence=0.0,
-                method="Error",
-                explanation="Cannot derive formulas without LLM access"
+                method="Configuration Error",
+                explanation="LLM client not available - cannot derive formulas",
+                summary="Math Agent failed: No LLM configured"
             )
         
         try:
@@ -997,13 +1058,21 @@ class ResearchAgent:
         logger.info(f"[ResearchAgent] Starting web research for: {task[:100]}...")
         
         if not self.llm_client:
+            error_details = f"""Agent: ResearchAgent
+Task: {task}
+Error: No LLM client configured
+API Key Status: {'Not provided' if not os.getenv('OPENAI_API_KEY') else 'Provided but client not initialized'}
+Environment Variables: OPENAI_API_KEY={'SET' if os.getenv('OPENAI_API_KEY') else 'NOT SET'}, CEDARPY_OPENAI_MODEL={os.getenv('CEDARPY_OPENAI_MODEL', 'NOT SET')}
+Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is properly initialized"""
+            
             return AgentResult(
                 agent_name="ResearchAgent",
                 display_name="Research Agent",
-                result="No LLM client available for web research",
+                result=f"**Agent Failure Report:**\n\nThe Research Agent was unable to process your request due to missing LLM configuration.\n\n**Error Details:**\n{error_details}\n\n**What the Chief Agent should know:**\nThis agent requires an LLM to perform web research. Without it, no research is possible.",
                 confidence=0.0,
-                method="Error",
-                explanation="Cannot perform research without LLM access"
+                method="Configuration Error",
+                explanation="LLM client not available - cannot perform research",
+                summary="Research Agent failed: No LLM configured"
             )
         
         try:
@@ -1083,13 +1152,21 @@ class StrategyAgent:
         logger.info(f"[StrategyAgent] Creating strategic plan for: {task[:100]}...")
         
         if not self.llm_client:
+            error_details = f"""Agent: StrategyAgent
+Task: {task}
+Error: No LLM client configured
+API Key Status: {'Not provided' if not os.getenv('OPENAI_API_KEY') else 'Provided but client not initialized'}
+Environment Variables: OPENAI_API_KEY={'SET' if os.getenv('OPENAI_API_KEY') else 'NOT SET'}, CEDARPY_OPENAI_MODEL={os.getenv('CEDARPY_OPENAI_MODEL', 'NOT SET')}
+Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is properly initialized"""
+            
             return AgentResult(
                 agent_name="StrategyAgent",
                 display_name="Strategy Agent",
-                result="No LLM client available for strategic planning",
+                result=f"**Agent Failure Report:**\n\nThe Strategy Agent was unable to process your request due to missing LLM configuration.\n\n**Error Details:**\n{error_details}\n\n**What the Chief Agent should know:**\nThis agent requires an LLM to create strategic plans. Without it, no planning is possible.",
                 confidence=0.0,
-                method="Error",
-                explanation="Cannot create strategy without LLM access"
+                method="Configuration Error",
+                explanation="LLM client not available - cannot create strategy",
+                summary="Strategy Agent failed: No LLM configured"
             )
         
         try:
@@ -1169,13 +1246,21 @@ class DataAgent:
         logger.info(f"[DataAgent] Analyzing databases for: {task[:100]}...")
         
         if not self.llm_client:
+            error_details = f"""Agent: DataAgent
+Task: {task}
+Error: No LLM client configured
+API Key Status: {'Not provided' if not os.getenv('OPENAI_API_KEY') else 'Provided but client not initialized'}
+Environment Variables: OPENAI_API_KEY={'SET' if os.getenv('OPENAI_API_KEY') else 'NOT SET'}, CEDARPY_OPENAI_MODEL={os.getenv('CEDARPY_OPENAI_MODEL', 'NOT SET')}
+Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is properly initialized"""
+            
             return AgentResult(
                 agent_name="DataAgent",
                 display_name="Data Agent",
-                result="No LLM client available for data analysis",
+                result=f"**Agent Failure Report:**\n\nThe Data Agent was unable to process your request due to missing LLM configuration.\n\n**Error Details:**\n{error_details}\n\n**What the Chief Agent should know:**\nThis agent requires an LLM to analyze data and suggest SQL queries. Without it, no data analysis is possible.",
                 confidence=0.0,
-                method="Error",
-                explanation="Cannot analyze data without LLM access"
+                method="Configuration Error",
+                explanation="LLM client not available - cannot analyze data",
+                summary="Data Agent failed: No LLM configured"
             )
         
         try:
@@ -1508,13 +1593,21 @@ class NotesAgent:
         logger.info(f"[NotesAgent] Creating notes for: {task[:100]}...")
         
         if not self.llm_client:
+            error_details = f"""Agent: NotesAgent
+Task: {task}
+Error: No LLM client configured
+API Key Status: {'Not provided' if not os.getenv('OPENAI_API_KEY') else 'Provided but client not initialized'}
+Environment Variables: OPENAI_API_KEY={'SET' if os.getenv('OPENAI_API_KEY') else 'NOT SET'}, CEDARPY_OPENAI_MODEL={os.getenv('CEDARPY_OPENAI_MODEL', 'NOT SET')}
+Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is properly initialized"""
+            
             return AgentResult(
                 agent_name="NotesAgent",
                 display_name="Notes Agent",
-                result="No LLM client available for note creation",
+                result=f"**Agent Failure Report:**\n\nThe Notes Agent was unable to process your request due to missing LLM configuration.\n\n**Error Details:**\n{error_details}\n\n**What the Chief Agent should know:**\nThis agent requires an LLM to create structured notes. Without it, no note creation is possible.",
                 confidence=0.0,
-                method="Error",
-                explanation="Cannot create notes without LLM access"
+                method="Configuration Error",
+                explanation="LLM client not available - cannot create notes",
+                summary="Notes Agent failed: No LLM configured"
             )
         
         try:
@@ -2336,6 +2429,84 @@ I've analyzed your request as a {thinking['identified_type'].replace('_', ' ')}.
                 await asyncio.sleep(0.2)
             elif isinstance(result, Exception):
                 logger.error(f"[ORCHESTRATOR] Agent {i+1} failed with exception: {result}")
+                
+                # Determine which agent failed based on index
+                agent_name = "Unknown Agent"
+                display_name = "Unknown Agent"
+                if i < len(agents):
+                    agent = agents[i]
+                    agent_name = agent.__class__.__name__
+                    # Map agent to display name
+                    agent_display_names = {
+                        "CodeAgent": "Code Executor",
+                        "ShellAgent": "Shell Executor",
+                        "ReasoningAgent": "Logical Reasoner",
+                        "SQLAgent": "SQL Agent",
+                        "GeneralAgent": "General Assistant",
+                        "MathAgent": "Math Agent",
+                        "ResearchAgent": "Research Agent",
+                        "StrategyAgent": "Strategy Agent",
+                        "DataAgent": "Data Agent",
+                        "NotesAgent": "Notes Agent",
+                        "FileAgent": "File Manager"
+                    }
+                    display_name = agent_display_names.get(agent_name, agent_name)
+                
+                # Create error report with detailed information
+                error_type = type(result).__name__
+                error_msg = str(result)
+                
+                # Check for common error patterns and provide specific guidance
+                error_details = f"""Exception Type: {error_type}
+Error Message: {error_msg}
+Agent: {agent_name}
+Task: {message[:200]}{'...' if len(message) > 200 else ''}"""
+                
+                suggested_fix = "Review the error details and check:"
+                if "OPENAI_API_KEY" in error_msg or "api_key" in error_msg.lower():
+                    suggested_fix += "\n- Ensure OPENAI_API_KEY is set in environment"
+                    suggested_fix += "\n- Check the API key is valid and has proper permissions"
+                elif "connection" in error_msg.lower() or "network" in error_msg.lower():
+                    suggested_fix += "\n- Check network connectivity"
+                    suggested_fix += "\n- Verify firewall settings allow API access"
+                elif "timeout" in error_msg.lower():
+                    suggested_fix += "\n- The operation took too long to complete"
+                    suggested_fix += "\n- Try a simpler query or break it into smaller parts"
+                elif "module" in error_msg.lower() or "import" in error_msg.lower():
+                    suggested_fix += "\n- Required Python modules may not be installed"
+                    suggested_fix += "\n- Check if all dependencies are properly installed"
+                else:
+                    suggested_fix += "\n- Check the agent's configuration"
+                    suggested_fix += "\n- Review the error message for specific issues"
+                
+                # Create an AgentResult for the exception
+                error_result = AgentResult(
+                    agent_name=agent_name,
+                    display_name=display_name,
+                    result=f"""**Agent Failure Report:**\n\n{display_name} encountered an unexpected error and could not complete the task.\n\n**Error Details:**\n```\n{error_details}\n```\n\n**Suggested Fix:**\n{suggested_fix}\n\n**What the Chief Agent should know:**\nThis agent crashed during execution. The error has been logged and detailed information is provided above for troubleshooting.""",
+                    confidence=0.0,
+                    method="Agent Exception",
+                    explanation=f"Agent crashed: {error_type}",
+                    summary=f"{display_name} failed with {error_type}: {error_msg[:100]}{'...' if len(error_msg) > 100 else ''}"
+                )
+                
+                # Send the error as an agent result
+                await websocket.send_json({
+                    "type": "agent_result",
+                    "agent_name": display_name,
+                    "text": error_result.result,
+                    "summary": error_result.summary,
+                    "metadata": {
+                        "agent": agent_name,
+                        "confidence": 0.0,
+                        "method": "Agent Exception",
+                        "error": True,
+                        "error_type": error_type,
+                        "summary": error_result.summary
+                    }
+                })
+                valid_results.append(error_result)
+                await asyncio.sleep(0.2)
                 
         # Phase 3: Chief Agent Review and Decision
         logger.info("[ORCHESTRATOR] PHASE 3: Chief Agent Review and Decision")
