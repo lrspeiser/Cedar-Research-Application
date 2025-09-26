@@ -1,1 +1,0 @@
-../../../../../../Resources/PySide6/Qt/qml/Qt5Compat/GraphicalEffects/MaskedBlur.qml

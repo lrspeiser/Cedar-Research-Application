@@ -1,1 +1,0 @@
-../../../../../../../Resources/PySide6/Qt/qml/QtQuick/Controls/Basic/ToolTip.qml
