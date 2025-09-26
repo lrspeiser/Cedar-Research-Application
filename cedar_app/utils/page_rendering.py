@@ -757,15 +757,30 @@ def project_page_html(
       function refreshTimeout(){
         try { if (timeoutId) clearTimeout(timeoutId); } catch(_){}
         timeoutId = setTimeout(function(){
-          if (!finalOrError) {
+            if (!finalOrError) {
             try {
+              // Create a new timeout bubble instead of rewriting existing one
               var budgetS = Math.round(timeoutMs/1000);
               var elapsedS = (function(){ try { return (( _now() - (wsStartMs||0) )/1000).toFixed(1); } catch(_) { return 'unknown'; } })();
-              streamText.textContent = '[timeout] Took too long. Exceeded ' + budgetS + 's budget; elapsed ' + elapsedS + 's. Please try again.';
+              var timeoutWrap = document.createElement('div');
+              timeoutWrap.className = 'msg system';
+              var timeoutMeta = document.createElement('div');
+              timeoutMeta.className = 'meta small';
+              timeoutMeta.innerHTML = "<span class='title' style='font-weight:600'>System</span>";
+              var timeoutBub = document.createElement('div');
+              timeoutBub.className = 'bubble system';
+              var timeoutCont = document.createElement('div');
+              timeoutCont.className = 'content';
+              timeoutCont.style.whiteSpace = 'pre-wrap';
+              timeoutCont.textContent = '[timeout] Took too long. Exceeded ' + budgetS + 's budget; elapsed ' + elapsedS + 's. Please try again.';
+              timeoutBub.appendChild(timeoutCont);
+              timeoutWrap.appendChild(timeoutMeta);
+              timeoutWrap.appendChild(timeoutBub);
+              if (msgs) msgs.appendChild(timeoutWrap);
             } catch(_){ }
             clearSpinner();
             _clearRunningTimer(); // Stop timer on timeout
-            stepAdvance('timeout', stream);
+            stepAdvance('timeout', null);
             finalOrError = true; timedOut = true;
             try { ws.close(); } catch(_){ }
           }
@@ -800,9 +815,14 @@ def project_page_html(
         }
         if (!m) return;
         if (m.type === 'stream') {
-          // Handle streaming text updates
-          if (streamText) {
-            streamText.textContent = m.text || '';
+          // Handle streaming text updates - append instead of replacing
+          if (streamText && m.text) {
+            // Only update if we're not in a final state
+            if (!finalOrError) {
+              // Remove spinner if present and append the text  
+              clearSpinner();
+              streamText.textContent = m.text || '';
+            }
           }
           refreshTimeout();
         } else if (m.type === 'message') { ackEvent(m);
@@ -1161,12 +1181,25 @@ def project_page_html(
             if (label === 'finalizing' || label === 'persisted' || label === 'timeout') {
               clearSpinner();
               _clearRunningTimer(); // Stop any running timer
-              if (label === 'timeout') { finalOrError = true; }
+              if (label === 'timeout' || label === 'finalizing' || label === 'persisted') { 
+                finalOrError = true;
+                try {
+                  if (timeoutId) {
+                    clearTimeout(timeoutId);
+                    timeoutId = null;
+                  }
+                } catch(_){}
+              }
             }
           } catch(_){ }
         } else if (m.type === 'final' && m.text) {
           finalOrError = true;
-          try { if (timeoutId) clearTimeout(timeoutId); } catch(_){}
+          try { 
+            if (timeoutId) {
+              clearTimeout(timeoutId);
+              timeoutId = null;
+            }
+          } catch(_){}
           // Render a proper assistant bubble for the final answer, with optional JSON details
           try {
             var detIdF = m.json ? ('det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8)) : null;
@@ -1311,7 +1344,12 @@ def project_page_html(
           ackEvent(m);
         } else if (m.type === 'error') {
           finalOrError = true;
-          try { if (timeoutId) clearTimeout(timeoutId); } catch(_){}
+          try { 
+            if (timeoutId) {
+              clearTimeout(timeoutId);
+              timeoutId = null;
+            }
+          } catch(_){}
           // Check for error in both 'error' and 'content' fields (backend inconsistency)
           var errorMsg = m.error || m.content || m.text || 'Unknown error occurred';
           streamText.textContent = '[error] ' + errorMsg; ackEvent(m);

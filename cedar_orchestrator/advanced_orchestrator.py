@@ -2645,11 +2645,8 @@ Please provide this information so I can better assist you."""
         logger.info(f"[ORCHESTRATOR] Selected approach: {selected_agent}")
         logger.info(f"[ORCHESTRATOR] Reasoning: {reasoning}")
         
-        # Send stream update before final
-        await websocket.send_json({
-            "type": "stream", 
-            "text": "Finalizing response..."
-        })
+        # Don't send stream update that would overwrite the bubble
+        # Just proceed directly to the final message
         
         # Calculate total time before using it
         total_time = time.time() - orchestration_start
