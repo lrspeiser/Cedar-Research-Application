@@ -842,8 +842,236 @@ Why: Analyzed available databases and suggested relevant SQL queries"""
                 explanation="Analysis error"
             )
 
+class FileAgent:
+    """Agent that downloads files from the web or manages user-provided files"""
+    
+    def __init__(self, llm_client: Optional[AsyncOpenAI], project_id: int = None, branch_id: int = None, db_session = None):
+        self.llm_client = llm_client
+        self.project_id = project_id
+        self.branch_id = branch_id
+        self.db_session = db_session
+        
+    async def process(self, task: str) -> AgentResult:
+        """Download files or process file paths and save with metadata"""
+        start_time = time.time()
+        logger.info(f"[FileAgent] Starting file processing for: {task[:100]}...")
+        
+        # Check if task contains URLs or file paths
+        import re
+        url_pattern = r'https?://[^\s]+'
+        file_path_pattern = r'(/[^\s]+|[A-Za-z]:\\[^\s]+|\./[^\s]+)'
+        
+        urls = re.findall(url_pattern, task)
+        file_paths = re.findall(file_path_pattern, task)
+        
+        results = []
+        
+        # Handle URL downloads
+        if urls:
+            logger.info(f"[FileAgent] Found {len(urls)} URLs to download")
+            for url in urls:
+                try:
+                    import urllib.request
+                    import tempfile
+                    import mimetypes
+                    
+                    # Create temp directory for downloads
+                    download_dir = os.path.join(os.path.expanduser("~"), "CedarDownloads")
+                    os.makedirs(download_dir, exist_ok=True)
+                    
+                    # Extract filename from URL
+                    url_path = url.split('?')[0]
+                    filename = os.path.basename(url_path) or 'download'
+                    
+                    # Download file
+                    logger.info(f"[FileAgent] Downloading from {url}")
+                    with urllib.request.urlopen(url, timeout=30) as response:
+                        content = response.read()
+                        
+                    # Save file
+                    timestamp = time.strftime('%Y%m%d_%H%M%S')
+                    safe_filename = re.sub(r'[^a-zA-Z0-9._-]', '_', filename)
+                    full_filename = f"{timestamp}_{safe_filename}"
+                    file_path = os.path.join(download_dir, full_filename)
+                    
+                    with open(file_path, 'wb') as f:
+                        f.write(content)
+                    
+                    # Get file metadata
+                    file_size = len(content)
+                    mime_type, _ = mimetypes.guess_type(filename)
+                    
+                    # Read first lines for description
+                    first_lines = ""
+                    try:
+                        if mime_type and 'text' in mime_type:
+                            first_lines = content[:500].decode('utf-8', errors='ignore')
+                    except:
+                        first_lines = "[Binary file]"
+                    
+                    # Save to database if available
+                    file_id = None
+                    if self.db_session and self.project_id and self.branch_id:
+                        try:
+                            from main_models import FileEntry
+                            
+                            # Generate AI description if LLM available
+                            ai_description = None
+                            if self.llm_client and first_lines and len(first_lines) > 10:
+                                try:
+                                    model = os.getenv("CEDARPY_OPENAI_MODEL") or "gpt-5"
+                                    completion_params = {
+                                        "model": model,
+                                        "messages": [
+                                            {"role": "system", "content": "Generate a brief description for this file based on its content."},
+                                            {"role": "user", "content": f"File: {filename}\nContent preview: {first_lines[:500]}"}
+                                        ]
+                                    }
+                                    if "gpt-5" in model:
+                                        completion_params["max_completion_tokens"] = 100
+                                    else:
+                                        completion_params["max_tokens"] = 100
+                                    
+                                    response = await self.llm_client.chat.completions.create(**completion_params)
+                                    ai_description = response.choices[0].message.content.strip()
+                                except:
+                                    pass
+                            
+                            file_entry = FileEntry(
+                                project_id=self.project_id,
+                                branch_id=self.branch_id,
+                                filename=full_filename,
+                                display_name=filename,
+                                file_type=os.path.splitext(filename)[1][1:] if '.' in filename else 'unknown',
+                                structure='sources' if 'text' in (mime_type or '') else 'binary',
+                                mime_type=mime_type or 'application/octet-stream',
+                                size_bytes=file_size,
+                                storage_path=file_path,
+                                ai_title=f"Downloaded: {filename}",
+                                ai_description=ai_description or f"Downloaded from {url}",
+                                ai_category="downloaded",
+                                metadata_json={"source_url": url, "download_time": time.time()}
+                            )
+                            self.db_session.add(file_entry)
+                            self.db_session.commit()
+                            file_id = file_entry.id
+                            logger.info(f"[FileAgent] Saved file to database with ID: {file_id}")
+                        except Exception as e:
+                            logger.warning(f"[FileAgent] Failed to save to database: {e}")
+                    
+                    results.append({
+                        "action": "downloaded",
+                        "url": url,
+                        "path": file_path,
+                        "filename": full_filename,
+                        "size": file_size,
+                        "mime_type": mime_type or 'application/octet-stream',
+                        "preview": first_lines[:200],
+                        "file_id": file_id
+                    })
+                    
+                except Exception as e:
+                    logger.error(f"[FileAgent] Download failed for {url}: {e}")
+                    results.append({
+                        "action": "error",
+                        "url": url,
+                        "error": str(e)
+                    })
+        
+        # Handle local file paths
+        elif file_paths:
+            logger.info(f"[FileAgent] Found {len(file_paths)} file paths to process")
+            for path in file_paths:
+                try:
+                    if os.path.exists(path):
+                        file_size = os.path.getsize(path)
+                        mime_type, _ = mimetypes.guess_type(path)
+                        
+                        # Read first lines
+                        first_lines = ""
+                        try:
+                            with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                                first_lines = f.read(500)
+                        except:
+                            first_lines = "[Binary file]"
+                        
+                        results.append({
+                            "action": "analyzed",
+                            "path": path,
+                            "filename": os.path.basename(path),
+                            "size": file_size,
+                            "mime_type": mime_type or 'unknown',
+                            "preview": first_lines[:200]
+                        })
+                    else:
+                        results.append({
+                            "action": "error",
+                            "path": path,
+                            "error": "File not found"
+                        })
+                except Exception as e:
+                    results.append({
+                        "action": "error",
+                        "path": path,
+                        "error": str(e)
+                    })
+        else:
+            # No files or URLs found - provide guidance
+            return AgentResult(
+                agent_name="FileAgent",
+                display_name="File Manager",
+                result="""Answer: No files or URLs detected in your request
+
+Why: To use the File Agent, please provide either:
+- A URL to download (e.g., https://example.com/file.pdf)
+- A file path to analyze (e.g., /Users/you/document.txt)
+
+Suggested Next Steps: Include a specific URL or file path in your request""",
+                confidence=0.3,
+                method="No files detected",
+                explanation="Awaiting file information"
+            )
+        
+        # Format results
+        if results:
+            answer_lines = []
+            for r in results:
+                if r["action"] == "downloaded":
+                    answer_lines.append(f"✓ Downloaded {r['filename']} ({r['size']} bytes) to {r['path']}")
+                elif r["action"] == "analyzed":
+                    answer_lines.append(f"✓ Analyzed {r['filename']} ({r['size']} bytes)")
+                elif r["action"] == "error":
+                    answer_lines.append(f"✗ Error: {r['error']}")
+            
+            formatted_output = f"""Answer: {chr(10).join(answer_lines)}
+
+Why: Files have been processed and saved with metadata
+
+File Details:
+{json.dumps(results, indent=2)}
+
+Suggested Next Steps: Files are ready for further processing or analysis"""
+            
+            return AgentResult(
+                agent_name="FileAgent",
+                display_name="File Manager",
+                result=formatted_output,
+                confidence=0.9 if all(r["action"] != "error" for r in results) else 0.6,
+                method="File download and analysis",
+                explanation=f"Processed {len(results)} file(s)"
+            )
+        
+        return AgentResult(
+            agent_name="FileAgent",
+            display_name="File Manager",
+            result="No files processed",
+            confidence=0.1,
+            method="No action taken",
+            explanation="No files to process"
+        )
+
 class NotesAgent:
-    """Agent that creates and manages notes from important findings"""
+    """Agent that creates and manages structured notes from findings"""
     
     def __init__(self, llm_client: Optional[AsyncOpenAI]):
         self.llm_client = llm_client
@@ -1115,18 +1343,21 @@ class ThinkerOrchestrator:
         self.llm_client = AsyncOpenAI(api_key=api_key) if api_key else None
         self.chief_agent = ChiefAgent(self.llm_client)  # Chief Agent is primary
         
-        # Original agents
+        # Core execution agents
         self.code_agent = CodeAgent(self.llm_client)
-        self.reasoning_agent = ReasoningAgent(self.llm_client)
-        self.general_agent = GeneralAgent(self.llm_client)
         self.sql_agent = SQLAgent(self.llm_client)
         
-        # New specialized agents
+        # Specialized agents
         self.math_agent = MathAgent(self.llm_client)
         self.research_agent = ResearchAgent(self.llm_client)
         self.strategy_agent = StrategyAgent(self.llm_client)
         self.data_agent = DataAgent(self.llm_client)
         self.notes_agent = NotesAgent(self.llm_client)
+        self.file_agent = FileAgent(self.llm_client)  # Will get context during orchestration
+        
+        # Keep but use sparingly
+        self.reasoning_agent = ReasoningAgent(self.llm_client)
+        self.general_agent = GeneralAgent(self.llm_client)
         
         # Initialize file processing orchestrator if available
         if FILE_PROCESSING_AVAILABLE:
@@ -1157,51 +1388,61 @@ class ThinkerOrchestrator:
         }
         
         # Analyze the message
-        if any(word in message.lower() for word in ["derive", "proof", "theorem", "formula from first principles", "mathematical derivation"]):
+        import re
+        has_url = bool(re.search(r'https?://[^\s]+', message))
+        has_file_path = bool(re.search(r'(/[^\s]+\.[a-zA-Z]{2,4}|[A-Za-z]:\\[^\s]+|\./[^\s]+)', message))
+        
+        # File handling takes priority
+        if has_url or has_file_path or any(word in message.lower() for word in ["download", "file", "upload", "save file"]):
+            thinking_process["identified_type"] = "file_operation"
+            thinking_process["analysis"] = "This requires file download or management"
+            thinking_process["agents_to_use"] = ["FileAgent", "NotesAgent"]
+            thinking_process["selection_reasoning"] = "File Agent for downloading/processing, Notes Agent to document the files"
+        elif any(word in message.lower() for word in ["derive", "proof", "theorem", "formula from first principles", "mathematical derivation"]):
             thinking_process["identified_type"] = "mathematical_derivation"
             thinking_process["analysis"] = "This requires mathematical derivation from first principles"
-            thinking_process["agents_to_use"] = ["MathAgent", "ReasoningAgent", "CodeAgent"]
-            thinking_process["selection_reasoning"] = "Math Agent for derivations, Reasoning Agent for step-by-step logic, Code Agent for verification"
+            thinking_process["agents_to_use"] = ["MathAgent", "CodeAgent"]
+            thinking_process["selection_reasoning"] = "Math Agent for derivations, Code Agent for verification"
         elif any(word in message.lower() for word in ["research", "sources", "citations", "find information", "web search", "literature"]):
             thinking_process["identified_type"] = "research_task"
             thinking_process["analysis"] = "This requires web research and finding sources"
-            thinking_process["agents_to_use"] = ["ResearchAgent", "GeneralAgent", "NotesAgent"]
-            thinking_process["selection_reasoning"] = "Research Agent for finding sources, General Agent for context, Notes Agent to document findings"
+            thinking_process["agents_to_use"] = ["ResearchAgent", "NotesAgent"]
+            thinking_process["selection_reasoning"] = "Research Agent for finding sources, Notes Agent to document findings"
         elif any(word in message.lower() for word in ["plan", "strategy", "steps to", "approach", "how should i", "coordinate"]):
             thinking_process["identified_type"] = "strategic_planning"
             thinking_process["analysis"] = "This requires strategic planning and coordination"
-            thinking_process["agents_to_use"] = ["StrategyAgent", "ReasoningAgent", "GeneralAgent"]
-            thinking_process["selection_reasoning"] = "Strategy Agent for planning, Reasoning Agent for analysis, General Agent for comprehensive overview"
+            thinking_process["agents_to_use"] = ["StrategyAgent"]
+            thinking_process["selection_reasoning"] = "Strategy Agent specialized for planning tasks"
         elif any(word in message.lower() for word in ["calculate", "compute", "square root", "sqrt", "multiply", "divide", "add", "subtract", "sum", "product"]):
             thinking_process["identified_type"] = "mathematical_computation"
             thinking_process["analysis"] = "This is a mathematical computation requiring precise calculation"
-            thinking_process["agents_to_use"] = ["CodeAgent", "MathAgent", "ReasoningAgent", "GeneralAgent"]
-            thinking_process["selection_reasoning"] = "4 agents for accuracy: Code for execution, Math for formula, Reasoning for logic, General for verification"
+            thinking_process["agents_to_use"] = ["CodeAgent", "MathAgent"]
+            thinking_process["selection_reasoning"] = "Code for execution, Math for formula verification"
         elif any(word in message.lower() for word in ["code", "program", "function", "script", "algorithm"]):
             thinking_process["identified_type"] = "coding_task"
             thinking_process["analysis"] = "This requires code generation or programming"
-            thinking_process["agents_to_use"] = ["CodeAgent", "StrategyAgent", "GeneralAgent"]
-            thinking_process["selection_reasoning"] = "Code Agent for implementation, Strategy Agent for design approach, General Agent for requirements"
+            thinking_process["agents_to_use"] = ["CodeAgent", "StrategyAgent"]
+            thinking_process["selection_reasoning"] = "Code Agent for implementation, Strategy Agent for design approach"
         elif any(word in message.lower() for word in ["sql", "database", "query", "table", "select from", "data analysis"]):
             thinking_process["identified_type"] = "database_query"
             thinking_process["analysis"] = "This requires SQL query generation and execution"
-            thinking_process["agents_to_use"] = ["DataAgent", "SQLAgent", "GeneralAgent"]
-            thinking_process["selection_reasoning"] = "Data Agent for schema analysis, SQL Agent for query generation, General Agent for interpretation"
+            thinking_process["agents_to_use"] = ["DataAgent", "SQLAgent"]
+            thinking_process["selection_reasoning"] = "Data Agent for schema analysis, SQL Agent for query generation"
         elif any(word in message.lower() for word in ["note", "remember", "save for later", "document", "summarize findings"]):
             thinking_process["identified_type"] = "note_taking"
             thinking_process["analysis"] = "This requires creating or managing notes"
-            thinking_process["agents_to_use"] = ["NotesAgent", "GeneralAgent"]
-            thinking_process["selection_reasoning"] = "Notes Agent for documentation, General Agent for context (2 agents sufficient for this task)"
+            thinking_process["agents_to_use"] = ["NotesAgent"]
+            thinking_process["selection_reasoning"] = "Notes Agent specialized for documentation"
         elif any(word in message.lower() for word in ["explain", "why", "how", "what is", "define"]):
             thinking_process["identified_type"] = "explanation_query"
             thinking_process["analysis"] = "This requires detailed explanation or reasoning"
-            thinking_process["agents_to_use"] = ["ReasoningAgent", "ResearchAgent", "GeneralAgent"]
-            thinking_process["selection_reasoning"] = "Reasoning Agent for logic, Research Agent for sources, General Agent for comprehensive explanation"
+            thinking_process["agents_to_use"] = ["ResearchAgent", "ReasoningAgent"]
+            thinking_process["selection_reasoning"] = "Research Agent for sources, Reasoning Agent for logical analysis"
         else:
             thinking_process["identified_type"] = "general_query"
             thinking_process["analysis"] = "This is a general query"
-            thinking_process["agents_to_use"] = ["GeneralAgent", "ReasoningAgent", "StrategyAgent"]
-            thinking_process["selection_reasoning"] = "General Agent for direct response, Reasoning Agent for analysis, Strategy Agent for approach planning"
+            thinking_process["agents_to_use"] = ["StrategyAgent", "GeneralAgent"]
+            thinking_process["selection_reasoning"] = "Strategy Agent for approach, General Agent as fallback"
             
         return thinking_process
         
@@ -1279,6 +1520,14 @@ class ThinkerOrchestrator:
         if "NotesAgent" in thinking["agents_to_use"]:
             agents.append(self.notes_agent)
             logger.info("[ORCHESTRATOR] Added NotesAgent to processing queue")
+        if "FileAgent" in thinking["agents_to_use"]:
+            # Update FileAgent with current context if available
+            if db_session and project_id and branch_id:
+                self.file_agent.project_id = project_id
+                self.file_agent.branch_id = branch_id
+                self.file_agent.db_session = db_session
+            agents.append(self.file_agent)
+            logger.info("[ORCHESTRATOR] Added FileAgent to processing queue")
             
         # Process all agents in parallel
         logger.info(f"[ORCHESTRATOR] Starting parallel processing with {len(agents)} agents")
