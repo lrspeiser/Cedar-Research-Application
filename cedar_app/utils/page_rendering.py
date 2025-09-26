@@ -9,8 +9,21 @@ from main_helpers import escape
 import html
 
 
-def projects_list_html(projects: List[Project]) -> str:
-    """Generate HTML for the projects list page."""
+def projects_list_html(projects: List[Project], msg: Optional[str] = None) -> str:
+    """Generate HTML for the projects list page with optional message display."""
+    # Create message HTML if provided
+    message_html = ""
+    if msg:
+        # Check if it's a success or error message
+        is_success = "successfully" in msg.lower() or "deleted" in msg.lower()
+        bg_color = "#10b981" if is_success else "#ef4444"
+        message_html = f"""
+        <div style="background-color: {bg_color}; color: white; padding: 12px; border-radius: 6px; margin-bottom: 16px; display: flex; align-items: center; justify-content: space-between;">
+            <span>{escape(msg)}</span>
+            <button onclick="this.parentElement.style.display='none'" style="background: transparent; border: none; color: white; cursor: pointer; font-size: 18px; padding: 0;">✕</button>
+        </div>
+        """
+    
     if not projects:
         return f"""
         <h1>Projects</h1>
@@ -22,6 +35,7 @@ def projects_list_html(projects: List[Project]) -> str:
             <button type="submit">Create Project</button>
         </form>
         """
+    
     rows = []
     for p in projects:
         rows.append(f"""
@@ -37,6 +51,7 @@ def projects_list_html(projects: List[Project]) -> str:
         """)
     return f"""
         <h1>Projects</h1>
+        {message_html}
         <div class="row">
           <div class="card" style="flex:2">
             <table class="table">
@@ -1512,10 +1527,29 @@ def project_page_html(
       <div>Branches: {tabs_html}</div>
 
       <div style="margin-top:8px; display:flex; gap:8px; align-items:center">
-        <form method="post" action="/project/{project.id}/delete" class="inline" onsubmit="return confirm('Delete project {escape(project.title)} and all its data?');">
-          <button type="submit" class="secondary">Delete Project</button>
+        <form method="post" action="/project/{project.id}/delete" class="inline" 
+              onsubmit="return confirmProjectDelete('{escape(project.title)}');">
+          <button type="submit" class="secondary" style="background-color: #ef4444; color: white; border-color: #dc2626;">Delete Project</button>
         </form>
       </div>
+      
+      <script>
+      function confirmProjectDelete(projectName) {{
+        // First confirmation
+        if (!confirm('Are you sure you want to delete project "' + projectName + '"?')) {{
+          return false;
+        }}
+        // Second confirmation for safety
+        var secondConfirm = confirm('⚠️ WARNING: This will permanently delete:\\n\\n' +
+          '• All files in this project\\n' +
+          '• All chat history\\n' + 
+          '• All databases\\n' +
+          '• All code snippets\\n' +
+          '• All notes\\n\\n' +
+          'This action CANNOT be undone. Click OK to permanently delete everything.');
+        return secondConfirm;
+      }}
+      </script>
 
       <div id="page-root" style="min-height:100vh; display:flex; flex-direction:column">
         <div class="two-col" style="margin-top:8px; flex:1; min-height:0">

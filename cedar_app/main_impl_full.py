@@ -379,10 +379,10 @@ def _cedarpy_startup_llm_probe():
 
 
 @app.get("/", response_class=HTMLResponse)
-def home(request: Request, db: Session = Depends(get_registry_db)):
+def home(request: Request, msg: Optional[str] = None, db: Session = Depends(get_registry_db)):
     """Home page showing list of all projects."""
     projects = db.query(Project).order_by(Project.created_at.desc()).all()
-    return layout("Cedar", projects_list_html(projects), header_label="All Projects")
+    return layout("Cedar", projects_list_html(projects, msg=msg), header_label="All Projects")
 
 
 @app.get("/settings", response_class=HTMLResponse)
@@ -916,7 +916,9 @@ def delete_all_files(project_id: int, request: Request, db: Session = Depends(ge
 def make_table_branch_aware(project_id: int, request: Request, table: str = Form(...), db: Session = Depends(get_project_db)):
     """Make table branch-aware. Delegates to extracted module."""
     return make_table_branch_aware_impl(project_id, request, table, db)
-def delete_project(project_id: int):
+@app.post("/project/{project_id}/delete")
+def delete_project(project_id: int, db: Session = Depends(get_registry_db)):
+    """Delete a project and all its associated data."""
     from cedar_app.utils.project_management import delete_project as _delete_project
     return _delete_project(app, project_id)
 

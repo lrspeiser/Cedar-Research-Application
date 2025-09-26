@@ -259,37 +259,99 @@ def delete_all_files(app, project_id: int, request: Request, db: Session):
 
 
 def delete_project(app, project_id: int):
-    """Delete a project from registry and remove all its files."""
+    """Delete a project from registry and remove all its files and data."""
     global _project_engines, _project_engines_lock
     
-    # Remove from central registry
-    try:
-        with RegistrySessionLocal() as reg:
-            proj = reg.query(Project).filter(Project.id == project_id).first()
-            if proj:
-                reg.delete(proj)
-                reg.commit()
-    except Exception:
-        pass
+    import logging
+    logger = logging.getLogger(__name__)
     
-    # Dispose cached engine if present
+    deleted_items = {
+        "branches": 0,
+        "files": 0,
+        "threads": 0,
+        "datasets": 0,
+        "notes": 0,
+        "chats": 0
+    }
+    
+    # First, close any active database connections
     try:
         with _project_engines_lock:
             eng = _project_engines.pop(project_id, None)
         if eng is not None:
             try:
                 eng.dispose()
-            except Exception:
-                pass
-    except Exception:
-        pass
+                logger.info(f"Disposed database engine for project {project_id}")
+            except Exception as e:
+                logger.error(f"Failed to dispose engine for project {project_id}: {e}")
+    except Exception as e:
+        logger.error(f"Error accessing engine for project {project_id}: {e}")
+    
+    # Get project details before deletion for logging
+    project_name = f"Project {project_id}"
+    try:
+        with RegistrySessionLocal() as reg:
+            proj = reg.query(Project).filter(Project.id == project_id).first()
+            if proj:
+                project_name = proj.title
+                
+                # Count and delete related items
+                branches = reg.query(Branch).filter(Branch.project_id == project_id).all()
+                deleted_items["branches"] = len(branches)
+                for b in branches:
+                    reg.delete(b)
+                
+                # Delete from registry
+                reg.delete(proj)
+                reg.commit()
+                logger.info(f"Deleted project '{project_name}' (ID: {project_id}) from registry")
+    except Exception as e:
+        logger.error(f"Failed to delete project from registry: {e}")
+    
+    # Remove chat history
+    try:
+        from cedar_app.utils.chat_persistence import get_chat_manager
+        chat_manager = get_chat_manager()
+        deleted_items["chats"] = chat_manager.delete_project_chats(project_id)
+        logger.info(f"Deleted {deleted_items['chats']} chats for project {project_id}")
+    except Exception as e:
+        logger.error(f"Failed to delete chat history: {e}")
     
     # Remove project storage directory (DB + files)
     try:
-        base = _project_dirs(project_id)["base"]
-        if os.path.isdir(base):
-            shutil.rmtree(base, ignore_errors=True)
-    except Exception:
-        pass
+        dirs = _project_dirs(project_id)
+        base = dirs["base"]
         
-    return RedirectResponse("/", status_code=303)
+        # Count files before deletion
+        if os.path.isdir(dirs["files_root"]):
+            for root, dirs, files in os.walk(dirs["files_root"]):
+                deleted_items["files"] += len(files)
+        
+        # Remove entire project directory
+        if os.path.isdir(base):
+            shutil.rmtree(base, ignore_errors=False)
+            logger.info(f"Removed project directory: {base}")
+    except Exception as e:
+        logger.error(f"Failed to remove project directory: {e}")
+        # Try with ignore_errors=True as fallback
+        try:
+            base = _project_dirs(project_id)["base"]
+            if os.path.isdir(base):
+                shutil.rmtree(base, ignore_errors=True)
+        except:
+            pass
+    
+    # Log summary
+    logger.info(f"Project deletion complete - {project_name} (ID: {project_id})")
+    logger.info(f"Deleted: {deleted_items}")
+    
+    # Redirect to projects list with success message
+    from fastapi import status
+    from fastapi.responses import RedirectResponse
+    import urllib.parse
+    
+    msg = f"Successfully deleted project '{project_name}' and all associated data"
+    return RedirectResponse(
+        f"/?msg={urllib.parse.quote(msg)}", 
+        status_code=status.HTTP_303_SEE_OTHER
+    )

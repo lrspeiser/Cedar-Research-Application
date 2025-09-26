@@ -191,6 +191,29 @@ class ChatManager:
                         chat_file.unlink()
             except Exception:
                 continue
+    
+    def delete_project_chats(self, project_id: int) -> int:
+        """Delete all chat files for a specific project."""
+        deleted_count = 0
+        
+        # Delete all chat files for this project
+        pattern = f"chat_p{project_id}_*.json"
+        for chat_file in self.data_dir.glob(pattern):
+            try:
+                chat_file.unlink()
+                deleted_count += 1
+            except Exception:
+                continue
+        
+        # Also delete metadata files
+        meta_pattern = f"project_{project_id}_*.json"
+        for meta_file in self.data_dir.glob(meta_pattern):
+            try:
+                meta_file.unlink()
+            except Exception:
+                continue
+                
+        return deleted_count
 
 
 # Global singleton instance
