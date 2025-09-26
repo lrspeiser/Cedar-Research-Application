@@ -23,6 +23,10 @@ import sys
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any, Tuple
 from collections import deque
+from contextvars import ContextVar
+import logging as _logging
+import time as _time
+import builtins as _bi
 
 from fastapi import FastAPI, Request, UploadFile, File, Form, Depends, Header, HTTPException, Body, WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
@@ -188,7 +192,11 @@ from cedar_app.ui_utils import (
     layout,
 )
 
-# Changelog utilities removed - focusing on WebSocket chat only
+# Import changelog utilities from the dedicated module
+from cedar_app.changelog_utils import (
+    record_changelog as _record_changelog_base,
+    add_version as _add_version_base
+)
 
 # Import route handlers
 from cedar_app.api_routes import (
@@ -249,13 +257,20 @@ import cedar_tools as ct
 
 
 def record_changelog(db: Session, project_id: int, branch_id: int, action: str, input_payload: Dict[str, Any], output_payload: Dict[str, Any]):
-    """Stub for record_changelog - changelog functionality removed."""
-    pass  # Changelog disabled - focusing on WebSocket chat only
+    """Wrapper for record_changelog that passes our local dependencies."""
+    return _record_changelog_base(
+        db, project_id, branch_id, action, input_payload, output_payload,
+        ChangelogEntry=ChangelogEntry,
+        llm_summarize_action_fn=_llm_summarize_action
+    )
 
 def add_version(db: Session, project_id: int, branch_id: int, table_name: str,
                 row_id: int, column_name: str, old_value, new_value):
-    """Stub for add_version - changelog functionality removed."""
-    pass  # Changelog disabled - focusing on WebSocket chat only
+    """Wrapper for add_version that passes our local dependencies."""
+    return _add_version_base(
+        db, project_id, branch_id, table_name, row_id, column_name, old_value, new_value,
+        Version=Version
+    )
 
 # Shell wrapper functions for backwards compatibility
 def start_shell_job(script: str, shell_path: Optional[str] = None, trace_x: bool = False, workdir: Optional[str] = None) -> ShellJob:
@@ -286,10 +301,141 @@ def require_shell_enabled_and_auth(request: Request, x_api_token: Optional[str] 
 
 
 # ----------------------------------------------------------------------------------
+# Unified Logging System
+# ----------------------------------------------------------------------------------
+
+# Global logging buffers and context
+_LOG_BUFFER = deque(maxlen=1000)
+_SERVER_LOG_BUFFER = deque(maxlen=1000)
+_current_path: ContextVar[str] = ContextVar('current_path', default='')
+
+class CedarBufferHandler(_logging.Handler):
+    def emit(self, record: _logging.LogRecord) -> None:  # type: ignore[name-defined]
+        try:
+            ts = datetime.utcnow().isoformat() + "Z"
+            lvl = record.levelname.upper()
+            msg = record.getMessage()
+            url = ""  # HTTP middleware sets current path for logs during requests
+            try:
+                url = _current_path.get() or ""
+            except Exception:
+                url = ""
+            loc = f"{record.module}:{record.lineno}"
+            origin = f"server:{record.name}"
+            _SERVER_LOG_BUFFER.append({
+                "ts": ts,
+                "level": lvl,
+                "host": "127.0.0.1",  # local app
+                "origin": origin,
+                "url": url,
+                "loc": loc,
+                "ua": None,
+                "message": msg,
+                "stack": None,
+            })
+        except Exception:
+            # Never raise from handler
+            pass
+
+def _install_unified_logging() -> None:
+    try:
+        # Attach handler to root and common app servers
+        h = CedarBufferHandler()
+        h.setLevel(_logging.DEBUG)
+        root = _logging.getLogger()
+        root.addHandler(h)
+        root.setLevel(_logging.DEBUG)
+        for name in ("uvicorn", "uvicorn.error", "uvicorn.access", "fastapi", "starlette"):
+            lg = _logging.getLogger(name)
+            lg.addHandler(h)
+            lg.setLevel(_logging.DEBUG)
+        # Optionally patch print to also append to buffer (enabled by default; set CEDARPY_PATCH_PRINT=0 to disable)
+        if str(os.getenv("CEDARPY_PATCH_PRINT", "1")).strip().lower() not in {"0", "false", "no"}:
+            try:
+                _orig_print = _bi.print
+                def _cedar_print(*args, **kwargs):  # type: ignore[override]
+                    try:
+                        _orig_print(*args, **kwargs)
+                    finally:
+                        try:
+                            msg = " ".join([str(a) for a in args])
+                            loc = None
+                            # Best-effort caller info
+                            try:
+                                import inspect as _inspect
+                                fr = _inspect.currentframe()
+                                if fr and fr.f_back and fr.f_back.f_back:
+                                    co = fr.f_back.f_back.f_code
+                                    loc = f"{os.path.basename(co.co_filename)}:{co.co_firstlineno}"
+                            except Exception:
+                                loc = None
+                            _SERVER_LOG_BUFFER.append({
+                                "ts": datetime.utcnow().isoformat()+"Z",
+                                "level": "INFO",
+                                "host": "127.0.0.1",
+                                "origin": "server:print",
+                                "url": _current_path.get() if _current_path else "",
+                                "loc": loc or "print",
+                                "ua": None,
+                                "message": msg,
+                                "stack": None,
+                            })
+                        except Exception:
+                            pass
+                _bi.print = _cedar_print  # type: ignore[assignment]
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+# Install unified logging immediately
+_install_unified_logging()
+
+# ----------------------------------------------------------------------------------
 # FastAPI app
 # ----------------------------------------------------------------------------------
 
 app = FastAPI(title="Cedar")
+
+# Add error logging middleware
+@app.middleware("http")
+async def catch_exceptions_middleware(request: Request, call_next):
+    try:
+        return await call_next(request)
+    except Exception as e:
+        import traceback
+        print(f"[ERROR-MIDDLEWARE] Unhandled exception on {request.method} {request.url.path}")
+        print(f"[ERROR-MIDDLEWARE] Exception: {e}")
+        traceback.print_exc()
+        # Re-raise to let FastAPI handle it
+        raise
+
+# Register HTTP middleware for request logs
+@app.middleware("http")
+async def _cedar_logging_mw(request: Request, call_next):
+    path = str(getattr(request, "url", "") or "")
+    token = None
+    try:
+        token = _current_path.set(path)
+    except Exception:
+        token = None
+    start = _time.time()
+    try:
+        _logging.getLogger("cedarpy").debug(f"request.start {request.method} {request.url.path}")
+        resp = await call_next(request)
+        dur_ms = int((_time.time() - start) * 1000)
+        _logging.getLogger("cedarpy").debug(f"request.end {request.method} {request.url.path} status={getattr(resp,'status_code',None)} dur_ms={dur_ms}")
+        return resp
+    except Exception as e:
+        dur_ms = int((_time.time() - start) * 1000)
+        _logging.getLogger("cedarpy").exception(f"request.error {request.method} {request.url.path} dur_ms={dur_ms} error={type(e).__name__}: {e}")
+        raise
+    finally:
+        try:
+            if token is not None:
+                _current_path.reset(token)
+        except Exception:
+            pass
 
 # Register file upload routes
 try:
@@ -778,7 +924,12 @@ from cedar_app.utils.page_rendering import project_page_html
 # Import extracted functions
 from cedar_app.utils.file_upload import serve_project_upload as _serve_project_upload_impl, upload_file as _upload_file_impl
 from cedar_app.utils.sql_websocket import ws_sqlx as _ws_sqlx_impl
-from cedar_app.utils.test_tools import api_test_tool_exec as _api_test_tool_exec_impl
+
+# Test-only tool execution API (local + CEDARPY_TEST_MODE only)
+from cedar_app.utils.dev_tools import (
+    ToolExecRequest,
+    api_test_tool_exec as api_test_tool_exec_impl
+)
 
 
 
@@ -851,8 +1002,17 @@ async def ws_sql(websocket: WebSocket, project_id: int):
 #  - { "action": "exec", "sql": "...", "branch_id": 2 | null, "branch_name": "Main" | null, "max_rows": 200 }
 #  - { "action": "undo_last", "branch_id": 2 | null, "branch_name": "Main" | null }
 
-# Import ClientLogEntry for the client-log endpoint
-from cedar_app.utils.logging import ClientLogEntry, _LOG_BUFFER
+# Client log ingestion API (merges into _LOG_BUFFER)
+class ClientLogEntry(BaseModel):
+    when: Optional[str] = None
+    level: str
+    message: str
+    url: Optional[str] = None
+    line: Optional[int] = None
+    column: Optional[int] = None
+    stack: Optional[str] = None
+    userAgent: Optional[str] = None
+    origin: Optional[str] = None
 
 @app.post("/api/client-log")
 def api_client_log(entry: ClientLogEntry, request: Request):
@@ -895,6 +1055,11 @@ def api_client_log(entry: ClientLogEntry, request: Request):
 def api_chat_cancel_summary(payload: Dict[str, Any] = Body(...)):
     from cedar_app.utils.thread_management import api_chat_cancel_summary as _api_chat_cancel_summary
     return _api_chat_cancel_summary(app, payload)
+
+@app.post("/api/test/tool")
+def api_test_tool_exec(body: ToolExecRequest, request: Request):
+    """Tool execution endpoint for testing. Delegates to extracted module."""
+    return api_test_tool_exec_impl(body, request)
 
 # -------------------- Merge to Main (SQLite-first implementation) --------------------
 
@@ -1505,7 +1670,6 @@ def create_thread(project_id: int, request: Request, title: Optional[str] = Form
     try:
         # branch selected via query parameter
         branch_id = request.query_params.get("branch_id")
-    try:
         branch_id = int(branch_id) if branch_id is not None else None
     except Exception:
         branch_id = None
@@ -1552,6 +1716,7 @@ def create_thread(project_id: int, request: Request, title: Optional[str] = Form
 
     redirect_url = f"/project/{project.id}?branch_id={branch.id}&thread_id={t.id}" + (f"&file_id={file_obj.id}" if file_obj else "") + (f"&dataset_id={dataset_obj.id}" if dataset_obj else "") + "&msg=Thread+created"
 
+    try:
         # Optional JSON response for client-side creation
         if json_q is not None and str(json_q).strip() not in {"", "0", "false", "False", "no"}:
             return JSONResponse({"thread_id": t.id, "branch_id": branch.id, "redirect": redirect_url, "title": t.title})
