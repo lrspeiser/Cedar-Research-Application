@@ -27,6 +27,13 @@ try:
 except ImportError:
     FILE_PROCESSING_AVAILABLE = False
 
+# Import chief agent notes functionality
+try:
+    from .chief_agent_notes import ChiefAgentNoteTaker
+    NOTES_AVAILABLE = True
+except ImportError:
+    NOTES_AVAILABLE = False
+
 # Configure detailed logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -1145,7 +1152,8 @@ class ThinkerOrchestrator:
             "input": message,
             "analysis": "",
             "identified_type": "",
-            "agents_to_use": []
+            "agents_to_use": [],
+            "selection_reasoning": ""  # Add reasoning for agent selection
         }
         
         # Analyze the message
@@ -1153,43 +1161,52 @@ class ThinkerOrchestrator:
             thinking_process["identified_type"] = "mathematical_derivation"
             thinking_process["analysis"] = "This requires mathematical derivation from first principles"
             thinking_process["agents_to_use"] = ["MathAgent", "ReasoningAgent", "CodeAgent"]
+            thinking_process["selection_reasoning"] = "Math Agent for derivations, Reasoning Agent for step-by-step logic, Code Agent for verification"
         elif any(word in message.lower() for word in ["research", "sources", "citations", "find information", "web search", "literature"]):
             thinking_process["identified_type"] = "research_task"
             thinking_process["analysis"] = "This requires web research and finding sources"
             thinking_process["agents_to_use"] = ["ResearchAgent", "GeneralAgent", "NotesAgent"]
+            thinking_process["selection_reasoning"] = "Research Agent for finding sources, General Agent for context, Notes Agent to document findings"
         elif any(word in message.lower() for word in ["plan", "strategy", "steps to", "approach", "how should i", "coordinate"]):
             thinking_process["identified_type"] = "strategic_planning"
             thinking_process["analysis"] = "This requires strategic planning and coordination"
             thinking_process["agents_to_use"] = ["StrategyAgent", "ReasoningAgent", "GeneralAgent"]
+            thinking_process["selection_reasoning"] = "Strategy Agent for planning, Reasoning Agent for analysis, General Agent for comprehensive overview"
         elif any(word in message.lower() for word in ["calculate", "compute", "square root", "sqrt", "multiply", "divide", "add", "subtract", "sum", "product"]):
             thinking_process["identified_type"] = "mathematical_computation"
             thinking_process["analysis"] = "This is a mathematical computation requiring precise calculation"
             thinking_process["agents_to_use"] = ["CodeAgent", "MathAgent", "ReasoningAgent", "GeneralAgent"]
+            thinking_process["selection_reasoning"] = "4 agents for accuracy: Code for execution, Math for formula, Reasoning for logic, General for verification"
         elif any(word in message.lower() for word in ["code", "program", "function", "script", "algorithm"]):
             thinking_process["identified_type"] = "coding_task"
             thinking_process["analysis"] = "This requires code generation or programming"
             thinking_process["agents_to_use"] = ["CodeAgent", "StrategyAgent", "GeneralAgent"]
+            thinking_process["selection_reasoning"] = "Code Agent for implementation, Strategy Agent for design approach, General Agent for requirements"
         elif any(word in message.lower() for word in ["sql", "database", "query", "table", "select from", "data analysis"]):
             thinking_process["identified_type"] = "database_query"
             thinking_process["analysis"] = "This requires SQL query generation and execution"
             thinking_process["agents_to_use"] = ["DataAgent", "SQLAgent", "GeneralAgent"]
+            thinking_process["selection_reasoning"] = "Data Agent for schema analysis, SQL Agent for query generation, General Agent for interpretation"
         elif any(word in message.lower() for word in ["note", "remember", "save for later", "document", "summarize findings"]):
             thinking_process["identified_type"] = "note_taking"
             thinking_process["analysis"] = "This requires creating or managing notes"
             thinking_process["agents_to_use"] = ["NotesAgent", "GeneralAgent"]
+            thinking_process["selection_reasoning"] = "Notes Agent for documentation, General Agent for context (2 agents sufficient for this task)"
         elif any(word in message.lower() for word in ["explain", "why", "how", "what is", "define"]):
             thinking_process["identified_type"] = "explanation_query"
             thinking_process["analysis"] = "This requires detailed explanation or reasoning"
             thinking_process["agents_to_use"] = ["ReasoningAgent", "ResearchAgent", "GeneralAgent"]
+            thinking_process["selection_reasoning"] = "Reasoning Agent for logic, Research Agent for sources, General Agent for comprehensive explanation"
         else:
             thinking_process["identified_type"] = "general_query"
             thinking_process["analysis"] = "This is a general query"
             thinking_process["agents_to_use"] = ["GeneralAgent", "ReasoningAgent", "StrategyAgent"]
+            thinking_process["selection_reasoning"] = "General Agent for direct response, Reasoning Agent for analysis, Strategy Agent for approach planning"
             
         return thinking_process
         
-    async def orchestrate(self, message: str, websocket: WebSocket, iteration: int = 0, previous_results: List[AgentResult] = None):
-        """Full orchestration process controlled by Chief Agent decisions"""
+    async def orchestrate(self, message: str, websocket, iteration: int = 0, previous_results: List[AgentResult] = None, project_id: int = None, branch_id: int = None, db_session = None):
+        """Full orchestration process controlled by Chief Agent decisions with optional notes persistence"""
         orchestration_start = time.time()
         logger.info("="*80)
         logger.info(f"[ORCHESTRATOR] Starting orchestration for message: {message} (iteration: {iteration})")
@@ -1221,7 +1238,7 @@ class ThinkerOrchestrator:
         await websocket.send_json({
             "type": "action",
             "function": "processing",
-            "text": f"Analyzing request...\nType: {thinking['identified_type']}\nEngaging {len(thinking['agents_to_use'])} agents"
+            "text": f"Analyzing request...\nType: {thinking['identified_type']}\nEngaging {len(thinking['agents_to_use'])} specialized agents\n\nAgent Selection: {thinking['selection_reasoning']}"
         })
         await asyncio.sleep(0.5)  # Allow UI to set up streaming
         
@@ -1318,6 +1335,26 @@ class ThinkerOrchestrator:
         chief_decision = await self.chief_agent.review_and_decide(message, valid_results, iteration)
         logger.info(f"[ORCHESTRATOR] Chief Agent decision: {chief_decision.get('decision')}")
         
+        # Save notes if we have a database session and project context
+        if NOTES_AVAILABLE and db_session and project_id and branch_id:
+            try:
+                note_taker = ChiefAgentNoteTaker(project_id, branch_id, db_session)
+                note_id = await note_taker.save_agent_notes(
+                    agent_results=valid_results,
+                    user_query=message, 
+                    chief_decision=chief_decision
+                )
+                if note_id:
+                    logger.info(f"[ORCHESTRATOR] Saved notes to database with ID: {note_id}")
+                    # Optionally send notification to websocket
+                    await websocket.send_json({
+                        "type": "note_saved",
+                        "note_id": note_id,
+                        "message": "Analysis saved to Notes"
+                    })
+            except Exception as e:
+                logger.warning(f"[ORCHESTRATOR] Failed to save notes: {e}")
+        
         # Handle clarification needs (still handled by individual agents)
         needs_clarification = any(r.needs_clarification for r in valid_results)
         
@@ -1356,7 +1393,7 @@ class ThinkerOrchestrator:
             await asyncio.sleep(0.3)
             
             # Start next iteration with Chief Agent's guidance
-            return await self.orchestrate(enhanced_message, websocket, iteration + 1, valid_results)
+            return await self.orchestrate(enhanced_message, websocket, iteration + 1, valid_results, project_id, branch_id, db_session)
         
         # Chief Agent has made final decision - prepare the response
         final_answer = chief_decision.get('final_answer', '')

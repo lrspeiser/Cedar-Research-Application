@@ -1573,3 +1573,8 @@ from cedar_app.utils.file_operations import (
 def upload_file(project_id: int, request: Request, file: UploadFile = File(...), db: Session = Depends(get_project_db)):
     """Route handler for file uploads. Delegates to extracted module."""
     return upload_file_impl(project_id, request, file, db)
+
+# Start the server if run directly
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

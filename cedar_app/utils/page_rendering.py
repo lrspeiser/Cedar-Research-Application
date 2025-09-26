@@ -571,6 +571,8 @@ def project_page_html(
       function startRunningTimer(node, t0){
         try {
           if (!node) return;
+          // Clear any existing timer first
+          _clearRunningTimer();
           var target = (function(){ try { return node.querySelector('.meta .title'); } catch(_) { return null; } })() || node;
           _timerEl = document.createElement('span');
           _timerEl.className = 'small muted';
@@ -579,8 +581,8 @@ def project_page_html(
           var lastText = '';
           _timerId = setInterval(function(){
             try {
-              // Check if element still exists in DOM
-              if (!_timerEl || !_timerEl.parentNode) {
+              // Check if element still exists in DOM or if we've reached a final state
+              if (!_timerEl || !_timerEl.parentNode || finalOrError) {
                 _clearRunningTimer();
                 return;
               }
@@ -596,6 +598,7 @@ def project_page_html(
       function stepAdvance(label, node){
         var now = _now();
         try {
+          // Stop timer for previous step
           if (currentStep && currentStep.node){
             var dt = now - currentStep.t0;
             _clearRunningTimer();
@@ -607,8 +610,9 @@ def project_page_html(
             } catch(_) {}
           }
         } catch(_){ }
+        // Only start a new timer if not in a final state
         currentStep = { label: String(label||''), t0: now, node: node || null };
-        if (node) { startRunningTimer(node, now); }
+        if (node && !finalOrError) { startRunningTimer(node, now); }
       }
 
       // Variables for backend-driven UI
@@ -1391,7 +1395,7 @@ def project_page_html(
       try {
         if (UPLOAD_AUTOCHAT && !window.__uploadAutoChatStarted) {
           var sp = new URLSearchParams(location.search || '');
-          var msg = (sp.get('msg')||'').replace(/\+/g,' ');
+  var msg = (sp.get('msg')||'').replace(/\\+/g,' ');
           var tid0 = sp.get('thread_id') || (chatForm && chatForm.getAttribute('data-thread-id')) || null;
           var fid0 = sp.get('file_id') || (chatForm && chatForm.getAttribute('data-file-id')) || null;
           var dsid0 = sp.get('dataset_id') || (chatForm && chatForm.getAttribute('data-dataset-id')) || null;
@@ -1525,13 +1529,6 @@ def project_page_html(
       <div class=\"muted small\">Project ID: {project.id}</div>
       <div style=\"height:10px\"></div>
       <div>Branches: {tabs_html}</div>
-
-      <div style="margin-top:8px; display:flex; gap:8px; align-items:center">
-        <form method="post" action="/project/{project.id}/delete" class="inline" 
-              onsubmit="return confirmProjectDelete('{escape(project.title)}');">
-          <button type="submit" class="secondary" style="background-color: #ef4444; color: white; border-color: #dc2626;">Delete Project</button>
-        </form>
-      </div>
       
       <script>
       function confirmProjectDelete(projectName) {{
@@ -1592,6 +1589,7 @@ def project_page_html(
               <a href="#" class="tab" data-target="right-code">Code</a>
               <a href="#" class="tab" data-target="right-dbs">Databases</a>
               <a href="#" class="tab" data-target="right-notes">Notes</a>
+            </div>
             <div class="tab-panels">
               <div id="right-history" class="panel hidden">
                 {history_panel_html}
@@ -1630,6 +1628,14 @@ def project_page_html(
             </div>
           </div>
       </div>
+    </div>
+    
+    <!-- Delete button at bottom right corner -->
+    <div style="position: fixed; bottom: 20px; right: 20px; z-index: 100;">
+      <form method="post" action="/project/{project.id}/delete" class="inline" 
+            onsubmit="return confirmProjectDelete('{escape(project.title)}');">
+        <button type="submit" class="secondary" style="background-color: #ef4444; color: white; border-color: #dc2626; padding: 8px 16px; border-radius: 6px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">Delete Project</button>
+      </form>
     </div>
 
     """

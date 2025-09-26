@@ -195,8 +195,30 @@ async def handle_ws_chat(
                     if project_id and chat_number:
                         ws_to_use = PersistentWebSocket(websocket, chat_manager, project_id, branch_id, chat_number)
                     
-                    # Process with advanced orchestrator
-                    await orchestrator.orchestrate(content, ws_to_use)
+                    # Get database session if available for notes
+                    db_session = None
+                    if project_id and hasattr(deps, 'RegistrySessionLocal'):
+                        try:
+                            db_session = deps.RegistrySessionLocal()
+                        except Exception as e:
+                            logger.warning(f"Could not get database session for notes: {e}")
+                    
+                    # Process with advanced orchestrator (with optional notes persistence)
+                    try:
+                        await orchestrator.orchestrate(
+                            content, 
+                            ws_to_use,
+                            project_id=project_id,
+                            branch_id=branch_id,
+                            db_session=db_session
+                        )
+                    finally:
+                        # Clean up database session
+                        if db_session:
+                            try:
+                                db_session.close()
+                            except:
+                                pass
                     
                     orchestration_time = time.time() - orchestration_start
                     logger.info("*"*80)
