@@ -662,7 +662,9 @@ def project_page_html(
 
       // Optimistic local echo of the user's message so the UI shows instant feedback
       try {
+        console.log('[DEBUG] User bubble creation check:', 'msgs:', !!msgs, 'text:', text, 'replay:', replay);
         if (msgs && text && !replay) {
+          console.log('[DEBUG] Creating user bubble for:', text);
           var wrapU = document.createElement('div'); wrapU.className = 'msg user';
           wrapU.setAttribute('data-temp', '1');
           var metaU = document.createElement('div'); metaU.className = 'meta small'; metaU.style.height = '1px'; // Empty meta for user messages
@@ -673,8 +675,13 @@ def project_page_html(
           msgs.appendChild(wrapU);
           optimisticUser = wrapU;
           stepAdvance('user:local', wrapU);
+          console.log('[DEBUG] User bubble created successfully');
+        } else {
+          console.log('[DEBUG] User bubble NOT created - conditions not met');
         }
-      } catch(_){ }
+      } catch(e){ 
+        console.error('[DEBUG] Error creating user bubble:', e);
+      }
 
       var wsScheme = (location.protocol === 'https:') ? 'wss' : 'ws';
       var ws = new WebSocket(wsScheme + '://' + location.host + '/ws/chat/' + PROJECT_ID);

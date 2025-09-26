@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test User Bubble</title>
+    <style>
+        .msg { margin: 10px 0; }
+        .msg.user { text-align: right; }
+        .bubble { 
+            padding: 10px; 
+            border-radius: 10px; 
+            background: #e0e0e0; 
+            margin: 5px 0;
+            display: inline-block;
+        }
+        .bubble.user { background: #f3e5f5; }
+        .content { white-space: pre-wrap; }
+        .meta { font-size: 12px; color: #666; }
+        .meta.small { height: 1px; }
+    </style>
+</head>
+<body>
+    <h1>User Bubble Test</h1>
+    <div id="msgs" style="border: 1px solid #ccc; padding: 10px; min-height: 200px;">
+        <div class="muted small">(No messages yet)</div>
+    </div>
+    
+    <form id="testForm">
+        <input type="text" id="testInput" value="Test message" />
+        <button type="submit">Test User Bubble</button>
+    </form>
+    
+    <button onclick="testDirect()">Test Direct Creation</button>
+    
+    <script>
+        // Test form submission
+        document.getElementById('testForm').addEventListener('submit', function(ev) {
+            ev.preventDefault();
+            var text = document.getElementById('testInput').value;
+            console.log('Form submitted with text:', text);
+            createUserBubble(text);
+        });
+        
+        // Test direct creation
+        function testDirect() {
+            console.log('Direct test');
+            createUserBubble('Direct test message');
+        }
+        
+        function createUserBubble(text) {
+            console.log('Creating user bubble with text:', text);
+            
+            var msgs = document.getElementById('msgs');
+            console.log('msgs element:', msgs);
+            console.log('text value:', text);
+            console.log('text is truthy:', !!text);
+            
+            // Clear placeholder if exists
+            try {
+                var placeholder = msgs.querySelector('.muted');
+                if (placeholder) {
+                    console.log('Removing placeholder');
+                    placeholder.remove();
+                }
+            } catch(e) {
+                console.error('Error removing placeholder:', e);
+            }
+            
+            // This is the exact code from page_rendering.py
+            try {
+                if (msgs && text) {
+                    console.log('Creating bubble elements...');
+                    var wrapU = document.createElement('div'); 
+                    wrapU.className = 'msg user';
+                    wrapU.setAttribute('data-temp', '1');
+                    
+                    var metaU = document.createElement('div'); 
+                    metaU.className = 'meta small'; 
+                    metaU.style.height = '1px'; // Empty meta for user messages
+                    
+                    var bubU = document.createElement('div'); 
+                    bubU.className = 'bubble user';
+                    
+                    var contU = document.createElement('div'); 
+                    contU.className='content'; 
+                    contU.style.whiteSpace='pre-wrap';
+                    contU.textContent = String(text||'');
+                    
+                    console.log('Appending elements...');
+                    bubU.appendChild(contU); 
+                    wrapU.appendChild(metaU); 
+                    wrapU.appendChild(bubU);
+                    msgs.appendChild(wrapU);
+                    console.log('User bubble created successfully!');
+                } else {
+                    console.log('Conditions not met:', 'msgs:', !!msgs, 'text:', !!text);
+                }
+            } catch(e) { 
+                console.error('Error creating bubble:', e);
+            }
+        }
+    </script>
+</body>
+</html>
