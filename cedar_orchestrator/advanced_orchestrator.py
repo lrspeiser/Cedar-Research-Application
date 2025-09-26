@@ -415,7 +415,7 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
             
             return AgentResult(
                 agent_name="CodeAgent",
-                display_name="Code Executor",
+                display_name="Code Agent",
                 result=f"**Agent Failure Report:**\n\nThe Code Agent was unable to process your request due to missing LLM configuration.\n\n**Error Details:**\n{error_details}\n\n**What the Chief Agent should know:**\nThis agent requires an LLM to generate and execute code. Without it, no code generation is possible.",
                 confidence=0.0,
                 method="Configuration Error",
@@ -468,7 +468,7 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
             if "unclear" in task.lower() or "ambiguous" in task.lower() or task.count('?') > 2:
                 return AgentResult(
                     agent_name="CodeAgent",
-                    display_name="Code Executor",
+                    display_name="Code Agent",
                     result="Results So Far: Unable to generate code due to unclear requirements\n\nNext Steps: Clarify the specific calculation or operation needed",
                     confidence=0.2,
                     method="Needs clarification",
@@ -599,7 +599,7 @@ Model: {model if 'model' in locals() else 'Not determined'}"""
             
             return AgentResult(
                 agent_name="CodeAgent",
-                display_name="Code Executor",
+                display_name="Code Agent",
                 result=f"**Code Generation Failed:**\n\nThe Code Agent encountered an error while generating code.\n\n**Error Details:**\n```\n{error_details}\n```\n\n**Common Causes:**\n- OpenAI API rate limit or timeout\n- Invalid API key or permissions\n- Network connectivity issues\n- Model-specific parameter errors\n\n**Suggested Fix:**\nCheck the error message above and ensure your API configuration is correct.",
                 confidence=0.1,
                 method=f"Error: {error_type}",
@@ -1181,7 +1181,7 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
                         "role": "system",
                         "content": """You are a strategic planning expert. Create detailed action plans that include:
                         1. Breaking down the problem into manageable steps
-                        2. Identifying which specialized agents should be used (available agents: Code Executor, Math Agent, Research Agent, Data Agent, Notes Agent, Logical Reasoner, General Assistant)
+                        2. Identifying which specialized agents should be used (available agents: Code Agent, Math Agent, Research Agent, Data Agent, Notes Agent, Logical Reasoner, General Assistant)
                         3. Determining the sequence of operations
                         4. Specifying how to gather source material
                         5. How to analyze data and compile results
@@ -1793,7 +1793,7 @@ WHEN REVIEWING RESULTS, ASK:
 
 DETAILED AGENT CAPABILITIES - READ CAREFULLY:
 
-1. 💻 CODING AGENT (Code Executor)
+1. 💻 CODING AGENT (Code Agent)
    ✅ CAN: Write and execute Python code, perform calculations, data analysis, create visualizations
    ✅ CAN: Process data, run statistical tests, implement algorithms, generate plots
    ❌ CANNOT: Access files on disk, search the filesystem, run shell commands
@@ -2439,7 +2439,7 @@ I've analyzed your request as a {thinking['identified_type'].replace('_', ' ')}.
                     agent_name = agent.__class__.__name__
                     # Map agent to display name
                     agent_display_names = {
-                        "CodeAgent": "Code Executor",
+                        "CodeAgent": "Code Agent",
                         "ShellAgent": "Shell Executor",
                         "ReasoningAgent": "Logical Reasoner",
                         "SQLAgent": "SQL Agent",
@@ -2711,7 +2711,7 @@ Please provide this information so I can better assist you."""
         # Send final response with Chief Agent attribution
         await websocket.send_json({
             "type": "message",
-            "role": selected_agent if selected_agent != 'combined' else 'The Chief Agent',
+            "role": 'The Chief Agent',  # Always show Chief Agent as the final responder
             "text": final_text,
             "metadata": {
                 "selected_agent": selected_agent,
