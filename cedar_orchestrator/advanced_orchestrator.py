@@ -94,7 +94,7 @@ class ShellAgent:
         exec_match = re.search(r'(?:Execute|Run|Command):\s*(.+?)(?:\n|$)', task, re.IGNORECASE)
         
         # Pattern 3: Command in quotes after shell-related keywords
-        quote_match = re.search(r'(?:run|execute|shell)\s+["']([^"']+)["']', task, re.IGNORECASE)
+        quote_match = re.search(r'(?:run|execute|shell)\s+["\']([^"\']]+)["\']', task, re.IGNORECASE)
         
         # Pattern 4: The entire task is the command (if it starts with common shell commands)
         shell_commands = ['ls', 'cd', 'pwd', 'grep', 'find', 'cat', 'echo', 'pip', 'npm', 'brew', 'apt-get', 'chmod', 'mkdir', 'rm', 'cp', 'mv', 'curl', 'wget', 'git', 'docker', 'python', 'node']
