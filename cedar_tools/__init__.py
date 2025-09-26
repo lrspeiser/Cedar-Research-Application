@@ -6,16 +6,18 @@ Troubleshooting: see README "Troubleshooting LLM failures" for guidance.
 """
 from __future__ import annotations
 
-from cedar_tools_modules.web import tool_web  # type: ignore
-from cedar_tools_modules.download import tool_download  # type: ignore
-from cedar_tools_modules.extract import tool_extract  # type: ignore
-from cedar_tools_modules.image import tool_image  # type: ignore
-from cedar_tools_modules.db import tool_db  # type: ignore
-from cedar_tools_modules.code import tool_code  # type: ignore
-from cedar_tools_modules.shell import tool_shell  # type: ignore
-from cedar_tools_modules.notes import tool_notes  # type: ignore
-from cedar_tools_modules.compose import tool_compose  # type: ignore
-from cedar_tools_modules.tabular_import import tool_tabular_import  # type: ignore
+# Import tool functions from local package modules
+# Keys & Troubleshooting: see README sections referenced in each module
+from .web import tool_web  # type: ignore
+from .download import tool_download  # type: ignore
+from .extract import tool_extract  # type: ignore
+from .image import tool_image  # type: ignore
+from .db import tool_db  # type: ignore
+from .code import tool_code  # type: ignore
+from .shell import tool_shell  # type: ignore
+from .notes import tool_notes  # type: ignore
+from .compose import tool_compose  # type: ignore
+from .tabular_import import tool_tabular_import  # type: ignore
 
 __all__ = [
     "tool_web",

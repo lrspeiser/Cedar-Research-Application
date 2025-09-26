@@ -253,7 +253,15 @@ def get_db() -> Session:
 
 
 from main_helpers import escape, ensure_main_branch, file_extension_to_type, branch_filter_ids, current_branch
-import cedar_tools as ct
+try:
+    import cedar_tools as ct
+except Exception as e:
+    # Allow server to start even if optional cedar_tools modules are not installed
+    try:
+        print(f"[startup] cedar_tools unavailable: {type(e).__name__}: {e}")
+    except Exception:
+        pass
+    ct = None  # type: ignore
 
 
 def record_changelog(db: Session, project_id: int, branch_id: int, action: str, input_payload: Dict[str, Any], output_payload: Dict[str, Any]):
@@ -1450,7 +1458,7 @@ def create_project(title: str = Form(...), db: Session = Depends(get_registry_db
             initialization_note = Note(
                 project_id=p.id,
                 branch_id=main_branch.id,
-                content=f"📌 Project created on {friendly_time}",
+                content=f"Project started on {friendly_time}",
                 title="Project Initialization",
                 note_type="system",
                 agent_name="System",

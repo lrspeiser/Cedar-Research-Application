@@ -33,7 +33,7 @@ var answerMatch = fullText.match(/Answer:\\s*([^\\n]+...)/);
 1. **User sends query** via WebSocket to `/ws/chat/{project_id}`
 2. **Thinker analyzes** the query type (mathematical, coding, explanation, etc.)
 3. **Orchestrator dispatches** to relevant agents in parallel:
-   - Code Executor (for calculations)
+   - Coding Agent (for calculations)
    - Logical Reasoner (for step-by-step analysis)
    - General Assistant (for direct answers)
    - SQL Agent (for database queries)

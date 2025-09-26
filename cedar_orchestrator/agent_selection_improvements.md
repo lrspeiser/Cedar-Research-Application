@@ -126,7 +126,7 @@ Complexity Assessment: High (score: 5/6)
 Selecting 5 specialized agents for this task:
 • Math Agent - For mathematical derivation from first principles
 • Research Agent - To find relevant sources and prior work
-• Code Executor - To verify calculations programmatically  
+• Coding Agent - To verify calculations programmatically  
 • Reasoning Agent - For step-by-step logical analysis
 • Notes Agent - To document important findings
 

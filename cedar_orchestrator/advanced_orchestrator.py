@@ -2408,6 +2408,7 @@ I've analyzed your request as a {thinking['identified_type'].replace('_', ' ')}.
         for i, result in enumerate(results):
             if isinstance(result, AgentResult):
                 logger.info(f"[ORCHESTRATOR] Result {i+1}: {result.agent_name} - Confidence: {result.confidence:.2f}, Method: {result.method}")
+                logger.info(f"[ORCHESTRATOR] Result {i+1} UI label: {result.display_name}")
                 logger.info(f"[ORCHESTRATOR] Result {i+1} content: {result.result[:200]}...")
                 
                 # Send agent completion status with display name
@@ -2709,26 +2710,31 @@ Please provide this information so I can better assist you."""
             final_text += f"\n_✅ Processed in {total_time:.1f}s_"
         
         # Send final response with Chief Agent attribution
+        # Send as 'final' type to stop the frontend timer
+        logger.info("[ORCHESTRATOR] Sending final message with type='final'")
         await websocket.send_json({
-            "type": "message",
-            "role": 'The Chief Agent',  # Always show Chief Agent as the final responder
+            "type": "final",
             "text": final_text,
-            "metadata": {
+            "json": {
+                "function": "orchestration_complete",
+                "role": 'The Chief Agent',
                 "selected_agent": selected_agent,
                 "chief_reasoning": reasoning,
                 "confidence": max([r.confidence for r in valid_results]) if valid_results else 0.0,
                 "method": "Chief Agent Decision",
                 "orchestration_time": total_time,
-                "all_results": [
-                    {
-                        "agent": r.agent_name,
-                        "result": r.result,
-                        "summary": r.summary,
-                        "confidence": r.confidence,
-                        "method": r.method,
-                        "explanation": r.explanation
-                    } for r in valid_results
-                ]
+                "metadata": {
+                    "all_results": [
+                        {
+                            "agent": r.agent_name,
+                            "result": r.result,
+                            "summary": r.summary,
+                            "confidence": r.confidence,
+                            "method": r.method,
+                            "explanation": r.explanation
+                        } for r in valid_results
+                    ]
+                }
             }
         })
         logger.info("="*80)

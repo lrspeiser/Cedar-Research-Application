@@ -20,27 +20,86 @@ from main_helpers import current_branch, add_version
 
 def create_project(title: str = Form(...), db: Session = Depends(get_registry_db)):
     """
-    Create a new project in the registry.
-    Initializes storage directories and creates main branch.
+    Create a new project in the registry and initialize per-project DB/storage.
+    Also seeds an initialization note and registers the "Notes" dataset so the
+    UI can display it immediately on first load.
     """
-    # Create project record
-    project = Project(title=title.strip()[:100])
+    from sqlalchemy.orm import sessionmaker
+    from datetime import datetime, timezone
+    from main_models import Note, Dataset
+    from main_helpers import ensure_main_branch
+    from ..db_utils import _get_project_engine
+
+    t = (title or "").strip()[:100]
+    if not t:
+        return RedirectResponse("/", status_code=303)
+
+    # Create project record in registry
+    project = Project(title=t)
     db.add(project)
     db.commit()
     db.refresh(project)
-    
+
     # Initialize project storage and database
     try:
         _ensure_project_storage(project.id)
         ensure_project_initialized(project.id)
+
+        # Open per-project DB session to seed initial data for UI
+        eng = _get_project_engine(project.id)
+        SessionLocal = sessionmaker(bind=eng, autoflush=False, autocommit=False, future=True)
+        pdb = SessionLocal()
+        try:
+            # Mirror project row if missing
+            if not pdb.query(Project).filter(Project.id == project.id).first():
+                pdb.add(Project(id=project.id, title=project.title))
+                pdb.commit()
+
+            # Ensure Main branch exists
+            main_branch = ensure_main_branch(pdb, project.id)
+
+            # Seed initialization note using requested wording
+            creation_time = datetime.now(timezone.utc)
+            friendly_time = creation_time.strftime("%B %d, %Y at %I:%M %p %Z")
+            init_note = Note(
+                project_id=project.id,
+                branch_id=main_branch.id,
+                content=f"Project started on {friendly_time}",
+                title="Project Initialization",
+                note_type="system",
+                agent_name="System",
+                priority=0,
+                tags=["project-init", "system"],
+            )
+            pdb.add(init_note)
+            pdb.commit()
+
+            # Register Notes dataset so it appears in Databases tab
+            notes_ds = Dataset(
+                project_id=project.id,
+                branch_id=main_branch.id,
+                name="Notes",
+                description="Project notes and documentation created by agents and users",
+            )
+            pdb.add(notes_ds)
+            pdb.commit()
+        finally:
+            try:
+                pdb.close()
+            except Exception:
+                pass
+
     except Exception as e:
-        # Rollback on failure
-        db.delete(project)
-        db.commit()
+        # Rollback registry record on failure to avoid dangling entries
+        try:
+            db.delete(project)
+            db.commit()
+        except Exception:
+            db.rollback()
         raise e
-    
-    # Redirect to the new project
-    return RedirectResponse(f"/project/{project.id}?msg=Project+created", status_code=303)
+
+    # Redirect to the new project main branch
+    return RedirectResponse(f"/project/{project.id}?branch_id=1&msg=Project+created", status_code=303)
 
 
 def create_thread(project_id: int, request: Request, title: Optional[str] = Form(None), db: Session = Depends(get_project_db)):

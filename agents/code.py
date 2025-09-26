@@ -1,5 +1,11 @@
 """
+LEGACY MODULE (not used by the current WebSocket multi-agent orchestrator)
+
 Code agent - writes and executes code.
+
+Notes:
+- The live WS orchestrator defines its own CodeAgent class in cedar_orchestrator/advanced_orchestrator.py
+- Keep this file only for backward-compat tests; do not extend for new features
 """
 
 from agents.base_agent import BaseAgent, AgentContext, AgentResult
