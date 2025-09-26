@@ -203,29 +203,35 @@ def project_page_html(
         """)
     thread_tbody = ''.join(thread_rows) if thread_rows else '<tr><td colspan="3" class="muted">No threads yet.</td></tr>'
 
-    # datasets table (placeholder list)
+    # datasets table - show Notes database specially
     dataset_rows = []
-    for d in datasets:
-        dataset_rows.append(f"""
-           <tr>
-             <td><a href='/project/{project.id}/threads/new?branch_id={current.id}&dataset_id={d.id}' class='thread-create' data-dataset-id='{d.id}'>{escape(d.name)}</a></td>
-             <td>{escape(d.branch.name if d.branch else '')}</td>
-             <td class=\"small muted\">{d.created_at:%Y-%m-%d %H:%M:%S} UTC</td>
-           </tr>
-        """)
-    # Add Notes database as a special entry
+    notes_dataset = None
     notes_count = len(notes) if notes else 0
-    notes_db_row = f'''
-        <tr style="background-color: #f0f9ff">
-            <td><strong>📝 Notes Database</strong></td>
-            <td>{escape(current.name)}</td>
-            <td class="small muted">{notes_count} notes</td>
-        </tr>
-    '''
     
-    # Combine all database rows
-    all_db_rows = notes_db_row + ''.join(dataset_rows)
-    dataset_tbody = all_db_rows if (notes_count > 0 or dataset_rows) else '<tr><td colspan="3" class="muted">No databases yet.</td></tr>'
+    for d in datasets:
+        if d.name == "Notes":
+            # Special display for Notes database
+            notes_dataset = d
+            dataset_rows.insert(0, f'''
+               <tr style="background-color: #f0f9ff">
+                 <td><a href='/project/{project.id}/threads/new?branch_id={current.id}&dataset_id={d.id}' class='thread-create' data-dataset-id='{d.id}'>
+                    <strong>📝 {escape(d.name)} Database</strong>
+                 </a></td>
+                 <td>{escape(d.branch.name if d.branch else '')}</td>
+                 <td class="small muted">{notes_count} notes • {d.created_at:%Y-%m-%d %H:%M:%S} UTC</td>
+               </tr>
+            ''')
+        else:
+            # Regular database entry
+            dataset_rows.append(f"""
+               <tr>
+                 <td><a href='/project/{project.id}/threads/new?branch_id={current.id}&dataset_id={d.id}' class='thread-create' data-dataset-id='{d.id}'>{escape(d.name)}</a></td>
+                 <td>{escape(d.branch.name if d.branch else '')}</td>
+                 <td class=\"small muted\">{d.created_at:%Y-%m-%d %H:%M:%S} UTC</td>
+               </tr>
+            """)
+    
+    dataset_tbody = ''.join(dataset_rows) if dataset_rows else '<tr><td colspan="3" class="muted">No databases yet.</td></tr>'
 
     # message
     flash = f"<div class='muted' style='margin-bottom:8px'>{escape(msg)}</div>" if msg else ""

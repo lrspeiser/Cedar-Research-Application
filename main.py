@@ -1252,7 +1252,7 @@ def create_project(title: str = Form(...), db: Session = Depends(get_registry_db
     """Create a new project."""
     from main_helpers import ensure_main_branch, add_version
     from sqlalchemy.orm import sessionmaker
-    from main_models import Note
+    from main_models import Note, Dataset
     from datetime import datetime, timezone
     
     title = title.strip()
@@ -1295,6 +1295,17 @@ def create_project(title: str = Form(...), db: Session = Depends(get_registry_db
             pdb.add(initialization_note)
             pdb.commit()
             print(f"[create-project] Added initialization note for project {p.id}")
+            
+            # Create Notes database entry in datasets table so it shows in Databases tab
+            notes_dataset = Dataset(
+                project_id=p.id,
+                branch_id=main_branch.id,
+                name="Notes",
+                description="Project notes and documentation created by agents and users"
+            )
+            pdb.add(notes_dataset)
+            pdb.commit()
+            print(f"[create-project] Created Notes database entry for project {p.id}")
             
         finally:
             pdb.close()
@@ -1482,10 +1493,18 @@ def create_branch(project_id: int, name: str = Form(...), db: Session = Depends(
 @app.get("/project/{project_id}/threads/new")
 # LLM chat uses threads. If using the GET '/threads/new', a default title 'New Thread' is created
 # and the user is redirected to the project page focusing the new tab. See README for LLM setup.
-def create_thread(project_id: int, request: Request, title: Optional[str] = Form(None), db: Session = Depends(get_project_db)):
+def create_thread(project_id: int, request: Request, title: Optional[str] = Form(None)):
     ensure_project_initialized(project_id)
-    # branch selected via query parameter
-    branch_id = request.query_params.get("branch_id")
+    
+    # Get project database session
+    eng = _get_project_engine(project_id)
+    from sqlalchemy.orm import sessionmaker
+    SessionLocal = sessionmaker(bind=eng, autoflush=False, autocommit=False, future=True)
+    db = SessionLocal()
+    
+    try:
+        # branch selected via query parameter
+        branch_id = request.query_params.get("branch_id")
     try:
         branch_id = int(branch_id) if branch_id is not None else None
     except Exception:
@@ -1533,12 +1552,14 @@ def create_thread(project_id: int, request: Request, title: Optional[str] = Form
 
     redirect_url = f"/project/{project.id}?branch_id={branch.id}&thread_id={t.id}" + (f"&file_id={file_obj.id}" if file_obj else "") + (f"&dataset_id={dataset_obj.id}" if dataset_obj else "") + "&msg=Thread+created"
 
-    # Optional JSON response for client-side creation
-    if json_q is not None and str(json_q).strip() not in {"", "0", "false", "False", "no"}:
-        return JSONResponse({"thread_id": t.id, "branch_id": branch.id, "redirect": redirect_url, "title": t.title})
+        # Optional JSON response for client-side creation
+        if json_q is not None and str(json_q).strip() not in {"", "0", "false", "False", "no"}:
+            return JSONResponse({"thread_id": t.id, "branch_id": branch.id, "redirect": redirect_url, "title": t.title})
 
-    # Redirect to focus the newly created thread
-    return RedirectResponse(redirect_url, status_code=303)
+        # Redirect to focus the newly created thread
+        return RedirectResponse(redirect_url, status_code=303)
+    finally:
+        db.close()
 
 
 @app.post("/project/{project_id}/ask")
