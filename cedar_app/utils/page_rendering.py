@@ -1244,15 +1244,29 @@ def project_page_html(
         } else if (m.type === 'error') {
           finalOrError = true;
           try { if (timeoutId) clearTimeout(timeoutId); } catch(_){}
-          streamText.textContent = '[error] ' + (m.error || 'unknown'); ackEvent(m);
+          // Check for error in both 'error' and 'content' fields (backend inconsistency)
+          var errorMsg = m.error || m.content || m.text || 'Unknown error occurred';
+          streamText.textContent = '[error] ' + errorMsg; ackEvent(m);
           clearSpinner();
           _clearRunningTimer(); // Stop any running timer on error
           try {
             // Also append a system bubble with error details for visibility in the thread
             var wrapE = document.createElement('div'); wrapE.className = 'msg system';
-            var metaE = document.createElement('div'); metaE.className = 'meta small'; metaE.innerHTML = "<span class='pill'>system</span> <span class='title' style='font-weight:600'>error</span>";
+            var metaE = document.createElement('div'); metaE.className = 'meta small'; metaE.innerHTML = "<span class='pill'>system</span> <span class='title' style='font-weight:600'>Error Details</span>";
             var bubE = document.createElement('div'); bubE.className = 'bubble system';
-            var contE = document.createElement('div'); contE.className = 'content'; contE.style.whiteSpace = 'pre-wrap'; contE.textContent = String(m.error||'unknown');
+            var contE = document.createElement('div'); contE.className = 'content'; contE.style.whiteSpace = 'pre-wrap'; 
+            contE.textContent = 'Error: ' + String(errorMsg);
+            // Add click handler to view full error details if available
+            if (m.details || m.stack) {
+              contE.style.cursor = 'pointer';
+              contE.title = 'Click to view full error details';
+              contE.addEventListener('click', function() {
+                var details = '';
+                if (m.details) details += 'Details: ' + m.details + '\n';
+                if (m.stack) details += 'Stack: ' + m.stack;
+                alert(details || 'No additional details available');
+              });
+            }
             bubE.appendChild(contE); wrapE.appendChild(metaE); wrapE.appendChild(bubE);
             if (msgs) msgs.appendChild(wrapE);
           } catch(_){}

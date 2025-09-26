@@ -7,6 +7,7 @@ import os
 import logging
 import json
 import time
+import traceback
 from typing import Optional
 from fastapi import WebSocket, FastAPI
 from cedar_orchestrator.advanced_orchestrator import ThinkerOrchestrator
@@ -138,7 +139,8 @@ async def handle_ws_chat(
                         logger.warning("[WebSocket] Empty message received, sending error")
                         await websocket.send_json({
                             "type": "error",
-                            "content": "Empty message received"
+                            "error": "Empty message received",
+                            "content": "Empty message received"  # Keep both for backward compatibility
                         })
                         continue
                     
@@ -260,14 +262,18 @@ async def handle_ws_chat(
                     logger.warning(f"Unknown message format: {msg_info}")
                     await websocket.send_json({
                         "type": "error",
-                        "content": f"Unknown message format: {msg_info}"
+                        "error": f"Unknown message format: {msg_info}",
+                        "content": f"Unknown message format: {msg_info}"  # Keep both for backward compatibility
                     })
                     
             except Exception as e:
                 logger.error(f"Error processing message: {e}")
                 await websocket.send_json({
                     "type": "error",
-                    "content": f"Error processing message: {str(e)}"
+                    "error": f"Error processing message: {str(e)}",
+                    "content": f"Error processing message: {str(e)}",  # Keep both for backward compatibility
+                    "details": str(e),
+                    "stack": traceback.format_exc() if logger.isEnabledFor(logging.DEBUG) else None
                 })
                 
     except Exception as e:
