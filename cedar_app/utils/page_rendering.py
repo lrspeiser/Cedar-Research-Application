@@ -1269,7 +1269,7 @@ def project_page_html(
               contE.title = 'Click to view full error details';
               contE.addEventListener('click', function() {
                 var details = '';
-                if (m.details) details += 'Details: ' + m.details + '\n';
+                if (m.details) details += 'Details: ' + m.details + '\\n';
                 if (m.stack) details += 'Stack: ' + m.stack;
                 alert(details || 'No additional details available');
               });
