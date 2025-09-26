@@ -65,6 +65,218 @@ class AgentResult:
     needs_clarification: bool = False  # Whether the agent needs user clarification
     clarification_question: str = ""  # Question to ask the user
     
+class ShellAgent:
+    """Agent that executes shell commands with full system access"""
+    
+    def __init__(self, llm_client: Optional[AsyncOpenAI]):
+        self.llm_client = llm_client
+        
+    async def process(self, task: str) -> AgentResult:
+        """Execute shell commands and analyze results"""
+        start_time = time.time()
+        logger.info(f"[ShellAgent] Starting shell execution for: {task[:100]}...")
+        
+        # Extract shell commands from the task
+        # Support both inline commands and requests to install/run things
+        shell_command = None
+        
+        # Check if task contains explicit shell commands (in backticks or quotes)
+        import re
+        # Look for commands in backticks
+        backtick_match = re.search(r'`([^`]+)`', task)
+        # Look for commands after keywords
+        command_keywords = r'(?:run|execute|install|grep|find|search|check)\s+["\']?([^"\'\n]+)["\']?'
+        keyword_match = re.search(command_keywords, task, re.IGNORECASE)
+        
+        if backtick_match:
+            shell_command = backtick_match.group(1)
+        elif keyword_match and not any(word in keyword_match.group(1).lower() for word in ['for', 'to', 'that', 'which']):
+            shell_command = keyword_match.group(1)
+        elif any(cmd in task.lower() for cmd in ['brew install', 'pip install', 'npm install', 'apt-get', 'grep', 'find', 'ls', 'cat', 'echo']):
+            # Extract the actual command
+            for line in task.split('\n'):
+                if any(cmd in line.lower() for cmd in ['brew', 'pip', 'npm', 'apt-get', 'grep', 'find', 'ls', 'cat', 'echo']):
+                    shell_command = line.strip()
+                    break
+        
+        if not shell_command and self.llm_client:
+            # Ask LLM to extract or generate the shell command
+            try:
+                model = os.getenv("CEDARPY_OPENAI_MODEL") or "gpt-5"
+                completion_params = {
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": "Extract or generate the shell command from the user's request. Output ONLY the shell command, nothing else. Support multiline commands."},
+                        {"role": "user", "content": task}
+                    ]
+                }
+                if "gpt-5" in model:
+                    completion_params["max_completion_tokens"] = 200
+                else:
+                    completion_params["max_tokens"] = 200
+                    completion_params["temperature"] = 0.1
+                
+                response = await self.llm_client.chat.completions.create(**completion_params)
+                shell_command = response.choices[0].message.content.strip()
+                # Remove markdown if present
+                if shell_command.startswith("```"):
+                    shell_command = shell_command.split("\n", 1)[1].rsplit("```", 1)[0]
+            except Exception as e:
+                logger.error(f"[ShellAgent] Failed to extract command: {e}")
+        
+        if not shell_command:
+            return AgentResult(
+                agent_name="ShellAgent",
+                display_name="Shell Executor",
+                result="""Answer: No shell command detected or generated
+
+Why: Could not identify a specific shell command to execute
+
+Suggested Next Steps: Provide a specific shell command in backticks or describe what you want to install or run""",
+                confidence=0.2,
+                method="No command found",
+                explanation="No shell command identified"
+            )
+        
+        # Execute the shell command
+        logger.info(f"[ShellAgent] Executing command: {shell_command}")
+        
+        try:
+            # Use subprocess for actual shell execution
+            result = subprocess.run(
+                shell_command,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=30,  # 30 second timeout
+                env={**os.environ}  # Pass current environment
+            )
+            
+            # Get output (combine stdout and stderr, limit to 3000 chars)
+            output = result.stdout[:1500] if result.stdout else ""
+            error = result.stderr[:1500] if result.stderr else ""
+            exit_code = result.returncode
+            
+            combined_output = f"Exit Code: {exit_code}\n"
+            if output:
+                combined_output += f"Output:\n{output}\n"
+            if error:
+                combined_output += f"Error:\n{error}\n"
+            
+            # Truncate to 3000 characters
+            combined_output = combined_output[:3000]
+            
+            logger.info(f"[ShellAgent] Command completed with exit code: {exit_code}")
+            
+            # Analyze results with LLM if available
+            analysis = ""
+            if self.llm_client:
+                try:
+                    model = os.getenv("CEDARPY_OPENAI_MODEL") or "gpt-5"
+                    completion_params = {
+                        "model": model,
+                        "messages": [
+                            {
+                                "role": "system",
+                                "content": """Analyze the shell command execution results. Explain:
+                                1. What the command did
+                                2. Whether it succeeded or failed
+                                3. Key information from the output
+                                4. Any warnings or errors
+                                5. Suggested next steps
+                                Keep it concise and helpful."""
+                            },
+                            {"role": "user", "content": f"Command: {shell_command}\n\nResults:\n{combined_output}"}
+                        ]
+                    }
+                    if "gpt-5" in model:
+                        completion_params["max_completion_tokens"] = 400
+                    else:
+                        completion_params["max_tokens"] = 400
+                        completion_params["temperature"] = 0.3
+                    
+                    response = await self.llm_client.chat.completions.create(**completion_params)
+                    analysis = response.choices[0].message.content.strip()
+                except Exception as e:
+                    logger.warning(f"[ShellAgent] Failed to analyze results: {e}")
+                    analysis = "Analysis not available"
+            
+            # Format the response
+            if exit_code == 0:
+                formatted_output = f"""Answer: Command executed successfully
+
+**Command:** `{shell_command}`
+
+**Analysis:** {analysis if analysis else 'Command completed successfully'}
+
+**Raw Output (first 3000 chars):**
+```
+{combined_output}
+```
+
+Why: Shell command executed with exit code {exit_code}
+
+Suggested Next Steps: Review the output and run follow-up commands if needed"""
+                confidence = 0.9
+            else:
+                formatted_output = f"""Answer: Command failed with exit code {exit_code}
+
+**Command:** `{shell_command}`
+
+**Analysis:** {analysis if analysis else 'Command failed - check error output'}
+
+**Raw Output (first 3000 chars):**
+```
+{combined_output}
+```
+
+Why: Shell command returned non-zero exit code
+
+Suggested Next Steps: Review the error output and try a modified command"""
+                confidence = 0.6
+            
+            return AgentResult(
+                agent_name="ShellAgent",
+                display_name="Shell Executor",
+                result=formatted_output,
+                confidence=confidence,
+                method=f"Shell execution (exit code: {exit_code})",
+                explanation=f"Executed: {shell_command[:50]}{'...' if len(shell_command) > 50 else ''}"
+            )
+            
+        except subprocess.TimeoutExpired:
+            logger.error(f"[ShellAgent] Command timed out: {shell_command}")
+            return AgentResult(
+                agent_name="ShellAgent",
+                display_name="Shell Executor",
+                result=f"""Answer: Command timed out after 30 seconds
+
+**Command:** `{shell_command}`
+
+Why: The command took too long to execute and was terminated
+
+Suggested Next Steps: Try a simpler command or one that completes faster""",
+                confidence=0.3,
+                method="Timeout",
+                explanation="Command timed out"
+            )
+        except Exception as e:
+            logger.error(f"[ShellAgent] Execution error: {e}")
+            return AgentResult(
+                agent_name="ShellAgent",
+                display_name="Shell Executor",
+                result=f"""Answer: Failed to execute command
+
+**Command:** `{shell_command}`
+
+**Error:** {str(e)}
+
+Suggested Next Steps: Check the command syntax and try again""",
+                confidence=0.2,
+                method="Execution error",
+                explanation=f"Error: {str(e)[:100]}"
+            )
+
 class CodeAgent:
     """Agent that uses LLM to write code, then executes it"""
     
@@ -140,6 +352,9 @@ class CodeAgent:
             
             logger.info(f"[CodeAgent] Generated code:\n{generated_code}")
             
+            # Show the code that will be executed
+            code_preview = f"**Code to execute:**\n```python\n{generated_code}\n```\n\n"
+            
             # Execute the generated code
             import io
             import contextlib
@@ -171,7 +386,7 @@ class CodeAgent:
                 
                 # Format output for user with structured sections
                 answer = output.strip() if output else 'Code executed successfully'
-                formatted_output = f"""Answer: {answer}
+                formatted_output = f"""{code_preview}Answer: {answer}
 
 Why: Generated and executed Python code to compute the exact result"""
                 
@@ -190,13 +405,15 @@ Why: Generated and executed Python code to compute the exact result"""
                 
             except Exception as exec_error:
                 logger.error(f"[CodeAgent] Code execution error: {exec_error}")
-                formatted_output = f"""Answer: Unable to complete the calculation due to an error
+                formatted_output = f"""{code_preview}Answer: Unable to complete the calculation due to an error
+
+**Execution Error:** {str(exec_error)}
 
 Why: The generated code encountered an execution error
 
-Potential Issues: {str(exec_error)}
+Potential Issues: The code failed during execution - see error above
 
-Suggested Next Steps: Please rephrase your query or provide more context"""
+Suggested Next Steps: Review the code and error, then provide a more specific query"""
                 
                 return AgentResult(
                     agent_name="CodeAgent",
@@ -1216,15 +1433,16 @@ CURRENT STATUS:
 
 AVAILABLE AGENTS AND THEIR SPECIALTIES:
 1. Code Executor - Generates and executes Python code for calculations and programming tasks
-2. Math Agent - Derives formulas from first principles with detailed mathematical proofs
-3. Research Agent - Web searches and finding relevant sources/citations
-4. Strategy Agent - Creates detailed action plans with agent coordination strategies
-5. SQL Agent - Database queries and SQL operations
-6. Data Agent - Analyzes database schemas and suggests relevant SQL queries
-7. Notes Agent - Creates organized notes from findings without duplication
-8. File Agent - Downloads files from URLs or analyzes local file paths
-9. Reasoning Agent - Step-by-step logical analysis (use sparingly)
-10. General Assistant - General knowledge (use sparingly)
+2. Shell Executor - Executes shell commands with full system access (grep, install, etc.)
+3. Math Agent - Derives formulas from first principles with detailed mathematical proofs
+4. Research Agent - Web searches and finding relevant sources/citations
+5. Strategy Agent - Creates detailed action plans with agent coordination strategies
+6. SQL Agent - Database queries and SQL operations
+7. Data Agent - Analyzes database schemas and suggests relevant SQL queries
+8. Notes Agent - Creates organized notes from findings without duplication
+9. File Agent - Downloads files from URLs or analyzes local file paths
+10. Reasoning Agent - Step-by-step logical analysis (use sparingly)
+11. General Assistant - General knowledge (use sparingly)
 
 Your RESPONSIBILITIES:
 1. EXPLAIN YOUR THINKING: Describe how you're analyzing the problem and what you expect from each agent
@@ -1358,6 +1576,7 @@ class ThinkerOrchestrator:
         # Core execution agents
         self.code_agent = CodeAgent(self.llm_client)
         self.sql_agent = SQLAgent(self.llm_client)
+        self.shell_agent = ShellAgent(self.llm_client)  # NEW: Full shell access
         
         # Specialized agents
         self.math_agent = MathAgent(self.llm_client)
@@ -1403,9 +1622,16 @@ class ThinkerOrchestrator:
         import re
         has_url = bool(re.search(r'https?://[^\s]+', message))
         has_file_path = bool(re.search(r'(/[^\s]+\.[a-zA-Z]{2,4}|[A-Za-z]:\\[^\s]+|\./[^\s]+)', message))
+        has_shell_command = bool(re.search(r'`[^`]+`', message)) or any(cmd in message.lower() for cmd in ['grep', 'find', 'ls', 'cat', 'brew install', 'pip install', 'npm install', 'apt-get', 'chmod', 'mkdir', 'rm', 'cp', 'mv'])
         
-        # File handling takes priority
-        if has_url or has_file_path or any(word in message.lower() for word in ["download", "file", "upload", "save file"]):
+        # Shell commands take priority
+        if has_shell_command or any(word in message.lower() for word in ['run command', 'execute', 'shell', 'terminal', 'install package', 'grep for']):
+            thinking_process["identified_type"] = "shell_command"
+            thinking_process["analysis"] = "This requires executing shell commands on the system"
+            thinking_process["agents_to_use"] = ["ShellAgent"]
+            thinking_process["selection_reasoning"] = "Shell Agent for system command execution with full access"
+        # File handling 
+        elif has_url or has_file_path or any(word in message.lower() for word in ["download", "file", "upload", "save file"]):
             thinking_process["identified_type"] = "file_operation"
             thinking_process["analysis"] = "This requires file download or management"
             thinking_process["agents_to_use"] = ["FileAgent", "NotesAgent"]
@@ -1525,6 +1751,9 @@ class ThinkerOrchestrator:
         if "SQLAgent" in thinking["agents_to_use"]:
             agents.append(self.sql_agent)
             logger.info("[ORCHESTRATOR] Added SQLAgent to processing queue")
+        if "ShellAgent" in thinking["agents_to_use"]:
+            agents.append(self.shell_agent)
+            logger.info("[ORCHESTRATOR] Added ShellAgent to processing queue")
         # Add new specialized agents
         if "MathAgent" in thinking["agents_to_use"]:
             agents.append(self.math_agent)
