@@ -1252,6 +1252,8 @@ def create_project(title: str = Form(...), db: Session = Depends(get_registry_db
     """Create a new project."""
     from main_helpers import ensure_main_branch, add_version
     from sqlalchemy.orm import sessionmaker
+    from main_models import Note
+    from datetime import datetime, timezone
     
     title = title.strip()
     if not title:
@@ -1271,7 +1273,29 @@ def create_project(title: str = Form(...), db: Session = Depends(get_registry_db
             if not pdb.query(Project).filter(Project.id == p.id).first():
                 pdb.add(Project(id=p.id, title=p.title))
                 pdb.commit()
-            ensure_main_branch(pdb, p.id)
+            
+            # Ensure main branch exists
+            main_branch = ensure_main_branch(pdb, p.id)
+            
+            # Create project initialization note
+            creation_time = datetime.now(timezone.utc)
+            # Format as friendly date/time (e.g., "December 20, 2024 at 3:45 PM UTC")
+            friendly_time = creation_time.strftime("%B %d, %Y at %I:%M %p %Z")
+            
+            initialization_note = Note(
+                project_id=p.id,
+                branch_id=main_branch.id,
+                content=f"📌 Project created on {friendly_time}",
+                title="Project Initialization",
+                note_type="system",
+                agent_name="System",
+                priority=0,
+                tags=["project-init", "system"]
+            )
+            pdb.add(initialization_note)
+            pdb.commit()
+            print(f"[create-project] Added initialization note for project {p.id}")
+            
         finally:
             pdb.close()
         _ensure_project_storage(p.id)

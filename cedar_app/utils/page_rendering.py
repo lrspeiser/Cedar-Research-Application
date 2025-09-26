@@ -388,26 +388,61 @@ def project_page_html(
 
     # Thread tabs and All Chats panel removed - using single WebSocket chat interface
 
-    # Build Notes list panel (LLM-generated notes)
+    # Build Notes list panel (from database)
     notes_items_html: List[str] = []
     try:
         import json as _json
         for n in (notes or []):
+            # Extract note metadata
+            when = ""
             try:
-                when = n.created_at.strftime("%Y-%m-%d %H:%M:%S") + " UTC" if getattr(n, 'created_at', None) else ""
+                when = n.created_at.strftime("%B %d, %Y at %I:%M %p %Z") if getattr(n, 'created_at', None) else ""
             except Exception:
-                when = ""
-            # Tags
+                pass
+            
+            # Note title and priority
+            title_html = ""
+            try:
+                if getattr(n, 'title', None):
+                    priority_icon = ""
+                    if getattr(n, 'priority', 0) == 2:
+                        priority_icon = "🔴 "  # Critical
+                    elif getattr(n, 'priority', 0) == 1:
+                        priority_icon = "🟡 "  # High
+                    title_html = f"<div style='font-weight:600; margin-bottom:4px'>{priority_icon}{escape(n.title)}</div>"
+            except Exception:
+                pass
+                
+            # Tags display
+            tags_html = ""
             try:
                 tags = n.tags or []
-                tags_html = " ".join([f"<span class='pill'>{escape(str(t))}</span>" for t in tags])
+                if tags:
+                    tags_html = " ".join([f"<span class='pill' style='font-size:11px; padding:2px 6px; background:#e5e7eb; border-radius:4px'>{escape(str(t))}</span>" for t in tags])
             except Exception:
-                tags_html = ""
+                pass
+                
+            # Note type and source info
+            meta_parts = []
+            try:
+                if getattr(n, 'note_type', None) and n.note_type != 'general':
+                    type_display = n.note_type.replace('_', ' ').title()
+                    meta_parts.append(f"<span style='color:#6b7280'>{escape(type_display)}</span>")
+                if getattr(n, 'agent_name', None):
+                    meta_parts.append(f"<span style='color:#4b5563'>by {escape(n.agent_name)}</span>")
+                if getattr(n, 'chat_id', None):
+                    meta_parts.append(f"<span style='color:#6b7280'>Chat #{n.chat_id}</span>")
+            except Exception:
+                pass
+            meta_html = " • ".join(meta_parts) if meta_parts else ""
+            
             # Body: attempt to parse JSON for themes/sections; fallback to plain text
             body_html = ""
             try:
+                # Check if content is JSON
                 data = _json.loads(n.content)
                 if isinstance(data, dict) and isinstance(data.get('themes'), list):
+                    # Theme-based structure
                     parts: List[str] = []
                     for th in (data.get('themes') or [])[:10]:
                         try:
@@ -424,29 +459,55 @@ def project_page_html(
                         )
                     body_html = "".join(parts) or "<div class='muted small'>(empty)</div>"
                 elif isinstance(data, dict) and isinstance(data.get('sections'), list):
+                    # Section-based structure
                     secs = data.get('sections') or []
                     items = "".join([f"<li class='small'><b>{escape(str((s or {}).get('title') or ''))}</b> – {escape(str((s or {}).get('text') or '')[:200])}</li>" for s in secs[:10]])
                     body_html = f"<ul class='small'>{items}</ul>" if items else "<div class='muted small'>(empty)</div>"
                 else:
-                    body_html = f"<pre class='small' style='white-space:pre-wrap; background:#f8fafc; padding:8px; border-radius:6px'>{escape(str(n.content)[:1000])}</pre>"
+                    # JSON but not structured format - display as formatted JSON
+                    body_html = f"<pre class='small' style='white-space:pre-wrap; background:#f8fafc; padding:8px; border-radius:6px'>{escape(_json.dumps(data, indent=2)[:1000])}</pre>"
+            except _json.JSONDecodeError:
+                # Not JSON - display as plain text with proper formatting
+                content = str(getattr(n, 'content', '') or '')
+                # Check for markdown-style formatting
+                if content.startswith('#') or content.startswith('-') or content.startswith('*'):
+                    # Basic markdown rendering (just preserve line breaks and indentation)
+                    body_html = f"<div class='small' style='white-space:pre-wrap; font-family:ui-monospace,monospace'>{escape(content[:1000])}</div>"
+                else:
+                    body_html = f"<div class='small' style='white-space:pre-wrap'>{escape(content[:1000])}</div>"
             except Exception:
-                body_html = f"<pre class='small' style='white-space:pre-wrap; background:#f8fafc; padding:8px; border-radius:6px'>{escape(str(getattr(n, 'content', '') or '')[:1000])}</pre>"
+                # Fallback for any other errors
+                body_html = f"<div class='small' style='white-space:pre-wrap'>{escape(str(getattr(n, 'content', '') or '')[:1000])}</div>"
+            
+            # Compose the note item
+            note_style = 'border-bottom:1px solid var(--border); padding:12px 0'
+            if getattr(n, 'note_type', None) == 'system':
+                note_style += '; background:#f0f9ff; padding:12px; border-radius:6px; margin-bottom:8px'
+            
             notes_items_html.append(
-                "<div class='note-item' style='border-bottom:1px solid var(--border); padding:8px 0'>"
-                + (f"<div class='small muted'>{escape(when)} {tags_html}</div>" if (when or tags_html) else "")
+                f"<div class='note-item' style='{note_style}'>"
+                + title_html
+                + (f"<div class='small muted' style='margin-bottom:6px'>{escape(when)}</div>" if when else "")
+                + (f"<div class='small' style='margin-bottom:6px'>{meta_html}</div>" if meta_html else "")
+                + (f"<div style='margin-bottom:6px'>{tags_html}</div>" if tags_html else "")
                 + body_html
                 + "</div>"
             )
-    except Exception:
+    except Exception as e:
+        print(f"[notes-panel-error] Failed to render notes: {e}")
         notes_items_html = []
+    
     notes_panel_html = (
         "<div class='card' style='padding:12px'>"
         "  <div style='display:flex; align-items:center; justify-content:space-between; margin-bottom:12px'>"
-        "    <h3 style='margin:0'>Notes</h3>"
-        f"    <button class='secondary' onclick='window.location.href=\"/project/{project.id}?branch_id={current.id}&refresh_notes=1#main-notes\"'>Refresh</button>"
+        "    <h3 style='margin:0'>📝 Notes</h3>"
+        "    <div style='display:flex; gap:8px'>"
+        f"      <button class='secondary' onclick='window.location.href=\"/project/{project.id}/notes/add?branch_id={current.id}\"'>Add Note</button>"
+        f"      <button class='secondary' onclick='window.location.href=\"/project/{project.id}?branch_id={current.id}&refresh_notes=1#main-notes\"'>Refresh</button>"
+        "    </div>"
         "  </div>"
         "  <div style='max-height:600px; overflow-y:auto'>"
-        + ("".join(notes_items_html) or "<div class='muted small'>(No notes yet)</div>")
+        + ("".join(notes_items_html) if notes_items_html else "<div class='muted small'>(No notes yet. Notes will be automatically created by agents during chat conversations.)</div>")
         + "  </div>"
         + "</div>"
     )

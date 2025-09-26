@@ -179,8 +179,24 @@ class Note(Base):
     branch_id = Column(Integer, nullable=False, index=True)
     content = Column(Text, nullable=False)
     tags = Column(JSON)  # optional list of strings
+    
+    # Source tracking fields
+    chat_id = Column(Integer, nullable=True)  # Chat number where note was created
+    thread_id = Column(Integer, nullable=True)  # Thread ID if created in a thread context
+    agent_name = Column(String(100), nullable=True)  # Agent that created the note
+    user_query = Column(Text, nullable=True)  # Original user query that triggered the note
+    
+    # Note metadata
+    note_type = Column(String(50), default='general')  # 'general', 'system', 'agent_finding', 'user_note'
+    title = Column(String(255), nullable=True)  # Optional title for the note
+    priority = Column(Integer, default=0)  # 0=normal, 1=high, 2=critical
+    
+    # Timestamps
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (
         Index("ix_notes_project_branch", "project_id", "branch_id", "created_at"),
+        Index("ix_notes_chat_thread", "chat_id", "thread_id"),
+        Index("ix_notes_type", "note_type"),
     )
