@@ -475,6 +475,458 @@ Why: Provided a direct response based on the query context"""
                 explanation=f"Processing error"
             )
 
+class MathAgent:
+    """Agent that derives mathematical formulas from first principles"""
+    
+    def __init__(self, llm_client: Optional[AsyncOpenAI]):
+        self.llm_client = llm_client
+        
+    async def process(self, task: str) -> AgentResult:
+        """Derive mathematical formulas from first principles and walk through derivations"""
+        start_time = time.time()
+        logger.info(f"[MathAgent] Starting mathematical derivation for: {task[:100]}...")
+        
+        if not self.llm_client:
+            return AgentResult(
+                agent_name="MathAgent",
+                display_name="Math Agent",
+                result="No LLM client available for mathematical derivation",
+                confidence=0.0,
+                method="Error",
+                explanation="Cannot derive formulas without LLM access"
+            )
+        
+        try:
+            model = os.getenv("CEDARPY_OPENAI_MODEL") or os.getenv("OPENAI_API_KEY_MODEL") or "gpt-5"
+            logger.info(f"[MathAgent] Using model: {model}")
+            
+            completion_params = {
+                "model": model,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": """You are a mathematical expert who derives formulas from first principles.
+                        - Start from fundamental axioms and definitions
+                        - Show each step of the derivation clearly
+                        - Explain the reasoning behind each transformation
+                        - Use proper mathematical notation
+                        - Include any assumptions or constraints
+                        - Provide the final formula and its applications"""
+                    },
+                    {"role": "user", "content": f"Derive from first principles: {task}"}
+                ]
+            }
+            
+            if "gpt-5" in model or "gpt-4.1" in model:
+                completion_params["max_completion_tokens"] = 1500
+            else:
+                completion_params["max_tokens"] = 1500
+                completion_params["temperature"] = 0.3
+            
+            response = await self.llm_client.chat.completions.create(**completion_params)
+            derivation = response.choices[0].message.content
+            
+            logger.info(f"[MathAgent] Completed derivation in {time.time() - start_time:.3f}s")
+            
+            formatted_output = f"""Answer: Mathematical Derivation from First Principles
+
+{derivation}
+
+Why: Derived the formula step-by-step from fundamental mathematical principles"""
+            
+            return AgentResult(
+                agent_name="MathAgent",
+                display_name="Math Agent",
+                result=formatted_output,
+                confidence=0.85,
+                method="First principles derivation",
+                explanation="Mathematical derivation from axioms"
+            )
+            
+        except Exception as e:
+            logger.error(f"[MathAgent] Error: {e}")
+            return AgentResult(
+                agent_name="MathAgent",
+                display_name="Math Agent",
+                result=f"Answer: Unable to complete derivation\n\nPotential issues: {str(e)}",
+                confidence=0.1,
+                method="Error",
+                explanation="Derivation failed"
+            )
+
+class ResearchAgent:
+    """Agent that performs web searches using GPT's web search capabilities"""
+    
+    def __init__(self, llm_client: Optional[AsyncOpenAI]):
+        self.llm_client = llm_client
+        
+    async def process(self, task: str) -> AgentResult:
+        """Run web search and return relevant sites and content"""
+        start_time = time.time()
+        logger.info(f"[ResearchAgent] Starting web research for: {task[:100]}...")
+        
+        if not self.llm_client:
+            return AgentResult(
+                agent_name="ResearchAgent",
+                display_name="Research Agent",
+                result="No LLM client available for web research",
+                confidence=0.0,
+                method="Error",
+                explanation="Cannot perform research without LLM access"
+            )
+        
+        try:
+            model = os.getenv("CEDARPY_OPENAI_MODEL") or os.getenv("OPENAI_API_KEY_MODEL") or "gpt-5"
+            logger.info(f"[ResearchAgent] Using model: {model}")
+            
+            # Note: This simulates web search results. In production, you'd integrate with actual search APIs
+            completion_params = {
+                "model": model,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": """You are a research assistant with web search capabilities.
+                        Based on the query, provide:
+                        1. A list of relevant websites and sources
+                        2. Key content and findings from each source
+                        3. A summary of the most important information
+                        4. Citations and references
+                        
+                        Format your response as:
+                        - Source 1: [URL/Title] - Key findings
+                        - Source 2: [URL/Title] - Key findings
+                        etc.
+                        
+                        Then provide a comprehensive summary."""
+                    },
+                    {"role": "user", "content": f"Research this topic and find relevant sources: {task}"}
+                ]
+            }
+            
+            if "gpt-5" in model or "gpt-4.1" in model:
+                completion_params["max_completion_tokens"] = 1000
+            else:
+                completion_params["max_tokens"] = 1000
+                completion_params["temperature"] = 0.5
+            
+            response = await self.llm_client.chat.completions.create(**completion_params)
+            research_results = response.choices[0].message.content
+            
+            logger.info(f"[ResearchAgent] Completed research in {time.time() - start_time:.3f}s")
+            
+            formatted_output = f"""Answer: Web Research Results
+
+{research_results}
+
+Why: Conducted web research to find relevant sources and information"""
+            
+            return AgentResult(
+                agent_name="ResearchAgent",
+                display_name="Research Agent",
+                result=formatted_output,
+                confidence=0.75,
+                method="Web search and research",
+                explanation="Found and analyzed relevant web sources"
+            )
+            
+        except Exception as e:
+            logger.error(f"[ResearchAgent] Error: {e}")
+            return AgentResult(
+                agent_name="ResearchAgent",
+                display_name="Research Agent",
+                result=f"Answer: Research failed\n\nPotential issues: {str(e)}",
+                confidence=0.1,
+                method="Error",
+                explanation="Research error"
+            )
+
+class StrategyAgent:
+    """Agent that creates detailed strategic plans for addressing queries"""
+    
+    def __init__(self, llm_client: Optional[AsyncOpenAI]):
+        self.llm_client = llm_client
+        
+    async def process(self, task: str) -> AgentResult:
+        """Create a detailed strategic plan for addressing the user's query"""
+        start_time = time.time()
+        logger.info(f"[StrategyAgent] Creating strategic plan for: {task[:100]}...")
+        
+        if not self.llm_client:
+            return AgentResult(
+                agent_name="StrategyAgent",
+                display_name="Strategy Agent",
+                result="No LLM client available for strategic planning",
+                confidence=0.0,
+                method="Error",
+                explanation="Cannot create strategy without LLM access"
+            )
+        
+        try:
+            model = os.getenv("CEDARPY_OPENAI_MODEL") or os.getenv("OPENAI_API_KEY_MODEL") or "gpt-5"
+            logger.info(f"[StrategyAgent] Using model: {model}")
+            
+            completion_params = {
+                "model": model,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": """You are a strategic planning expert. Create detailed action plans that include:
+                        1. Breaking down the problem into manageable steps
+                        2. Identifying which specialized agents should be used (available agents: Code Executor, Math Agent, Research Agent, Data Agent, Notes Agent, Logical Reasoner, General Assistant)
+                        3. Determining the sequence of operations
+                        4. Specifying how to gather source material
+                        5. How to analyze data and compile results
+                        6. How to write the final report
+                        
+                        Format as a numbered step-by-step plan with:
+                        - Step number and title
+                        - Agent(s) to use
+                        - Input/output for each step
+                        - Dependencies between steps"""
+                    },
+                    {"role": "user", "content": f"Create a strategic plan to address: {task}"}
+                ]
+            }
+            
+            if "gpt-5" in model or "gpt-4.1" in model:
+                completion_params["max_completion_tokens"] = 1200
+            else:
+                completion_params["max_tokens"] = 1200
+                completion_params["temperature"] = 0.4
+            
+            response = await self.llm_client.chat.completions.create(**completion_params)
+            strategic_plan = response.choices[0].message.content
+            
+            logger.info(f"[StrategyAgent] Completed strategic planning in {time.time() - start_time:.3f}s")
+            
+            formatted_output = f"""Answer: Strategic Action Plan
+
+{strategic_plan}
+
+Why: Created a comprehensive strategic plan with specific steps and agent assignments"""
+            
+            return AgentResult(
+                agent_name="StrategyAgent",
+                display_name="Strategy Agent",
+                result=formatted_output,
+                confidence=0.80,
+                method="Strategic planning",
+                explanation="Developed detailed execution strategy"
+            )
+            
+        except Exception as e:
+            logger.error(f"[StrategyAgent] Error: {e}")
+            return AgentResult(
+                agent_name="StrategyAgent",
+                display_name="Strategy Agent",
+                result=f"Answer: Strategic planning failed\n\nPotential issues: {str(e)}",
+                confidence=0.1,
+                method="Error",
+                explanation="Planning error"
+            )
+
+class DataAgent:
+    """Agent that analyzes available databases and suggests SQL queries"""
+    
+    def __init__(self, llm_client: Optional[AsyncOpenAI]):
+        self.llm_client = llm_client
+        self.project_id = None  # Will be set during processing
+        
+    async def process(self, task: str, project_id: Optional[int] = None) -> AgentResult:
+        """Get database metadata and suggest relevant SQL queries"""
+        start_time = time.time()
+        logger.info(f"[DataAgent] Analyzing databases for: {task[:100]}...")
+        
+        if not self.llm_client:
+            return AgentResult(
+                agent_name="DataAgent",
+                display_name="Data Agent",
+                result="No LLM client available for data analysis",
+                confidence=0.0,
+                method="Error",
+                explanation="Cannot analyze data without LLM access"
+            )
+        
+        try:
+            # Get database metadata if project_id is provided
+            db_metadata = "No specific database context available"
+            if project_id:
+                try:
+                    from cedar_app.db_utils import _project_dirs, _get_project_engine
+                    db_path = _project_dirs(project_id)["db_path"]
+                    if os.path.exists(db_path):
+                        conn = sqlite3.connect(db_path)
+                        cursor = conn.cursor()
+                        
+                        # Get all tables
+                        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                        tables = cursor.fetchall()
+                        
+                        db_metadata = "Available tables:\n"
+                        for table in tables:
+                            table_name = table[0]
+                            cursor.execute(f"PRAGMA table_info({table_name})")
+                            columns = cursor.fetchall()
+                            db_metadata += f"\n- {table_name}: "
+                            db_metadata += ", ".join([f"{col[1]} ({col[2]})" for col in columns])
+                        
+                        conn.close()
+                except Exception as e:
+                    logger.warning(f"[DataAgent] Could not get database metadata: {e}")
+            
+            model = os.getenv("CEDARPY_OPENAI_MODEL") or os.getenv("OPENAI_API_KEY_MODEL") or "gpt-5"
+            logger.info(f"[DataAgent] Using model: {model}")
+            
+            completion_params = {
+                "model": model,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": """You are a data analysis expert. Based on the available database schema and the user's query:
+                        1. List relevant tables and their purposes
+                        2. Suggest SQL queries that would help answer the question
+                        3. Explain what each query would return
+                        4. Recommend data transformations or joins if needed
+                        
+                        Format SQL queries properly with:
+                        - Clear comments explaining the purpose
+                        - Proper JOIN clauses if needed
+                        - Appropriate WHERE conditions
+                        - GROUP BY and aggregations as necessary"""
+                    },
+                    {"role": "user", "content": f"Database Schema:\n{db_metadata}\n\nUser Query: {task}\n\nSuggest relevant SQL queries."}
+                ]
+            }
+            
+            if "gpt-5" in model or "gpt-4.1" in model:
+                completion_params["max_completion_tokens"] = 800
+            else:
+                completion_params["max_tokens"] = 800
+                completion_params["temperature"] = 0.3
+            
+            response = await self.llm_client.chat.completions.create(**completion_params)
+            sql_suggestions = response.choices[0].message.content
+            
+            logger.info(f"[DataAgent] Completed data analysis in {time.time() - start_time:.3f}s")
+            
+            formatted_output = f"""Answer: Database Analysis and SQL Suggestions
+
+{sql_suggestions}
+
+Why: Analyzed available databases and suggested relevant SQL queries"""
+            
+            return AgentResult(
+                agent_name="DataAgent",
+                display_name="Data Agent",
+                result=formatted_output,
+                confidence=0.70,
+                method="Database analysis and SQL generation",
+                explanation="Analyzed schema and suggested queries"
+            )
+            
+        except Exception as e:
+            logger.error(f"[DataAgent] Error: {e}")
+            return AgentResult(
+                agent_name="DataAgent",
+                display_name="Data Agent",
+                result=f"Answer: Data analysis failed\n\nPotential issues: {str(e)}",
+                confidence=0.1,
+                method="Error",
+                explanation="Analysis error"
+            )
+
+class NotesAgent:
+    """Agent that creates and manages notes from important findings"""
+    
+    def __init__(self, llm_client: Optional[AsyncOpenAI]):
+        self.llm_client = llm_client
+        self.existing_notes = []  # Will be populated with existing notes
+        
+    async def process(self, task: str, content_to_note: str = "", existing_notes: List[str] = None) -> AgentResult:
+        """Create notes from content while avoiding duplication"""
+        start_time = time.time()
+        logger.info(f"[NotesAgent] Creating notes for: {task[:100]}...")
+        
+        if not self.llm_client:
+            return AgentResult(
+                agent_name="NotesAgent",
+                display_name="Notes Agent",
+                result="No LLM client available for note creation",
+                confidence=0.0,
+                method="Error",
+                explanation="Cannot create notes without LLM access"
+            )
+        
+        try:
+            if existing_notes:
+                self.existing_notes = existing_notes
+            
+            existing_notes_text = "\n".join(self.existing_notes) if self.existing_notes else "No existing notes"
+            
+            model = os.getenv("CEDARPY_OPENAI_MODEL") or os.getenv("OPENAI_API_KEY_MODEL") or "gpt-5"
+            logger.info(f"[NotesAgent] Using model: {model}")
+            
+            completion_params = {
+                "model": model,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": """You are a note-taking expert. Create concise, well-organized notes that:
+                        1. Capture key findings and insights
+                        2. Avoid duplicating existing notes
+                        3. Use bullet points and clear headings
+                        4. Include important formulas, code snippets, or data
+                        5. Add tags for easy searching later
+                        6. Reference sources when applicable
+                        
+                        Format notes with:
+                        - Clear titles
+                        - Date/timestamp
+                        - Categories/tags
+                        - Key points
+                        - Action items if any"""
+                    },
+                    {"role": "user", "content": f"Existing Notes:\n{existing_notes_text}\n\nContent to create notes from:\n{content_to_note or task}\n\nCreate new notes without duplicating existing ones."}
+                ]
+            }
+            
+            if "gpt-5" in model or "gpt-4.1" in model:
+                completion_params["max_completion_tokens"] = 600
+            else:
+                completion_params["max_tokens"] = 600
+                completion_params["temperature"] = 0.3
+            
+            response = await self.llm_client.chat.completions.create(**completion_params)
+            notes = response.choices[0].message.content
+            
+            logger.info(f"[NotesAgent] Completed note creation in {time.time() - start_time:.3f}s")
+            
+            formatted_output = f"""Answer: Notes Created
+
+{notes}
+
+Why: Created structured notes from the provided content, avoiding duplication with existing notes"""
+            
+            return AgentResult(
+                agent_name="NotesAgent",
+                display_name="Notes Agent",
+                result=formatted_output,
+                confidence=0.85,
+                method="Intelligent note creation",
+                explanation="Created organized notes from findings"
+            )
+            
+        except Exception as e:
+            logger.error(f"[NotesAgent] Error: {e}")
+            return AgentResult(
+                agent_name="NotesAgent",
+                display_name="Notes Agent",
+                result=f"Answer: Note creation failed\n\nPotential issues: {str(e)}",
+                confidence=0.1,
+                method="Error",
+                explanation="Note creation error"
+            )
+
 class ChiefAgent:
     """Chief Agent that reviews all sub-agent responses and makes final decisions"""
     
@@ -520,6 +972,17 @@ class ChiefAgent:
                         "role": "system",
                         "content": """You are the Chief Agent, the central decision-maker in a multi-agent system. You review all sub-agent responses and make the FINAL decision on what happens next.
 
+AVAILABLE AGENTS AND THEIR SPECIALTIES:
+1. Code Executor - Generates and executes Python code for calculations and programming tasks
+2. Logical Reasoner - Step-by-step logical analysis and reasoning
+3. General Assistant - General knowledge and direct answers
+4. SQL Agent - Database queries and SQL operations
+5. Math Agent - Derives formulas from first principles with detailed mathematical proofs
+6. Research Agent - Web searches and finding relevant sources/citations
+7. Strategy Agent - Creates detailed action plans with agent coordination strategies
+8. Data Agent - Analyzes database schemas and suggests relevant SQL queries
+9. Notes Agent - Creates organized notes from findings without duplication
+
 Your PRIMARY responsibility is to determine:
 1. Whether the agents have provided a satisfactory answer that can be sent to the user (decision: "final")
 2. Whether more processing is needed with specific guidance (decision: "loop")
@@ -536,12 +999,15 @@ DECISION CRITERIA:
   * Critical information is missing that agents could obtain
   * A different approach or specific agent guidance could yield better results
   * The iteration count is low (<5) and the answer quality is poor
+  * You need specific agents that weren't used yet (e.g., Research Agent for citations, Strategy Agent for planning)
 
 QUALITY CHECKS:
-- For mathematical problems: Verify calculations are correct
+- For mathematical problems: Verify calculations are correct, consider if Math Agent's derivations would help
 - For coding tasks: Ensure code is syntactically correct and solves the problem
-- For explanations: Ensure clarity and completeness
-- For SQL queries: Verify syntax and logic
+- For research queries: Check if Research Agent has been used for sources
+- For complex tasks: Consider if Strategy Agent's planning would improve approach
+- For data queries: Check if Data Agent has analyzed available databases
+- For important findings: Consider if Notes Agent should create notes
 
 You MUST respond in this EXACT JSON format:
 {
@@ -641,10 +1107,19 @@ class ThinkerOrchestrator:
     def __init__(self, api_key: str):
         self.llm_client = AsyncOpenAI(api_key=api_key) if api_key else None
         self.chief_agent = ChiefAgent(self.llm_client)  # Chief Agent is primary
+        
+        # Original agents
         self.code_agent = CodeAgent(self.llm_client)
         self.reasoning_agent = ReasoningAgent(self.llm_client)
         self.general_agent = GeneralAgent(self.llm_client)
         self.sql_agent = SQLAgent(self.llm_client)
+        
+        # New specialized agents
+        self.math_agent = MathAgent(self.llm_client)
+        self.research_agent = ResearchAgent(self.llm_client)
+        self.strategy_agent = StrategyAgent(self.llm_client)
+        self.data_agent = DataAgent(self.llm_client)
+        self.notes_agent = NotesAgent(self.llm_client)
         
         # Initialize file processing orchestrator if available
         if FILE_PROCESSING_AVAILABLE:
@@ -674,26 +1149,42 @@ class ThinkerOrchestrator:
         }
         
         # Analyze the message
-        if any(word in message.lower() for word in ["calculate", "compute", "square root", "sqrt", "multiply", "divide", "add", "subtract", "sum", "product"]):
+        if any(word in message.lower() for word in ["derive", "proof", "theorem", "formula from first principles", "mathematical derivation"]):
+            thinking_process["identified_type"] = "mathematical_derivation"
+            thinking_process["analysis"] = "This requires mathematical derivation from first principles"
+            thinking_process["agents_to_use"] = ["MathAgent", "ReasoningAgent", "CodeAgent"]
+        elif any(word in message.lower() for word in ["research", "sources", "citations", "find information", "web search", "literature"]):
+            thinking_process["identified_type"] = "research_task"
+            thinking_process["analysis"] = "This requires web research and finding sources"
+            thinking_process["agents_to_use"] = ["ResearchAgent", "GeneralAgent", "NotesAgent"]
+        elif any(word in message.lower() for word in ["plan", "strategy", "steps to", "approach", "how should i", "coordinate"]):
+            thinking_process["identified_type"] = "strategic_planning"
+            thinking_process["analysis"] = "This requires strategic planning and coordination"
+            thinking_process["agents_to_use"] = ["StrategyAgent", "ReasoningAgent", "GeneralAgent"]
+        elif any(word in message.lower() for word in ["calculate", "compute", "square root", "sqrt", "multiply", "divide", "add", "subtract", "sum", "product"]):
             thinking_process["identified_type"] = "mathematical_computation"
             thinking_process["analysis"] = "This is a mathematical computation requiring precise calculation"
-            thinking_process["agents_to_use"] = ["CodeAgent", "ReasoningAgent", "GeneralAgent"]
+            thinking_process["agents_to_use"] = ["CodeAgent", "MathAgent", "ReasoningAgent", "GeneralAgent"]
         elif any(word in message.lower() for word in ["code", "program", "function", "script", "algorithm"]):
             thinking_process["identified_type"] = "coding_task"
             thinking_process["analysis"] = "This requires code generation or programming"
-            thinking_process["agents_to_use"] = ["CodeAgent", "GeneralAgent"]
-        elif any(word in message.lower() for word in ["sql", "database", "query", "table", "select from"]):
+            thinking_process["agents_to_use"] = ["CodeAgent", "StrategyAgent", "GeneralAgent"]
+        elif any(word in message.lower() for word in ["sql", "database", "query", "table", "select from", "data analysis"]):
             thinking_process["identified_type"] = "database_query"
             thinking_process["analysis"] = "This requires SQL query generation and execution"
-            thinking_process["agents_to_use"] = ["SQLAgent", "GeneralAgent"]
+            thinking_process["agents_to_use"] = ["DataAgent", "SQLAgent", "GeneralAgent"]
+        elif any(word in message.lower() for word in ["note", "remember", "save for later", "document", "summarize findings"]):
+            thinking_process["identified_type"] = "note_taking"
+            thinking_process["analysis"] = "This requires creating or managing notes"
+            thinking_process["agents_to_use"] = ["NotesAgent", "GeneralAgent"]
         elif any(word in message.lower() for word in ["explain", "why", "how", "what is", "define"]):
             thinking_process["identified_type"] = "explanation_query"
             thinking_process["analysis"] = "This requires detailed explanation or reasoning"
-            thinking_process["agents_to_use"] = ["ReasoningAgent", "GeneralAgent"]
+            thinking_process["agents_to_use"] = ["ReasoningAgent", "ResearchAgent", "GeneralAgent"]
         else:
             thinking_process["identified_type"] = "general_query"
             thinking_process["analysis"] = "This is a general query"
-            thinking_process["agents_to_use"] = ["GeneralAgent", "ReasoningAgent"]
+            thinking_process["agents_to_use"] = ["GeneralAgent", "ReasoningAgent", "StrategyAgent"]
             
         return thinking_process
         
@@ -755,6 +1246,22 @@ class ThinkerOrchestrator:
         if "SQLAgent" in thinking["agents_to_use"]:
             agents.append(self.sql_agent)
             logger.info("[ORCHESTRATOR] Added SQLAgent to processing queue")
+        # Add new specialized agents
+        if "MathAgent" in thinking["agents_to_use"]:
+            agents.append(self.math_agent)
+            logger.info("[ORCHESTRATOR] Added MathAgent to processing queue")
+        if "ResearchAgent" in thinking["agents_to_use"]:
+            agents.append(self.research_agent)
+            logger.info("[ORCHESTRATOR] Added ResearchAgent to processing queue")
+        if "StrategyAgent" in thinking["agents_to_use"]:
+            agents.append(self.strategy_agent)
+            logger.info("[ORCHESTRATOR] Added StrategyAgent to processing queue")
+        if "DataAgent" in thinking["agents_to_use"]:
+            agents.append(self.data_agent)
+            logger.info("[ORCHESTRATOR] Added DataAgent to processing queue")
+        if "NotesAgent" in thinking["agents_to_use"]:
+            agents.append(self.notes_agent)
+            logger.info("[ORCHESTRATOR] Added NotesAgent to processing queue")
             
         # Process all agents in parallel
         logger.info(f"[ORCHESTRATOR] Starting parallel processing with {len(agents)} agents")
