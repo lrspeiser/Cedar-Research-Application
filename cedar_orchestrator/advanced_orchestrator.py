@@ -1169,10 +1169,11 @@ class ChiefAgent:
     def __init__(self, llm_client: Optional[AsyncOpenAI]):
         self.llm_client = llm_client
         
-    async def review_and_decide(self, user_query: str, agent_results: List[AgentResult], iteration: int = 0) -> Dict[str, Any]:
+    async def review_and_decide(self, user_query: str, agent_results: List[AgentResult], iteration: int = 0, max_iterations: int = 10, previous_context: str = "") -> Dict[str, Any]:
         """Review all agent results and make the final decision on what to do next"""
         start_time = time.time()
-        logger.info(f"[ChiefAgent] Starting review of {len(agent_results)} agent results (iteration {iteration})")
+        remaining_loops = max_iterations - iteration - 1
+        logger.info(f"[ChiefAgent] Starting review of {len(agent_results)} agent results (iteration {iteration}/{max_iterations}, {remaining_loops} loops remaining)")
         
         if not self.llm_client:
             # Fallback: use best available result
@@ -1206,72 +1207,76 @@ class ChiefAgent:
                 "messages": [
                     {
                         "role": "system",
-                        "content": """You are the Chief Agent, the central decision-maker in a multi-agent system. You review all sub-agent responses and make the FINAL decision on what happens next.
+                        "content": f"""You are the Chief Agent, the central decision-maker in a multi-agent system. You review all sub-agent responses and make the FINAL decision on what happens next.
+
+CURRENT STATUS:
+- Iteration: {iteration + 1} of {max_iterations}
+- Remaining loops available: {remaining_loops}
+- You must provide a final answer within these remaining iterations
 
 AVAILABLE AGENTS AND THEIR SPECIALTIES:
 1. Code Executor - Generates and executes Python code for calculations and programming tasks
-2. Logical Reasoner - Step-by-step logical analysis and reasoning
-3. General Assistant - General knowledge and direct answers
-4. SQL Agent - Database queries and SQL operations
-5. Math Agent - Derives formulas from first principles with detailed mathematical proofs
-6. Research Agent - Web searches and finding relevant sources/citations
-7. Strategy Agent - Creates detailed action plans with agent coordination strategies
-8. Data Agent - Analyzes database schemas and suggests relevant SQL queries
-9. Notes Agent - Creates organized notes from findings without duplication
+2. Math Agent - Derives formulas from first principles with detailed mathematical proofs
+3. Research Agent - Web searches and finding relevant sources/citations
+4. Strategy Agent - Creates detailed action plans with agent coordination strategies
+5. SQL Agent - Database queries and SQL operations
+6. Data Agent - Analyzes database schemas and suggests relevant SQL queries
+7. Notes Agent - Creates organized notes from findings without duplication
+8. File Agent - Downloads files from URLs or analyzes local file paths
+9. Reasoning Agent - Step-by-step logical analysis (use sparingly)
+10. General Assistant - General knowledge (use sparingly)
 
-Your PRIMARY responsibility is to determine:
-1. Whether the agents have provided a satisfactory answer that can be sent to the user (decision: "final")
-2. Whether more processing is needed with specific guidance (decision: "loop")
+Your RESPONSIBILITIES:
+1. EXPLAIN YOUR THINKING: Describe how you're analyzing the problem and what you expect from each agent
+2. DECIDE NEXT ACTION: Choose "final" to send answer to user, or "loop" for more processing
+3. PROVIDE CONTEXT: If looping, pass all relevant context to help agents succeed
+4. SUGGEST NEXT STEPS: Always include "Suggested Next Steps" in your final answer
 
 DECISION CRITERIA:
 - Use "final" when:
-  * At least one agent has provided a correct, complete answer
-  * The combined agent responses adequately address the user's query
-  * Further processing would not meaningfully improve the answer
-  * The iteration count is high (>5) and we have a reasonable answer
+  * Agents have provided a complete, correct answer
+  * The user's query is fully addressed
+  * Further processing won't meaningfully improve the answer
+  * You're running low on iterations ({remaining_loops} remaining)
 
-- Use "loop" when:
-  * All agents failed or provided incomplete/incorrect answers
-  * Critical information is missing that agents could obtain
-  * A different approach or specific agent guidance could yield better results
-  * The iteration count is low (<5) and the answer quality is poor
-  * You need specific agents that weren't used yet (e.g., Research Agent for citations, Strategy Agent for planning)
-
-QUALITY CHECKS:
-- For mathematical problems: Verify calculations are correct, consider if Math Agent's derivations would help
-- For coding tasks: Ensure code is syntactically correct and solves the problem
-- For research queries: Check if Research Agent has been used for sources
-- For complex tasks: Consider if Strategy Agent's planning would improve approach
-- For data queries: Check if Data Agent has analyzed available databases
-- For important findings: Consider if Notes Agent should create notes
+- Use "loop" when (AND you have iterations remaining):
+  * Critical information is missing
+  * A specific agent's expertise hasn't been utilized
+  * You have clear guidance for improvement
+  * The current answer has errors or gaps
 
 You MUST respond in this EXACT JSON format:
-{
+{{
   "decision": "final" or "loop",
-  "final_answer": "The complete, formatted answer to send to the user (required for both decisions)",
-  "additional_guidance": "Specific instructions for the next iteration (only if decision is 'loop')",
-  "selected_agent": "Name of best agent or 'combined' (for metadata)",
-  "reasoning": "Brief explanation of your decision"
-}
+  "thinking_process": "Your analysis of the problem and what each agent should contribute",
+  "final_answer": "Complete answer with 'Suggested Next Steps:' section (required for both decisions)",
+  "additional_guidance": "Specific instructions for next iteration including all context (only if 'loop')",
+  "selected_agent": "Best performing agent or 'combined'",
+  "reasoning": "Why you made this decision and what you expect to achieve"
+}}
 
-IMPORTANT: 
-- Always provide a final_answer, even if decision is "loop" (it will be used if max iterations reached)
-- Keep final_answer well-formatted with clear sections
-- Be decisive - don't request loops unnecessarily"""
+REMEMBER: 
+- You have {remaining_loops} loops remaining - use them wisely
+- Always include "Suggested Next Steps:" in your final_answer
+- Provide detailed thinking_process explaining your approach
+- Pass complete context in additional_guidance for loops"""
                     },
                     {
                         "role": "user",
                         "content": f"""User Query: {user_query}
 
-Iteration: {iteration}
+Current Iteration: {iteration + 1} of {max_iterations}
+Remaining Loops: {remaining_loops}
 
-Agent Responses:
+{('Previous Context:\n' + previous_context + '\n') if previous_context else ''}
+Agent Responses from this iteration:
 {''.join(results_summary)}
 
 Review these responses and make your decision. Remember:
-- If any agent provided a good answer, use decision: "final"
-- Only use decision: "loop" if the answers are truly inadequate and you have specific guidance for improvement
-- Always provide a final_answer regardless of your decision"""
+- You have {remaining_loops} loops remaining
+- Explain your thinking process and what you expect from each agent
+- Always include "Suggested Next Steps:" in your final answer
+- If looping, provide complete context to help agents succeed"""
                     }
                 ]
             }
@@ -1302,6 +1307,12 @@ Review these responses and make your decision. Remember:
                     # Use best agent result as fallback
                     best_result = max(agent_results, key=lambda r: r.confidence) if agent_results else None
                     decision_data["final_answer"] = best_result.result if best_result else "No results available"
+                # Add thinking_process to metadata if present
+                if "thinking_process" in decision_data:
+                    logger.info(f"[ChiefAgent] Thinking: {decision_data['thinking_process'][:200]}...")
+                # Ensure final answer includes suggested next steps
+                if "Suggested Next Steps:" not in decision_data.get("final_answer", ""):
+                    decision_data["final_answer"] += "\n\nSuggested Next Steps: Review the results and let me know if you need further clarification."
                 # Normalize decision value
                 if decision_data["decision"] not in ["final", "loop"]:
                     logger.warning(f"[ChiefAgent] Invalid decision value: {decision_data['decision']}, defaulting to 'final'")
@@ -1477,10 +1488,19 @@ class ThinkerOrchestrator:
         logger.info(f"[ORCHESTRATOR] Thinking result: Type={thinking['identified_type']}, Agents={thinking['agents_to_use']}")
         
         # Send processing action that UI expects - this sets up streamText variable
+        agents_list = ", ".join(thinking['agents_to_use'])
         await websocket.send_json({
             "type": "action",
             "function": "processing",
-            "text": f"Analyzing request...\nType: {thinking['identified_type']}\nEngaging {len(thinking['agents_to_use'])} specialized agents\n\nAgent Selection: {thinking['selection_reasoning']}"
+            "text": f"""🤔 Chief Agent Analysis (Iteration {iteration + 1}/{self.MAX_ITERATIONS}):
+
+📋 Query Type: {thinking['identified_type']}
+🔍 Problem Analysis: {thinking['analysis']}
+
+🤖 Agents Selected: {agents_list}
+💭 Strategy: {thinking['selection_reasoning']}
+
+⏳ Processing with {len(thinking['agents_to_use'])} specialized agents..."""
         })
         await asyncio.sleep(0.5)  # Allow UI to set up streaming
         
@@ -1581,9 +1601,26 @@ class ThinkerOrchestrator:
             "text": "Chief Agent reviewing all responses and making final decision..."
         })
         
+        # Build context from previous iterations
+        previous_context = ""
+        if previous_results:
+            previous_context = "Previous iteration results:\n"
+            for prev_result in previous_results[:3]:  # Include top 3 from previous
+                previous_context += f"- {prev_result.display_name}: {prev_result.result[:200]}...\n"
+        
         # Have Chief Agent review all results and make a decision
-        chief_decision = await self.chief_agent.review_and_decide(message, valid_results, iteration)
+        chief_decision = await self.chief_agent.review_and_decide(
+            user_query=message, 
+            agent_results=valid_results, 
+            iteration=iteration,
+            max_iterations=self.MAX_ITERATIONS,
+            previous_context=previous_context
+        )
         logger.info(f"[ORCHESTRATOR] Chief Agent decision: {chief_decision.get('decision')}")
+        
+        # Log thinking process if available
+        if chief_decision.get('thinking_process'):
+            logger.info(f"[ORCHESTRATOR] Chief Agent thinking: {chief_decision['thinking_process'][:300]}...")
         
         # Save notes if we have a database session and project context
         if NOTES_AVAILABLE and db_session and project_id and branch_id:
@@ -1628,12 +1665,21 @@ class ThinkerOrchestrator:
         if chief_decision.get('decision') == 'loop' and iteration < self.MAX_ITERATIONS - 1:
             # Chief Agent wants another iteration
             guidance = chief_decision.get('additional_guidance', '')
+            thinking = chief_decision.get('thinking_process', 'Analyzing how to improve the answer...')
             logger.info(f"[ORCHESTRATOR] Chief Agent requesting iteration {iteration + 1} with guidance: {guidance}")
             
             await websocket.send_json({
                 "type": "agent_result",
                 "agent_name": "The Chief Agent",
-                "text": f"Status: Refining answer (iteration {iteration + 2}/{self.MAX_ITERATIONS})\n\nApproach: {guidance}"
+                "text": f"""🔄 Refining Answer (Iteration {iteration + 2}/{self.MAX_ITERATIONS}, {self.MAX_ITERATIONS - iteration - 2} loops remaining)
+
+🤔 Chief Agent's Analysis:
+{thinking}
+
+🎯 Next Approach:
+{guidance}
+
+⏳ Running additional analysis..."""
             })
             
             # Prepare enhanced message with Chief Agent's guidance
@@ -1691,14 +1737,26 @@ class ThinkerOrchestrator:
         if issues and issues.lower() != 'none':
             final_text += f"**Potential Issues:** {issues}\n\n"
             
+        # Always include Suggested Next Steps
         if next_steps:
             final_text += f"**Suggested Next Steps:** {next_steps}\n\n"
-        
-        # Add minimal metadata
-        if iteration > 0:
-            final_text += f"\n_Resolved after {iteration + 1} iterations in {total_time:.1f}s_"
         else:
-            final_text += f"\n_Processed in {total_time:.1f}s_"
+            # Fallback if Chief Agent didn't provide next steps
+            final_text += "**Suggested Next Steps:** "
+            if "error" in result_text.lower() or "failed" in result_text.lower():
+                final_text += "Review the error details and try a different approach or provide more specific information.\n\n"
+            elif "code" in result_text.lower() or "function" in result_text.lower():
+                final_text += "Test the provided code, modify it for your specific use case, or ask for additional features.\n\n"
+            elif "file" in result_text.lower() or "download" in result_text.lower():
+                final_text += "Check the downloaded files, analyze their contents, or process them further as needed.\n\n"
+            else:
+                final_text += "Let me know if you need clarification, want to explore this topic further, or have related questions.\n\n"
+        
+        # Add metadata about processing
+        if iteration > 0:
+            final_text += f"\n_🔄 Resolved after {iteration + 1} iterations in {total_time:.1f}s_"
+        else:
+            final_text += f"\n_✅ Processed in {total_time:.1f}s_"
         
         # Send final response with Chief Agent attribution
         await websocket.send_json({
