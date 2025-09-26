@@ -601,6 +601,9 @@ SELECT * FROM demo LIMIT 10;""")
       function startWS(text, threadId, fileId, datasetId, replay){
     try {
       var msgs = document.getElementById('msgs');
+      
+      // Include chat number if we have one
+      var chatNum = window.currentChatNumber;
       var optimisticUser = null;
 
       // Simple step timing helpers (annotate previous bubble/line with elapsed time)
@@ -736,9 +739,9 @@ SELECT * FROM demo LIMIT 10;""")
           refreshTimeout();
           // Do not print a local 'submitted'; rely on server info events for true order
           if (replay) {
-            ws.send(JSON.stringify({action:'chat', replay_messages: replay, branch_id: BRANCH_ID, thread_id: threadId||null, file_id: (fileId||null), dataset_id: (datasetId||null) }));
+            ws.send(JSON.stringify({action:'chat', replay_messages: replay, branch_id: BRANCH_ID, thread_id: threadId||null, file_id: (fileId||null), dataset_id: (datasetId||null), chat_number: chatNum }));
           } else {
-            ws.send(JSON.stringify({action:'chat', content: text, branch_id: BRANCH_ID, thread_id: threadId||null, file_id: (fileId||null), dataset_id: (datasetId||null) }));
+            ws.send(JSON.stringify({action:'chat', content: text, branch_id: BRANCH_ID, thread_id: threadId||null, file_id: (fileId||null), dataset_id: (datasetId||null), chat_number: chatNum }));
           }
         } catch(e){}
       };
@@ -750,6 +753,12 @@ SELECT * FROM demo LIMIT 10;""")
       }
       // All Chats functionality removed
       function handleEvent(m){
+        // Handle chat creation notification
+        if (m.type === 'chat_created') {
+          window.currentChatNumber = m.chat_number;
+          updateChatNumberDisplay(m.chat_number);
+          refreshHistoryPanel();
+        }
         if (!m) return;
         if (m.type === 'stream') {
           // Handle streaming text updates
@@ -1351,7 +1360,16 @@ SELECT * FROM demo LIMIT 10;""")
   // Chat history management functions
   window.currentChatNumber = null;
   
-  function startNewChat(projectId, branchId) {
+  function updateChatNumberDisplay(chatNumber) {
+    var display = document.getElementById('chat-number-display');
+    var numSpan = document.getElementById('chat-number');
+    if (display && numSpan) {
+      numSpan.textContent = chatNumber;
+      display.style.display = 'inline';
+    }
+  }
+  
+  window.startNewChat = function(projectId, branchId) {
     // Create a new chat and start it
     fetch(`/api/chat/new`, {
       method: 'POST',
@@ -1361,6 +1379,7 @@ SELECT * FROM demo LIMIT 10;""")
       return r.json();
     }).then(function(data) {
       window.currentChatNumber = data.chat_number;
+      updateChatNumberDisplay(data.chat_number);
       // Clear current messages
       var msgs = document.getElementById('msgs');
       if (msgs) msgs.innerHTML = '<div class="muted small">Chat ' + data.chat_number + ' started</div>';
@@ -1371,9 +1390,10 @@ SELECT * FROM demo LIMIT 10;""")
     });
   }
   
-  function loadChat(projectId, branchId, chatNumber) {
+  window.loadChat = function(projectId, branchId, chatNumber) {
     // Load a specific chat's history
     window.currentChatNumber = chatNumber;
+    updateChatNumberDisplay(chatNumber);
     fetch(`/api/chat/load`, {
       method: 'POST', 
       headers: {'Content-Type': 'application/json'},
@@ -1411,10 +1431,13 @@ SELECT * FROM demo LIMIT 10;""")
     });
   }
   
-  function refreshHistoryPanel() {
+  window.refreshHistoryPanel = function() {
     // Refresh the history panel to show updated chat list
-    // This would ideally reload just the history panel content
-    // For now, we'll rely on page refresh or dynamic updates
+    // For now, manually switch to history tab to see updates
+    var histTab = document.querySelector('[data-target="right-history"]');
+    if (histTab) {
+      // Could trigger refresh here if needed
+    }
   }
   document.addEventListener('DOMContentLoaded', function(){
     try {
@@ -1616,7 +1639,7 @@ SELECT * FROM demo LIMIT 10;""")
             </div>
             <div class="tab-panels" style="flex:1; min-height:0">
               <div id="left-chat" class="panel">
-                <h3>Chat</h3>
+                <h3>Chat <span id="chat-number-display" style="display:none">- <span id="chat-number"></span></span></h3>
                 <style>
                 /* Chat area grows to fill viewport; input stays at bottom regardless of window size */
                   #left-chat {{ display:flex; flex-direction:column; flex:1; min-height:0; }}
