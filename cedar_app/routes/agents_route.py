@@ -6,13 +6,111 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from cedar_app.ui_utils import layout
 from html import escape
+from typing import Optional
+
+# Dynamic context helpers
+from cedar_app.db_utils import _project_dirs, _get_project_engine, ensure_project_initialized
+from sqlalchemy.orm import sessionmaker
+from main_models import Project, Branch, Thread, ThreadMessage, Dataset
+from main_helpers import ensure_main_branch
+
 
 def register_agents_route(app: FastAPI):
     """Register the /agents route on the FastAPI app"""
     
     @app.get("/agents", response_class=HTMLResponse)
-    def view_agents():
-        """Display the list of agents and their prompts"""
+    def view_agents(project_id: Optional[int] = None, branch_id: Optional[int] = None, thread_id: Optional[int] = None):
+        """Display the list of agents and their prompts, plus optional dynamic context preview.
+        Use query params: /agents?project_id=1&branch_id=1&thread_id=2
+        """
+        
+        # Optional dynamic context preview
+        context_card = ""
+        try:
+            if project_id is not None and int(project_id) > 0:
+                ensure_project_initialized(int(project_id))
+                eng = _get_project_engine(int(project_id))
+                SessionLocal = sessionmaker(bind=eng, autoflush=False, autocommit=False, future=True)
+                with SessionLocal() as db:
+                    proj = db.query(Project).filter(Project.id == int(project_id)).first()
+                    if not proj:
+                        raise ValueError("Project not found")
+                    # Resolve branch
+                    if branch_id is None:
+                        b = ensure_main_branch(db, proj.id)
+                    else:
+                        b = db.query(Branch).filter(Branch.id == int(branch_id), Branch.project_id == proj.id).first() or ensure_main_branch(db, proj.id)
+                    # Resolve thread
+                    th = None
+                    if thread_id is not None:
+                        th = db.query(Thread).filter(Thread.id == int(thread_id), Thread.project_id == proj.id).first()
+                    if th is None:
+                        th = db.query(Thread).filter(Thread.project_id == proj.id, Thread.branch_id == b.id).order_by(Thread.created_at.desc()).first()
+                    # Latest user prompt in this thread
+                    user_prompt = None
+                    if th:
+                        um = db.query(ThreadMessage).filter(ThreadMessage.project_id == proj.id, ThreadMessage.thread_id == th.id, ThreadMessage.role == 'user').order_by(ThreadMessage.created_at.desc()).first()
+                        user_prompt = (um.content if um else None)
+                    # Datasets for this branch
+                    datasets = db.query(Dataset).filter(Dataset.project_id == proj.id, Dataset.branch_id == b.id).order_by(Dataset.created_at.desc()).all()
+                    ds_links = [
+                        {
+                            "id": d.id,
+                            "name": d.name,
+                            "href": f"/project/{proj.id}?branch_id={b.id}&dataset_id={d.id}"
+                        }
+                        for d in datasets
+                    ]
+                    # Paths
+                    paths = _project_dirs(proj.id)
+                    sqlite_path = paths.get("db_path")
+                    files_root = paths.get("files_root")
+                    uploads_base = f"/uploads/{proj.id}"
+                    payload = {
+                        "project_id": proj.id,
+                        "project_title": proj.title,
+                        "branch_id": b.id,
+                        "branch_name": b.name,
+                        "thread_id": getattr(th, 'id', None),
+                        "thread_title": getattr(th, 'title', None),
+                        "user_query": (user_prompt[:500] + ("…" if user_prompt and len(user_prompt) > 500 else "")) if user_prompt else None,
+                        "sqlite_path": sqlite_path,
+                        "uploads_base": uploads_base,
+                        "files_root": files_root,
+                        "dataset_links": ds_links,
+                    }
+                    import json as _json
+                    payload_json = escape(_json.dumps(payload, ensure_ascii=False, indent=2))
+                    # Pretty dataset links
+                    ds_html = ''.join([f"<li><a href='{escape(d['href'])}'>{escape(str(d['name']))}</a></li>" for d in ds_links]) or "<li class='muted small'>(none)</li>"
+                    project_link = f"/project/{proj.id}?branch_id={b.id}"
+                    context_card = f"""
+                    <div class='card' style='margin-bottom:16px; background:#fff7ed; border-color:#fed7aa'>
+                      <h3 style='color:#9a3412; margin-top:0'>Dynamic Context Preview</h3>
+                      <div class='small muted'>This preview shows what the orchestrator passes to agents when project/thread context is present.</div>
+                      <div style='display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:12px; margin-top:12px'>
+                        <div>
+                          <div><strong>Project:</strong> <a href='{escape(project_link)}'>#{proj.id} – {escape(proj.title)}</a></div>
+                          <div><strong>Branch:</strong> #{b.id} – {escape(b.name)}</div>
+                          <div><strong>Thread:</strong> {('#'+str(th.id)+' – '+escape(th.title)) if th else '(none)'} </div>
+                          <div><strong>SQLite DB:</strong> <code>{escape(sqlite_path or '')}</code></div>
+                          <div><strong>Uploads base:</strong> <code>{escape(uploads_base)}</code></div>
+                        </div>
+                        <div>
+                          <div><strong>Datasets (links)</strong></div>
+                          <ul style='margin:6px 0 0 18px'>
+                            {ds_html}
+                          </ul>
+                        </div>
+                      </div>
+                      <details style='margin-top:12px'>
+                        <summary style='cursor:pointer; font-weight:600'>Raw context payload</summary>
+                        <pre class='small' style='white-space:pre-wrap; background:#f8fafc; padding:12px; border-radius:6px'>{payload_json}</pre>
+                      </details>
+                    </div>
+                    """
+        except Exception:
+            context_card = ""
         
         # Define agent information with their system prompts
         agents = [
@@ -389,11 +487,11 @@ OUTPUT:
         # Build the page body
         body = f"""
         <h1>AI Agents</h1>
-        <div class="muted" style="margin-bottom: 20px;">
+        <div class="muted" style="margin-bottom: 12px;">
             These specialized agents work together to process your requests in the Cedar chat system.
             Each agent has a specific role and uses a tailored prompt to provide the best possible response.
         </div>
-        
+        {context_card}
         <div class="card" style="margin-bottom: 24px; background: #ecfdf5; border-color: #86efac;">
             <h3 style="color: #16a34a;">Agent Capabilities Summary</h3>
             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 12px; margin-top: 12px;">
@@ -432,7 +530,7 @@ OUTPUT:
                 <li><strong>Final answer is delivered</strong> - The approved response is formatted and presented to you</li>
             </ol>
             <p class="small muted" style="margin-top: 12px;">
-                The multi-agent system ensures comprehensive, accurate responses by leveraging different problem-solving approaches.
+                Tip: Add <code>?project_id=1&branch_id=1&thread_id=2</code> to this URL to preview the live context payload.
             </p>
         </div>
         """
