@@ -210,3 +210,8 @@ __marimo__/
 # Packaging artifacts
 *.dmg
 .dmg_stage/
+
+# Server manager files
+.server.pid
+.server.lock
+server.log
