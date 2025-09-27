@@ -2065,96 +2065,11 @@ class ThinkerOrchestrator:
         logger.info(f"[ORCHESTRATOR] Starting orchestration for message: {message} (iteration: {iteration})")
         logger.info("="*80)
         
-        # Fast-path: simple arithmetic handled locally without LLM or coding agent
+        # Fast-path: simple arithmetic (e.g., "square root of 123") handled locally without LLM or coding agent
         try:
             import re as _re
             import math as _math
-            import ast as _ast
-            msg_raw = (message or '').strip()
-            msg_low = msg_raw.lower()
-
-            def _maybe_eval_expr(s: str):
-                t = s.strip().lower()
-                # Remove common prefixes
-                for p in ["what is", "what's", "calculate", "compute", "evaluate", "eval", "value of", "solve"]:
-                    if t.startswith(p):
-                        t = t[len(p):].strip()
-                        if t.startswith('the '):
-                            t = t[4:].strip()
-                        break
-                # Remove trailing punctuation
-                t = t.rstrip('?.! ')
-                # Accept only digits, spaces, ., + - * / and parentheses
-                if not _re.fullmatch(r"[0-9\.\s\+\-\*\/\(\)]+", t):
-                    return None
-                try:
-                    node = _ast.parse(t, mode='eval')
-                except Exception:
-                    return None
-                def _eval(n, depth=0):
-                    if depth > 40:
-                        raise ValueError('expr too deep')
-                    if isinstance(n, _ast.Expression):
-                        return _eval(n.body, depth+1)
-                    if isinstance(n, _ast.Num):
-                        return float(n.n)
-                    if isinstance(n, _ast.Constant) and isinstance(n.value, (int, float)):
-                        return float(n.value)
-                    if isinstance(n, _ast.BinOp):
-                        left = _eval(n.left, depth+1)
-                        right = _eval(n.right, depth+1)
-                        if isinstance(n.op, _ast.Add):
-                            return left + right
-                        if isinstance(n.op, _ast.Sub):
-                            return left - right
-                        if isinstance(n.op, _ast.Mult):
-                            return left * right
-                        if isinstance(n.op, _ast.Div):
-                            return left / right
-                        if isinstance(n.op, _ast.Pow):
-                            # Bound exponent magnitude to prevent blowups
-                            if abs(right) > 10 or abs(left) > 1e6:
-                                raise ValueError('pow too large')
-                            return left ** right
-                        raise ValueError('op not allowed')
-                    if isinstance(n, _ast.UnaryOp):
-                        val = _eval(n.operand, depth+1)
-                        if isinstance(n.op, _ast.UAdd):
-                            return +val
-                        if isinstance(n.op, _ast.USub):
-                            return -val
-                        raise ValueError('unary op not allowed')
-                    raise ValueError('node not allowed')
-                val = _eval(node)
-                if not (val == val) or val == float('inf') or val == float('-inf'):
-                    return None
-                return val
-
-            # Try general expression first
-            expr_val = _maybe_eval_expr(msg_raw)
-            if expr_val is not None:
-                total_time = time.time() - orchestration_start
-                final_text = f"**Answer:** {expr_val}\n\n" + \
-                             "**Why:** Computed directly as a simple arithmetic fast-path (no LLM/code agent needed)\n\n" + \
-                             (f"_✅ Processed in {total_time:.1f}s_" )
-                await websocket.send_json({
-                    "type": "final",
-                    "text": final_text,
-                    "json": {
-                        "function": "final",
-                        "role": 'The Chief Agent',
-                        "selected_agent": 'Final',
-                        "chief_reasoning": 'Simple arithmetic detected; computed result directly.',
-                        "confidence": 0.99,
-                        "method": "Fast-path simple arithmetic",
-                        "orchestration_time": total_time,
-                        "meta": { "fastpath": "simple_math", "operation": "expr" }
-                    }
-                })
-                logger.info("[ORCHESTRATOR] Fast-path simple arithmetic (expr) executed; final sent")
-                return
-
-            # Phrase: "square root of N"
+            msg_low = (message or '').strip().lower()
             m_sqrt = _re.search(r"square\s+root\s+of\s+([\d,]+(?:\.\d+)?)", msg_low)
             if m_sqrt:
                 num_str = m_sqrt.group(1).replace(',', '')
@@ -2179,9 +2094,9 @@ class ThinkerOrchestrator:
                             "meta": { "fastpath": "simple_math", "operation": "sqrt" }
                         }
                     })
-                    logger.info("[ORCHESTRATOR] Fast-path simple arithmetic (sqrt) executed; final sent")
+                    logger.info("[ORCHESTRATOR] Fast-path simple arithmetic executed; final sent")
                     return
-                except Exception:
+                except Exception as _:
                     pass
         except Exception:
             pass

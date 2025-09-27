@@ -649,10 +649,7 @@ def project_page_html(
           } 
         } catch(_){} 
       }
-      // Global toggle: per-step timers disabled to avoid confusion with final timing
-      var SHOW_STEP_TIMERS = false;
       function annotateTime(node, dtMs){
-        if (!SHOW_STEP_TIMERS) return;
         try {
           if (!node) return;
           var t = document.createElement('span');
@@ -664,7 +661,6 @@ def project_page_html(
         } catch(_) {}
       }
       function startRunningTimer(node, t0){
-        if (!SHOW_STEP_TIMERS) return;
         try {
           if (!node) return;
           // Clear any existing timer first
@@ -702,12 +698,13 @@ def project_page_html(
             try {
               var rec = { project: PROJECT_ID, thread: threadId||null, from: currentStep.label, to: String(label||''), dt_ms: Math.round(dt) };
               stepsHistory.push({ from: rec.from, to: rec.to, dt_ms: rec.dt_ms });
+              // Performance tracking stored internally but not logged to console
             } catch(_) {}
           }
         } catch(_){ }
         // Only start a new timer if not in a final state
         currentStep = { label: String(label||''), t0: now, node: node || null };
-        if (node && !finalOrError && SHOW_STEP_TIMERS) { startRunningTimer(node, now); }
+        if (node && !finalOrError) { startRunningTimer(node, now); }
       }
 
       // Variables for backend-driven UI
