@@ -274,7 +274,7 @@ CONTEXT YOU RECEIVE:
 OUTPUT:
 - A clear, concise step-by-step reasoning with a final answer
 """
-            }
+            },
             {
                 "name": "General Assistant",
                 "internal_name": "GeneralAgent",
@@ -292,7 +292,7 @@ BEHAVIOR:
 - Keep responses precise; avoid unnecessary verbosity
 - Be specific; avoid abstract or generic replies
 """
-            }
+            },
             {
                 "name": "SQL Agent",
                 "internal_name": "SQLAgent",
@@ -320,7 +320,7 @@ TASKS:
 
 When returning SQL that reads/writes branch-aware tables, include WHERE project_id = {project_id} AND branch_id = {branch_id} (placeholders may be used by the executor).
 """
-            }
+            },
             {
                 "name": "Math Agent",
                 "internal_name": "MathAgent",
@@ -340,7 +340,7 @@ CONTEXT YOU RECEIVE:
 OUTPUT:
 - A clear derivation and the final formula; include applicable conditions
 """
-            }
+            },
             {
                 "name": "Research Agent",
                 "internal_name": "ResearchAgent",
@@ -367,7 +367,7 @@ FORMAT:
 
 Then provide a concise, well-cited summary.
 """
-            }
+            },
             {
                 "name": "Strategy Agent",
                 "internal_name": "StrategyAgent",
@@ -389,7 +389,7 @@ Create a numbered plan with:
 - Decision points where user input might be needed
 - Be specific; avoid abstract or generic steps
 """
-            }
+            },
             {
                 "name": "Data Agent",
                 "internal_name": "DataAgent",
@@ -415,7 +415,7 @@ FORMAT:
 - GROUP BY/aggregations as necessary
 - Be specific; avoid abstract or generic guidance
 """
-            }
+            },
             {
                 "name": "Notes Agent",
                 "internal_name": "NotesAgent",
@@ -441,7 +441,7 @@ FORMAT:
 - Key points (bullets) — be specific and concrete
 - Action items (optional)
 """
-            }
+            },
             {
                 "name": "File Agent",
                 "internal_name": "FileAgent",
