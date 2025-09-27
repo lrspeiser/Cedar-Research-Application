@@ -24,6 +24,15 @@ Refactor summary (2025-09-27)
   - cedar_app/utils/file_management.py::file_extension_to_type removed; now imports from main_helpers
 - main.py cleaned of unused upload/serve imports from utils/file_upload; routes now call canonical implementations
 
+Upload flow (high-level call graph)
+- main.py :: upload_file_route
+  -> cedar_app/utils/file_operations.py :: upload_file
+    -> cedar_app/file_utils.py :: interpret_file
+    -> cedar_app/llm/client.py :: _llm_classify_file
+    -> cedar_app/changelog_utils.py :: add_version, record_changelog
+    -> background: cedar_app/utils/file_operations.py :: _run_langextract_ingest_background
+       -> cedar_langextract.py :: ensure_langextract_schema, file_to_text, chunk_document_insert
+
 ## Function Index (Project only)
 
 - Root: /Users/leonardspeiser/Projects/cedarpy

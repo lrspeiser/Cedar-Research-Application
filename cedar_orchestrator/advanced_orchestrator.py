@@ -2263,6 +2263,42 @@ class ThinkerOrchestrator:
         logger.info(f"[ORCHESTRATOR] Starting orchestration for message: {message} (iteration: {iteration})")
         logger.info("="*80)
         
+        # Fast-path: simple arithmetic (e.g., "square root of 123") handled locally without LLM or coding agent
+        try:
+            import re as _re
+            import math as _math
+            msg_low = (message or '').strip().lower()
+            m_sqrt = _re.search(r"square\s+root\s+of\s+([\d,]+(?:\.\d+)?)", msg_low)
+            if m_sqrt:
+                num_str = m_sqrt.group(1).replace(',', '')
+                try:
+                    val = float(num_str)
+                    ans = _math.sqrt(val)
+                    total_time = time.time() - orchestration_start
+                    final_text = f"**Answer:** The square root of {num_str} is {ans}\n\n" + \
+                                 "**Why:** Computed directly as a simple arithmetic fast-path (no LLM/code agent needed)\n\n" + \
+                                 (f"_✅ Processed in {total_time:.1f}s_" )
+                    await websocket.send_json({
+                        "type": "final",
+                        "text": final_text,
+                        "json": {
+                            "function": "final",
+                            "role": 'The Chief Agent',
+                            "selected_agent": 'Final',
+                            "chief_reasoning": 'Simple arithmetic detected; computed result directly.',
+                            "confidence": 0.99,
+                            "method": "Fast-path simple arithmetic",
+                            "orchestration_time": total_time,
+                            "meta": { "fastpath": "simple_math", "operation": "sqrt" }
+                        }
+                    })
+                    logger.info("[ORCHESTRATOR] Fast-path simple arithmetic executed; final sent")
+                    return
+                except Exception as _:
+                    pass
+        except Exception:
+            pass
+        
         # Check iteration limit
         if iteration >= self.MAX_ITERATIONS:
             # If we have previous results, use Chief Agent's last final_answer
