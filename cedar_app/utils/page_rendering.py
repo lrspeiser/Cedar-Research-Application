@@ -574,7 +574,10 @@ def project_page_html(
         {hidden_thread}{hidden_file}{hidden_dataset}
         <textarea id='chatInput' name='content' rows='3' placeholder='Ask a question about this file/context...' style='width:100%; font-family: ui-monospace, Menlo, monospace;'></textarea>
         <div style='height:6px'></div>
-        <button type='submit'>Submit</button>
+        <div style='display:flex; gap:8px; align-items:center'>
+          <button type='submit'>Submit</button>
+          <button type='button' id='stopChatBtn' class='secondary' style='display:none'>Stop</button>
+        </div>
       </form>
     """
 
@@ -625,6 +628,11 @@ def project_page_html(
       // Include chat number if we have one
       var chatNum = window.currentChatNumber;
       var optimisticUser = null;
+
+      // Stop/Cancel button handling
+      var stopBtn = document.getElementById('stopChatBtn');
+      function _showStop(){ try { if (stopBtn) { stopBtn.style.display='inline-block'; stopBtn.disabled=false; } } catch(_){} }
+      function _hideStop(){ try { if (stopBtn) { stopBtn.disabled=true; stopBtn.style.display='none'; } } catch(_){} }
 
       // Simple step timing helpers (annotate previous bubble/line with elapsed time)
       var currentStep = null;
@@ -754,6 +762,43 @@ def project_page_html(
       var ws = new WebSocket(wsScheme + '://' + location.host + '/ws/chat/' + PROJECT_ID);
       var wsStartMs = _now();
 
+      // Define cancel function within this session scope so it captures steps and thread id
+      window.__cedar_cancel_current_run = async function(reason){
+        try {
+          reason = String(reason || 'user_clicked_cancel');
+          // Attempt to notify server to cancel orchestration
+          try { ws && ws.readyState === 1 && ws.send(JSON.stringify({ type: 'cancel', reason: reason })); } catch(_){}
+          // Close the websocket with a user-cancel code
+          try { ws && ws.close(4001, 'user_cancelled'); } catch(_){}
+          // Prepare cancellation summary payload
+          var promptMsgs = [];
+          try { var map = (window.__cedar_last_prompts||{}); if (map && (threadId||null)) { promptMsgs = map[String(threadId)] || []; } } catch(_){}
+          var body = { project_id: PROJECT_ID, branch_id: BRANCH_ID, thread_id: (threadId||null), timings: stepsHistory || [], prompt_messages: promptMsgs || [], reason: reason };
+          // Post cancellation summary
+          try {
+            var resp = await fetch('/api/chat/cancel-summary', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+            var data = null; try { data = await resp.json(); } catch(_){}
+            var text = (data && data.text) ? String(data.text) : 'Run cancelled by user.';
+            // Render a Cancelled assistant bubble
+            try {
+              var wrapC = document.createElement('div'); wrapC.className = 'msg assistant';
+              var metaC = document.createElement('div'); metaC.className = 'meta small'; metaC.innerHTML = "<span class='pill'>assistant</span> <span class='title' style='font-weight:600'>Cancelled</span>";
+              var bubC = document.createElement('div'); bubC.className = 'bubble assistant';
+              var contC = document.createElement('div'); contC.className='content'; contC.style.whiteSpace='pre-wrap'; contC.textContent = text;
+              bubC.appendChild(contC); wrapC.appendChild(metaC); wrapC.appendChild(bubC);
+              if (msgs) msgs.appendChild(wrapC);
+            } catch(_){}
+          } catch(err) {
+            try { console.error('[cancel] summary post failed', err); } catch(_){}
+          }
+          // Finalize UI state
+          finalOrError = true;
+          _clearRunningTimer();
+          clearSpinner();
+          _hideStop();
+        } catch(_){}
+      };
+
       // Client-side watchdog to ensure the user always sees progress or a timeout
       var timeoutMs = __WS_TIMEOUT_MS__; // mirrors server CEDARPY_CHAT_TIMEOUT_SECONDS
       var finalOrError = false;
@@ -797,6 +842,7 @@ def project_page_html(
         try {
           wsStartMs = _now();
           refreshTimeout();
+          _showStop();
           // Do not print a local 'submitted'; rely on server info events for true order
           if (replay) {
             ws.send(JSON.stringify({action:'chat', replay_messages: replay, branch_id: BRANCH_ID, thread_id: threadId||null, file_id: (fileId||null), dataset_id: (datasetId||null), chat_number: chatNum }));
@@ -1191,6 +1237,7 @@ def project_page_html(
               _clearRunningTimer(); // Stop any running timer
               if (label === 'timeout' || label === 'finalizing' || label === 'persisted') { 
                 finalOrError = true;
+                _hideStop();
                 try {
                   if (timeoutId) {
                     clearTimeout(timeoutId);
@@ -1210,6 +1257,7 @@ def project_page_html(
           } catch(_){}
           // Render a proper assistant bubble for the final answer, with optional JSON details
           try {
+            _hideStop();
             var detIdF = m.json ? ('det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8)) : null;
             var wrapF = document.createElement('div'); wrapF.className = 'msg assistant';
             // Always display a clean assistant label for final answers
@@ -1353,6 +1401,7 @@ def project_page_html(
               timeoutId = null;
             }
           } catch(_){}
+          _hideStop();
           // Check for error in both 'error' and 'content' fields (backend inconsistency)
           var errorMsg = m.error || m.content || m.text || 'Unknown error occurred';
           streamText.textContent = '[error] ' + errorMsg; ackEvent(m);
@@ -1434,6 +1483,7 @@ def project_page_html(
         try { if (window.unsubscribeCedarLogs && logSub) window.unsubscribeCedarLogs(logSub); } catch(_){}; 
         try { 
           _clearRunningTimer(); // Ensure timer is stopped on websocket close
+          _hideStop();
           if (currentStep && currentStep.node && !timedOut) { 
             annotateTime(currentStep.node, _now() - currentStep.t0); 
             currentStep = null; 
@@ -1485,6 +1535,11 @@ def project_page_html(
     // Load a specific chat's history
     window.currentChatNumber = chatNumber;
     updateChatNumberDisplay(chatNumber);
+    // Ensure the Chat tab is active
+    try {
+      var chatTab = document.querySelector('.tabs .tab[data-target="main-chat"]');
+      if (chatTab) { chatTab.click(); }
+    } catch(_){}
     fetch(`/api/chat/load`, {
       method: 'POST', 
       headers: {'Content-Type': 'application/json'},
@@ -1642,6 +1697,13 @@ def project_page_html(
           // Start streaming immediately via WebSocket
           startWS(text, tid, fid, dsid); try { t.value=''; } catch(_){ }
         });
+        // Wire Stop button
+        try {
+          var stopBtn2 = document.getElementById('stopChatBtn');
+          if (stopBtn2) {
+            stopBtn2.addEventListener('click', function(){ try { window.__cedar_cancel_current_run && window.__cedar_cancel_current_run('user_clicked_cancel'); } catch(_){} });
+          }
+        } catch(_){}
       }
 
       // Toggle details by clicking the bubble/content

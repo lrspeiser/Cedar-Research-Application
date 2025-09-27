@@ -607,104 +607,6 @@ Model: {model if 'model' in locals() else 'Not determined'}"""
                 summary=f"Failed to generate code - {error_type}: {str(e)[:100]}"
             )
 
-class ReasoningAgent:
-    """Agent that uses LLM for step-by-step reasoning and problem solving"""
-    
-    def __init__(self, llm_client: Optional[AsyncOpenAI]):
-        self.llm_client = llm_client
-        
-    async def process(self, task: str) -> AgentResult:
-        """Use LLM to reason through the problem step by step"""
-        start_time = time.time()
-        logger.info(f"[ReasoningAgent] Starting processing for task: {task[:100]}...")
-        
-        if not self.llm_client:
-            error_details = f"""Agent: ReasoningAgent
-Task: {task}
-Error: No LLM client configured
-API Key Status: {'Not provided' if not os.getenv('OPENAI_API_KEY') else 'Provided but client not initialized'}
-Environment Variables: OPENAI_API_KEY={'SET' if os.getenv('OPENAI_API_KEY') else 'NOT SET'}, CEDARPY_OPENAI_MODEL={os.getenv('CEDARPY_OPENAI_MODEL', 'NOT SET')}
-Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is properly initialized"""
-            
-            return AgentResult(
-                agent_name="ReasoningAgent",
-                display_name="Logical Reasoner",
-                result=f"**Agent Failure Report:**\n\nThe Reasoning Agent was unable to process your request due to missing LLM configuration.\n\n**Error Details:**\n{error_details}\n\n**What the Chief Agent should know:**\nThis agent requires an LLM to perform step-by-step logical reasoning. Without it, no reasoning analysis is possible.",
-                confidence=0.0,
-                method="Configuration Error",
-                explanation="LLM client not available - cannot perform reasoning",
-                summary="Reasoning Agent failed: No LLM configured"
-            )
-        
-        try:
-            # Get model from environment
-            model = os.getenv("CEDARPY_OPENAI_MODEL") or os.getenv("OPENAI_API_KEY_MODEL") or "gpt-5"
-            logger.info(f"[ReasoningAgent] Using LLM for step-by-step reasoning with model: {model}")
-            # Use correct parameter name based on model
-            completion_params = {
-                "model": model,
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": """You are an expert reasoning agent. Solve problems step-by-step.
-                        - Break down complex problems into steps
-                        - Show your work clearly
-                        - For mathematical expressions, parse them correctly (e.g., 'square root of 5*10' means sqrt(5*10), not sqrt(10))
-                        - Provide the final answer clearly
-                        - Be precise and accurate"""
-                    },
-                    {"role": "user", "content": task}
-                ]
-            }
-            
-            # GPT-5 models have different parameters  
-            if "gpt-5" in model or "gpt-4.1" in model:
-                completion_params["max_completion_tokens"] = 500
-            else:
-                completion_params["max_tokens"] = 500
-                completion_params["temperature"] = 0.3
-                
-            response = await self.llm_client.chat.completions.create(**completion_params)
-            
-            llm_result = response.choices[0].message.content
-            logger.info(f"[ReasoningAgent] LLM response: {llm_result[:200]}...")
-            logger.info(f"[ReasoningAgent] Completed in {time.time() - start_time:.3f}s")
-            
-            # Format reasoning output with structured sections
-            # Extract just the key answer if it's verbose
-            lines = llm_result.split('\n')
-            answer = llm_result if len(llm_result) < 200 else lines[0] if lines else llm_result
-            
-            formatted_output = f"""Answer: {answer}
-
-Why: Applied step-by-step logical reasoning to analyze the problem"""
-            
-            return AgentResult(
-                agent_name="ReasoningAgent",
-                display_name="Logical Reasoner",
-                result=formatted_output,
-                confidence=0.85,
-                method="LLM step-by-step reasoning",
-                explanation=f"Applied logical reasoning"
-            )
-            
-        except Exception as e:
-            logger.error(f"[ReasoningAgent] Error: {e}")
-            error_type = type(e).__name__
-            error_details = f"""Exception Type: {error_type}
-Error Message: {str(e)}
-Task: {task[:200]}{'...' if len(task) > 200 else ''}
-Model: {model if 'model' in locals() else 'Not determined'}"""
-            
-            return AgentResult(
-                agent_name="ReasoningAgent",
-                display_name="Logical Reasoner",
-                result=f"**Reasoning Failed:**\n\nThe Reasoning Agent encountered an error during logical analysis.\n\n**Error Details:**\n```\n{error_details}\n```\n\n**Troubleshooting:**\n- Check if the OpenAI API is responding\n- Verify API key permissions\n- Ensure network connectivity",
-                confidence=0.1,
-                method=f"Error: {error_type}",
-                explanation=f"Reasoning failed: {error_type}",
-                summary=f"Reasoning failed - {error_type}: {str(e)[:100]}"
-            )
 
 class SQLAgent:
     """Agent that uses LLM to write and execute SQL queries, create databases, and manage schemas"""
@@ -860,104 +762,6 @@ Suggested Next Steps:
                 explanation=f"SQL generation error: {str(e)[:100]}"
             )
 
-class GeneralAgent:
-    """General purpose agent using LLM for direct answers"""
-    
-    def __init__(self, llm_client: Optional[AsyncOpenAI]):
-        self.llm_client = llm_client
-        
-    async def process(self, task: str) -> AgentResult:
-        """Use LLM to directly answer questions"""
-        start_time = time.time()
-        logger.info(f"[GeneralAgent] Starting processing for task: {task[:100]}...")
-        
-        if not self.llm_client:
-            error_details = f"""Agent: GeneralAgent
-Task: {task}
-Error: No LLM client configured
-API Key Status: {'Not provided' if not os.getenv('OPENAI_API_KEY') else 'Provided but client not initialized'}
-Environment Variables: OPENAI_API_KEY={'SET' if os.getenv('OPENAI_API_KEY') else 'NOT SET'}, CEDARPY_OPENAI_MODEL={os.getenv('CEDARPY_OPENAI_MODEL', 'NOT SET')}
-Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is properly initialized"""
-            
-            return AgentResult(
-                agent_name="GeneralAgent",
-                display_name="General Assistant",
-                result=f"**Agent Failure Report:**\n\nThe General Agent was unable to process your request due to missing LLM configuration.\n\n**Error Details:**\n{error_details}\n\n**What the Chief Agent should know:**\nThis agent requires an LLM to provide direct answers. Without it, no response is possible.",
-                confidence=0.0,
-                method="Configuration Error",
-                explanation="LLM client not available - cannot process",
-                summary="General Agent failed: No LLM configured"
-            )
-        
-        try:
-            # Get model from environment
-            model = os.getenv("CEDARPY_OPENAI_MODEL") or os.getenv("OPENAI_API_KEY_MODEL") or "gpt-5"
-            logger.info(f"[GeneralAgent] Using LLM for direct response with model: {model}")
-            # Use correct parameter name based on model
-            completion_params = {
-                "model": model,
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": """You are a helpful assistant. Answer questions directly and concisely.
-                        - For mathematical problems, compute the exact answer
-                        - Parse expressions correctly (e.g., 'square root of 5*10' means sqrt(5*10))
-                        - Be accurate and precise
-                        - Give just the answer when appropriate"""
-                    },
-                    {"role": "user", "content": task}
-                ]
-            }
-            
-            # GPT-5 models have different parameters
-            if "gpt-5" in model or "gpt-4.1" in model:
-                completion_params["max_completion_tokens"] = 300
-            else:
-                completion_params["max_tokens"] = 300
-                completion_params["temperature"] = 0.5
-                
-            response = await self.llm_client.chat.completions.create(**completion_params)
-            
-            llm_result = response.choices[0].message.content
-            logger.info(f"[GeneralAgent] LLM response: {llm_result[:200]}...")
-            logger.info(f"[GeneralAgent] Completed in {time.time() - start_time:.3f}s")
-            
-            # Format general response with structured sections
-            # Keep answer concise
-            lines = llm_result.split('\n')
-            answer = llm_result if len(llm_result) < 200 else lines[0] if lines else llm_result
-            
-            formatted_output = f"""Answer: {answer}
-
-Why: Provided a direct response based on the query context"""
-            
-            return AgentResult(
-                agent_name="GeneralAgent",
-                display_name="General Assistant",
-                result=formatted_output,
-                confidence=0.75,
-                method="Direct LLM response",
-                explanation=f"Direct AI answer",
-                summary=f"Provided direct answer to: {task[:100]}{'...' if len(task) > 100 else ''}"
-            )
-            
-        except Exception as e:
-            logger.error(f"[GeneralAgent] Error: {e}")
-            error_type = type(e).__name__
-            error_details = f"""Exception Type: {error_type}
-Error Message: {str(e)}
-Task: {task[:200]}{'...' if len(task) > 200 else ''}
-Model: {model if 'model' in locals() else 'Not determined'}"""
-            
-            return AgentResult(
-                agent_name="GeneralAgent",
-                display_name="General Assistant",
-                result=f"**Processing Failed:**\n\nThe General Agent encountered an error.\n\n**Error Details:**\n```\n{error_details}\n```\n\n**Troubleshooting:**\n- Check OpenAI API status and limits\n- Verify your API key is valid\n- Review the error message for specific issues",
-                confidence=0.1,
-                method=f"Error: {error_type}",
-                explanation=f"Processing failed: {error_type}",
-                summary=f"Processing failed - {error_type}: {str(e)[:100]}"
-            )
 
 class MathAgent:
     """Agent that derives mathematical formulas from first principles"""
@@ -2129,9 +1933,7 @@ class ThinkerOrchestrator:
         self.notes_agent = NotesAgent(self.llm_client)
         self.file_agent = FileAgent(self.llm_client)  # Will get context during orchestration
         
-        # Keep but use sparingly
-        self.reasoning_agent = ReasoningAgent(self.llm_client)
-        self.general_agent = GeneralAgent(self.llm_client)
+        # Removed: ReasoningAgent and GeneralAgent are no longer available
         
         # Initialize file processing orchestrator if available
         if FILE_PROCESSING_AVAILABLE:
@@ -2342,10 +2144,6 @@ class ThinkerOrchestrator:
                 agent_explanations.append("• **Notes Agent**: Will document findings and create organized notes")
             elif agent_name == "FileAgent":
                 agent_explanations.append("• **File Agent**: Will download files or analyze file paths as requested")
-            elif agent_name == "ReasoningAgent":
-                agent_explanations.append("• **Reasoning Agent**: Will apply step-by-step logical analysis")
-            elif agent_name == "GeneralAgent":
-                agent_explanations.append("• **General Assistant**: Will provide direct answers using general knowledge")
         
         agent_details = "\n".join(agent_explanations)
         
@@ -2377,12 +2175,6 @@ I've analyzed your request as a {thinking['identified_type'].replace('_', ' ')}.
         if "CodeAgent" in thinking["agents_to_use"]:
             agents.append(self.code_agent)
             logger.info("[ORCHESTRATOR] Added CodeAgent to processing queue")
-        if "ReasoningAgent" in thinking["agents_to_use"]:
-            agents.append(self.reasoning_agent)
-            logger.info("[ORCHESTRATOR] Added ReasoningAgent to processing queue")
-        if "GeneralAgent" in thinking["agents_to_use"]:
-            agents.append(self.general_agent)
-            logger.info("[ORCHESTRATOR] Added GeneralAgent to processing queue")
         if "SQLAgent" in thinking["agents_to_use"]:
             agents.append(self.sql_agent)
             logger.info("[ORCHESTRATOR] Added SQLAgent to processing queue")
@@ -2478,9 +2270,7 @@ I've analyzed your request as a {thinking['identified_type'].replace('_', ' ')}.
                     agent_display_names = {
                         "CodeAgent": "Coding Agent",
                         "ShellAgent": "Shell Executor",
-                        "ReasoningAgent": "Logical Reasoner",
                         "SQLAgent": "SQL Agent",
-                        "GeneralAgent": "General Assistant",
                         "MathAgent": "Math Agent",
                         "ResearchAgent": "Research Agent",
                         "StrategyAgent": "Strategy Agent",
