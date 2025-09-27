@@ -2532,7 +2532,7 @@ Please provide this information so I can better assist you."""
         # Send final response with Chief Agent attribution
         # Send as 'final' type to stop the frontend timer
         logger.info("[ORCHESTRATOR] Sending final message with type='final'")
-            await websocket.send_json({
+        await websocket.send_json({
             "type": "final",
             "text": final_text,
             "json": {
