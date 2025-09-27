@@ -265,23 +265,23 @@ print('imported rows:', len(df))'''
             raw = (resp.choices[0].message.content or "").strip()
             try:
                 parsed = json.loads(raw)
-                reply_title = str(parsed.get("title") or "Assistant")
+                reply_title = str(parsed.get("title") or "Chief Agent")
             except Exception:
                 pass
             try:
                 parsed = json.loads(raw)
-                reply_title = str(parsed.get("title") or "Assistant")
+                reply_title = str(parsed.get("title") or "Chief Agent")
                 reply_payload = parsed.get("data")
                 reply_text = raw
-            except Exception:
-                reply_title = "Assistant"
+        except Exception:
+                reply_title = "Chief Agent"
                 reply_text = raw
         except Exception as e:
             reply_text = f"[llm-error] {type(e).__name__}: {e}"
             reply_title = "LLM Error"
     
     # Persist assistant message (with title/payload if available)
-    am = ThreadMessage(project_id=project.id, branch_id=branch.id, thread_id=thr.id, role="assistant", content=reply_text or "", display_title=reply_title, payload_json=reply_payload)
+    am = ThreadMessage(project_id=project.id, branch_id=branch.id, thread_id=thr.id, role="Chief Agent", content=reply_text or "", display_title=reply_title, payload_json=reply_payload)
     try:
         db.add(am)
         db.commit()

@@ -1946,7 +1946,7 @@ class ThinkerOrchestrator:
         if not self.file_processor:
             await websocket.send_json({
                 "type": "message",
-                "role": "assistant",
+                "role": "File Processing",
                 "text": "File processing agents not available. Please install required libraries."
             })
             return {"error": "File processing not available"}
@@ -2375,7 +2375,7 @@ Task: {message[:200]}{'...' if len(message) > 200 else ''}"""
                     
                     await websocket.send_json({
                         "type": "message",
-                        "role": "Assistant",
+                        "role": result.display_name or "Agent",
                         "text": clarification_text
                     })
                     return
@@ -2532,11 +2532,10 @@ Please provide this information so I can better assist you."""
         # Send final response with Chief Agent attribution
         # Send as 'final' type to stop the frontend timer
         logger.info("[ORCHESTRATOR] Sending final message with type='final'")
-        await websocket.send_json({
+            await websocket.send_json({
             "type": "final",
             "text": final_text,
             "json": {
-                "function": "orchestration_complete",
                 "role": 'The Chief Agent',
                 "selected_agent": selected_agent,
                 "chief_reasoning": reasoning,

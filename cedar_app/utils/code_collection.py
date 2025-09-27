@@ -39,8 +39,8 @@ def collect_code_items(db: Session, project_id: int, threads: List[Thread]) -> L
             if msg.role in ('user', 'system'):
                 continue
                 
-            # Process assistant messages for code content
-            if msg.role == 'assistant':
+            # Process non-user, non-system messages (Chief Agent or any sub-agent)
+            if str(msg.role or '').lower() not in ('user', 'system'):
                 # Check for code in display_title
                 if msg.display_title and 'Tool:' in msg.display_title:
                     tool_name = msg.display_title.replace('Tool:', '').strip()

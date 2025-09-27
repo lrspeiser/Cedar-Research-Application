@@ -124,7 +124,7 @@ def ask_orchestrator(app, project_id: int, request: Request, query: str, db: Ses
         recs = db.query(ThreadMessage).filter(
             ThreadMessage.project_id==project.id, 
             ThreadMessage.branch_id==branch.id, 
-            ThreadMessage.role=="assistant"
+            ThreadMessage.role.in_(["Chief Agent", "Assistant"])  # backwards compatibility
         ).order_by(ThreadMessage.created_at.desc()).limit(limit).all()
         
         out: List[Dict[str, Any]] = []
@@ -142,7 +142,7 @@ def ask_orchestrator(app, project_id: int, request: Request, query: str, db: Ses
             project_id=project.id, 
             branch_id=branch.id, 
             thread_id=thr.id, 
-            role="assistant", 
+            role="Chief Agent", 
             display_title="LLM key missing", 
             content="Set CEDARPY_OPENAI_API_KEY or OPENAI_API_KEY in ~/CedarPyData/.env; see README"
         )
@@ -373,7 +373,7 @@ def ask_orchestrator(app, project_id: int, request: Request, query: str, db: Ses
                 project_id=project.id, 
                 branch_id=branch.id, 
                 thread_id=thr.id, 
-                role="assistant", 
+                role="Chief Agent", 
                 content=json.dumps(resp, ensure_ascii=False), 
                 display_title="Ask: JSON"
             ))

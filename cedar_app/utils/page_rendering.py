@@ -782,7 +782,7 @@ def project_page_html(
             // Render a Cancelled assistant bubble
             try {
               var wrapC = document.createElement('div'); wrapC.className = 'msg assistant';
-              var metaC = document.createElement('div'); metaC.className = 'meta small'; metaC.innerHTML = "<span class='pill'>assistant</span> <span class='title' style='font-weight:600'>Cancelled</span>";
+              var metaC = document.createElement('div'); metaC.className = 'meta small'; metaC.innerHTML = "<span class='pill'>Chief Agent</span> <span class='title' style='font-weight:600'>Cancelled</span>";
               var bubC = document.createElement('div'); bubC.className = 'bubble assistant';
               var contC = document.createElement('div'); contC.className='content'; contC.style.whiteSpace='pre-wrap'; contC.textContent = text;
               bubC.appendChild(contC); wrapC.appendChild(metaC); wrapC.appendChild(bubC);
@@ -898,8 +898,8 @@ def project_page_html(
             if (rLower === 'user') roleClass = 'user';
             else if (rLower === 'system') roleClass = 'system';
             
-            // For display, show the actual role/agent name
-            var displayRole = r;
+            // For display, map 'assistant' to 'Chief Agent', otherwise show the actual role/agent name
+            var displayRole = (rLower === 'assistant') ? 'Chief Agent' : r;
             
             var wrapM = document.createElement('div'); 
             wrapM.className = 'msg ' + roleClass;
@@ -1158,8 +1158,8 @@ def project_page_html(
             if (!thinkWrap) {
               var detIdTh = 'det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
               thinkWrap = document.createElement('div'); thinkWrap.className = 'msg assistant';
-              var metaTh = document.createElement('div'); metaTh.className = 'meta small'; metaTh.innerHTML = "<span class='pill'>assistant</span> <span class='title' style='font-weight:600'>planning</span>";
-              var bubTh = document.createElement('div'); bubTh.className = 'bubble assistant'; bubTh.setAttribute('data-details-id', detIdTh);
+              var metaTh = document.createElement('div'); metaTh.className = 'meta small'; metaTh.innerHTML = "<span class='pill'>Chief Agent</span> <span class='title' style='font-weight:600'>planning</span>";
+              var bubTh = document.createElement('div'); bubTh.className = 'bubble assistant';
               var contTh = document.createElement('div'); contTh.className = 'content'; contTh.style.whiteSpace='pre-wrap'; contTh.textContent = 'Planning…';
               // Spinner during planning
               thinkSpin = document.createElement('span'); thinkSpin.className = 'spinner'; thinkSpin.style.marginLeft = '6px'; contTh.appendChild(thinkSpin);
@@ -1187,8 +1187,8 @@ def project_page_html(
             if (!thinkWrap) {
               var detIdTh2 = 'det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
               thinkWrap = document.createElement('div'); thinkWrap.className = 'msg assistant';
-              var metaTh2 = document.createElement('div'); metaTh2.className = 'meta small'; metaTh2.innerHTML = "<span class='pill'>assistant</span> <span class='title' style='font-weight:600'>planning</span>";
-              var bubTh2 = document.createElement('div'); bubTh2.className = 'bubble assistant'; bubTh2.setAttribute('data-details-id', detIdTh2);
+              var metaTh2 = document.createElement('div'); metaTh2.className = 'meta small'; metaTh2.innerHTML = "<span class='pill'>Chief Agent</span> <span class='title' style='font-weight:600'>planning</span>";
+              var bubTh2 = document.createElement('div'); bubTh2.className = 'bubble assistant';
               var contTh2 = document.createElement('div'); contTh2.className = 'content'; contTh2.style.whiteSpace='pre-wrap';
               thinkText = contTh2;
               bubTh2.appendChild(contTh2);
@@ -1259,7 +1259,7 @@ def project_page_html(
             var detIdF = m.json ? ('det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8)) : null;
             var wrapF = document.createElement('div'); wrapF.className = 'msg assistant';
             var fnF = (m && m.json && m.json.function) ? String(m.json.function) : 'final';
-            var metaF = document.createElement('div'); metaF.className = 'meta small'; metaF.innerHTML = "<span class='pill'>assistant</span> <span class='title' style='font-weight:600'>" + fnF + "</span>";
+            var metaF = document.createElement('div'); metaF.className = 'meta small'; metaF.innerHTML = "<span class='pill'>Chief Agent</span> <span class='title' style='font-weight:600'>" + (fnF === 'final' ? 'Final' : fnF) + "</span>";
             var bubF = document.createElement('div'); bubF.className = 'bubble assistant'; if (detIdF) bubF.setAttribute('data-details-id', detIdF);
             var contF = document.createElement('div'); contF.className='content'; contF.style.whiteSpace='pre-wrap'; contF.textContent = (fnF ? (fnF + ' ') : '') + (m.text||'');
             // Add edit prompt link if we have a stored prompt for this thread
@@ -1332,12 +1332,12 @@ def project_page_html(
               var titles = Array.from(document.querySelectorAll('#msgs .msg.assistant .meta .title'));
               var haveAssistantTitle = false;
               try {
-                haveAssistantTitle = titles.some(function(el){ return String(el.textContent||'').trim().toLowerCase() === 'assistant'; });
+                haveAssistantTitle = titles.some(function(el){ return String(el.textContent||'').trim().toLowerCase() === 'chief agent'; });
               } catch(_){ haveAssistantTitle = false; }
               if (!haveAssistantTitle) {
                 var detIdP2 = 'det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
                 var wrapP2 = document.createElement('div'); wrapP2.className = 'msg assistant';
-                var metaP2 = document.createElement('div'); metaP2.className = 'meta small'; metaP2.innerHTML = "<span class='pill'>assistant</span> <span class='title' style='font-weight:600'>Assistant</span>";
+                var metaP2 = document.createElement('div'); metaP2.className = 'meta small'; metaP2.innerHTML = "<span class='pill'>Chief Agent</span> <span class='title' style='font-weight:600'>Chief Agent</span>";
                 var bubP2 = document.createElement('div'); bubP2.className = 'bubble assistant'; bubP2.setAttribute('data-details-id', detIdP2);
                 var contP2 = document.createElement('div'); contP2.className='content'; contP2.style.whiteSpace='pre-wrap';
                 try { contP2.textContent = 'Prepared LLM prompt (click to view JSON).'; } catch(_){ }
@@ -1561,7 +1561,8 @@ def project_page_html(
             wrap.className = 'msg ' + roleClass;
             var meta = document.createElement('div');
             meta.className = 'meta small';
-            meta.innerHTML = '<span class="pill">' + msg.role + '</span>';
+            var roleLabel = (String(msg.role||'').toLowerCase() === 'assistant') ? 'Chief Agent' : String(msg.role||'');
+            meta.innerHTML = '<span class="pill">' + roleLabel + '</span>';
             var bub = document.createElement('div');
             bub.className = 'bubble ' + roleClass;
             var cont = document.createElement('div');

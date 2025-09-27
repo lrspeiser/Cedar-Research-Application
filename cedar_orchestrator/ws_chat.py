@@ -177,14 +177,14 @@ async def handle_ws_chat(
                                 if msg_type == 'message':
                                     self.chat_mgr.add_message(
                                         self.proj_id, self.br_id, self.chat_num,
-                                        role=data.get('role', 'assistant'),
+                                        role=data.get('role', 'Chief Agent'),
                                         content=data.get('text', ''),
                                         metadata={'type': 'agent_response'}
                                     )
                                 elif msg_type == 'final':
                                     self.chat_mgr.add_message(
                                         self.proj_id, self.br_id, self.chat_num,
-                                        role='assistant',
+                                        role='Chief Agent',
                                         content=data.get('text', ''),
                                         metadata={'type': 'final_answer'}
                                     )

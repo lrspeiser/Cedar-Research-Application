@@ -659,7 +659,7 @@ def serve_project_upload_route(project_id: int, path: str):
               var d = document.createElement('div');
               d.className = 'small typing';
               d.id = 'typingIndicator';
-              d.innerHTML = "<span class='pill'>assistant</span> Thinking <span class='dots'><span>.</span><span>.</span><span>.</span></span>";
+              d.innerHTML = "<span class='pill'>Chief Agent</span> Thinking <span class='dots'><span>.</span><span>.</span><span>.</span></span>";
               msgs.appendChild(d);
             } catch(e) { try { console.error('[ui] typing indicator error', e); } catch(_) {} }
           });

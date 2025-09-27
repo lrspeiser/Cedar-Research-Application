@@ -782,7 +782,7 @@ class FileProcessingOrchestrator:
             
             await websocket.send_json({
                 "type": "message",
-                "role": "assistant",
+                "role": "File Processing",
                 "text": final_text,
                 "metadata": summary
             })
