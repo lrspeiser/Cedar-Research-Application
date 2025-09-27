@@ -2327,25 +2327,39 @@ Task: {message[:200]}{'...' if len(message) > 200 else ''}"""
         if chief_decision.get('thinking_process'):
             logger.info(f"[ORCHESTRATOR] Chief Agent thinking: {chief_decision['thinking_process'][:300]}...")
         
-        # Save notes if we have a database session and project context
+        # ALWAYS save notes after every agent response cycle (whether loop or final)
+        # This ensures all intermediate findings are captured in the database
         if NOTES_AVAILABLE and db_session and project_id and branch_id:
             try:
                 note_taker = ChiefAgentNoteTaker(project_id, branch_id, db_session)
+                
+                # Include iteration info in the notes
+                enhanced_decision = dict(chief_decision)
+                enhanced_decision['iteration'] = iteration
+                enhanced_decision['is_final'] = chief_decision.get('decision') != 'loop'
+                enhanced_decision['total_iterations'] = iteration + 1
+                
                 note_id = await note_taker.save_agent_notes(
                     agent_results=valid_results,
                     user_query=message, 
-                    chief_decision=chief_decision
+                    chief_decision=enhanced_decision
                 )
                 if note_id:
-                    logger.info(f"[ORCHESTRATOR] Saved notes to database with ID: {note_id}")
-                    # Optionally send notification to websocket
+                    logger.info(f"[ORCHESTRATOR] Saved iteration {iteration + 1} notes to database with ID: {note_id}")
+                    # Send notification to websocket about note save
                     await websocket.send_json({
                         "type": "note_saved",
                         "note_id": note_id,
-                        "message": "Analysis saved to Notes"
+                        "iteration": iteration + 1,
+                        "is_final": chief_decision.get('decision') != 'loop',
+                        "message": f"Iteration {iteration + 1} analysis saved to Notes"
                     })
+                else:
+                    logger.warning(f"[ORCHESTRATOR] No note ID returned for iteration {iteration + 1}")
             except Exception as e:
-                logger.warning(f"[ORCHESTRATOR] Failed to save notes: {e}")
+                logger.error(f"[ORCHESTRATOR] Failed to save notes for iteration {iteration + 1}: {e}")
+                # Don't fail the whole orchestration if notes fail to save
+                # But make sure we log it prominently
         
         # Handle clarification needs (still handled by individual agents)
         needs_clarification = any(r.needs_clarification for r in valid_results)
@@ -2546,6 +2560,7 @@ Please provide this information so I can better assist you."""
         logger.info("="*80)
         logger.info(f"[ORCHESTRATOR] Orchestration completed in {total_time:.3f}s")
         logger.info(f"[ORCHESTRATOR] Final answer: {final_answer[:100]}...")
+        logger.info(f"[ORCHESTRATOR] Notes saved for all {iteration + 1} iteration(s)")
         logger.info("="*80)
         
 
