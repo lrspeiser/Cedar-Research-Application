@@ -10,7 +10,7 @@ import time
 import traceback
 from typing import Optional
 from fastapi import WebSocket, FastAPI
-from cedar_orchestrator.advanced_orchestrator import ThinkerOrchestrator
+from cedar_orchestrator.orchestrator import ThinkerOrchestrator
 
 # Configure logging
 logging.basicConfig(

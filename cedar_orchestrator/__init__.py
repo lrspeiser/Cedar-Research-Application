@@ -9,12 +9,14 @@ This module provides the production WebSocket chat implementation with:
 """
 
 from cedar_orchestrator.ws_chat import register_ws_chat, WSDeps
-from cedar_orchestrator.advanced_orchestrator import ThinkerOrchestrator, AgentResult
+from cedar_orchestrator.orchestrator import ThinkerOrchestrator, ChiefAgent
+from cedar_orchestrator.execution_agents import AgentResult
 
 __all__ = [
     "register_ws_chat",
     "WSDeps",
     "ThinkerOrchestrator",
+    "ChiefAgent",
     "AgentResult",
 ]
 
