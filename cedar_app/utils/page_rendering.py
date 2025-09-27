@@ -937,8 +937,6 @@ def project_page_html(
           } catch(_) { }
         } else if (m.type === 'prompt') {
           try {
-            // If no prompt messages were provided, do not render a prompt panel
-            if (!m.messages || (Array.isArray(m.messages) && m.messages.length === 0)) { ackEvent(m); return; }
             try {
               window.__cedar_last_prompts = window.__cedar_last_prompts || {};
               if (m.thread_id) { window.__cedar_last_prompts[String(m.thread_id)] = m.messages || []; }
@@ -980,7 +978,7 @@ def project_page_html(
                 titleElP.setAttribute('role', 'button');
                 titleElP.setAttribute('tabindex', '0');
                 var _tglP = function(){ try { var e=document.getElementById(detIdP); if (e) { e.style.display = (e.style.display==='none'?'block':'none'); } } catch(_){} };
-                titleElP.addEventListener('click', function(ev){ try { ev.preventDefault(); } catch(_){}; _tglP());
+                titleElP.addEventListener('click', function(ev){ try { ev.preventDefault(); } catch(_){}; _tglP(); });
                 titleElP.addEventListener('keydown', function(ev){ try { if (ev && (ev.key==='Enter' || ev.key===' ')) { ev.preventDefault(); _tglP(); } } catch(_){} });
               }
             } catch(_) {}
@@ -1260,10 +1258,10 @@ def project_page_html(
             _hideStop();
             var detIdF = m.json ? ('det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8)) : null;
             var wrapF = document.createElement('div'); wrapF.className = 'msg assistant';
-            // Always display a clean assistant label for final answers
-            var metaF = document.createElement('div'); metaF.className = 'meta small'; metaF.innerHTML = "<span class='pill'>assistant</span> <span class='title' style='font-weight:600'>Assistant</span>";
+            var fnF = (m && m.json && m.json.function) ? String(m.json.function) : 'final';
+            var metaF = document.createElement('div'); metaF.className = 'meta small'; metaF.innerHTML = "<span class='pill'>assistant</span> <span class='title' style='font-weight:600'>" + fnF + "</span>";
             var bubF = document.createElement('div'); bubF.className = 'bubble assistant'; if (detIdF) bubF.setAttribute('data-details-id', detIdF);
-            var contF = document.createElement('div'); contF.className='content'; contF.style.whiteSpace='pre-wrap'; contF.textContent = (m.text||'');
+            var contF = document.createElement('div'); contF.className='content'; contF.style.whiteSpace='pre-wrap'; contF.textContent = (fnF ? (fnF + ' ') : '') + (m.text||'');
             // Add edit prompt link if we have a stored prompt for this thread
             try {
               var last = (window.__cedar_last_prompts||{})[String(threadId||'')];
@@ -1327,28 +1325,16 @@ def project_page_html(
               wrapF.appendChild(detailsF);
             }
             if (msgs) msgs.appendChild(wrapF);
-            // Ensure an Assistant prompt bubble exists for JSON drilldown only when we actually have prompt messages
+            // Ensure an Assistant prompt bubble exists for JSON drilldown, even if the initial 'prompt' event was missed
             try {
+              // Only synthesize if no existing Assistant-titled message exists. The final bubble's title may be 'final' or a function name,
+              // so do not treat that as satisfying the Assistant prompt presence check.
               var titles = Array.from(document.querySelectorAll('#msgs .msg.assistant .meta .title'));
               var haveAssistantTitle = false;
               try {
                 haveAssistantTitle = titles.some(function(el){ return String(el.textContent||'').trim().toLowerCase() === 'assistant'; });
               } catch(_){ haveAssistantTitle = false; }
-              // Prepare fallback messages if available
-              var fallbackMsgs = null;
-              try {
-                var last = (window.__cedar_last_prompts||{})[String(threadId||'')];
-                if (last && last.length) { fallbackMsgs = last; }
-              } catch(_){ }
-              if (!fallbackMsgs) {
-                var fromFinal = null;
-                try { if (m && m.prompt) { fromFinal = m.prompt; } } catch(_){ }
-                if (Array.isArray(fromFinal) && fromFinal.length) {
-                  fallbackMsgs = fromFinal;
-                }
-              }
-              // Only synthesize the prompt bubble if we actually have messages to show
-              if (!haveAssistantTitle && Array.isArray(fallbackMsgs) && fallbackMsgs.length) {
+              if (!haveAssistantTitle) {
                 var detIdP2 = 'det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
                 var wrapP2 = document.createElement('div'); wrapP2.className = 'msg assistant';
                 var metaP2 = document.createElement('div'); metaP2.className = 'meta small'; metaP2.innerHTML = "<span class='pill'>assistant</span> <span class='title' style='font-weight:600'>Assistant</span>";
@@ -1358,6 +1344,22 @@ def project_page_html(
                 bubP2.appendChild(contP2);
                 var detailsP2 = document.createElement('div'); detailsP2.id = detIdP2; detailsP2.style.display='none';
                 var preP2 = document.createElement('pre'); preP2.className='small'; preP2.style.whiteSpace='pre-wrap'; preP2.style.background='#f8fafc'; preP2.style.padding='8px'; preP2.style.borderRadius='6px';
+                var fallbackMsgs = null;
+                try {
+                  var last = (window.__cedar_last_prompts||{})[String(threadId||'')];
+                  if (last && last.length) { fallbackMsgs = last; }
+                } catch(_){ }
+                if (!fallbackMsgs) {
+                  var fromFinal = null;
+                  try { if (m && m.prompt) { fromFinal = m.prompt; } } catch(_){ }
+                  if (fromFinal && Array.isArray(fromFinal)) {
+                    fallbackMsgs = fromFinal;
+                  } else {
+                    var reason = 'No LLM prompt available';
+                    try { if (m && m.json && m.json.meta && m.json.meta.fastpath) { reason = 'No LLM prompt: fast-path (' + String(m.json.meta.fastpath) + ')'; } } catch(_){ }
+                    fallbackMsgs = [{ role: 'system', content: reason }];
+                  }
+                }
                 try { preP2.textContent = JSON.stringify(fallbackMsgs, null, 2); } catch(_){ preP2.textContent = String(fallbackMsgs); }
                 var barP2 = document.createElement('div'); barP2.className='small'; barP2.style.margin='6px 0 8px 0';
                 var copyBtnP2 = document.createElement('button'); copyBtnP2.textContent='Copy JSON'; copyBtnP2.className='secondary';
@@ -1366,6 +1368,7 @@ def project_page_html(
                 detailsP2.appendChild(barP2);
                 detailsP2.appendChild(preP2);
                 wrapP2.appendChild(metaP2); wrapP2.appendChild(bubP2); wrapP2.appendChild(detailsP2);
+                // Allow clicking the title to toggle details (to satisfy tests)
                 try {
                   var titleElP2 = metaP2.querySelector('.title');
                   if (titleElP2) {
