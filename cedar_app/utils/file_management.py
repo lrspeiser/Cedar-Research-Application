@@ -15,117 +15,14 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from ..db_utils import _get_project_engine, ensure_project_initialized, _project_dirs
 from main_models import FileEntry, Project, Branch, Thread, ThreadMessage, Dataset
-from main_helpers import current_branch, add_version, ensure_main_branch, branch_filter_ids, escape
+from main_helpers import current_branch, add_version, ensure_main_branch, branch_filter_ids, escape, file_extension_to_type
 from ..changelog_utils import record_changelog
 from ..llm_utils import llm_classify_file as _llm_classify_file
+from ..file_utils import interpret_file
 
 
-def file_extension_to_type(filename: str) -> str:
-    """Determine file type from extension."""
-    ext = os.path.splitext(filename)[1].lower()
-    if ext in ['.py', '.js', '.java', '.cpp', '.c', '.cs', '.go', '.rs', '.rb', '.php', '.swift']:
-        return 'code'
-    elif ext in ['.txt', '.md', '.log', '.csv', '.tsv']:
-        return 'text'
-    elif ext in ['.pdf']:
-        return 'document'
-    elif ext in ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.svg', '.webp']:
-        return 'image'
-    elif ext in ['.json', '.jsonl', '.geojson']:
-        return 'data'
-    elif ext in ['.xls', '.xlsx', '.xlsm']:
-        return 'spreadsheet'
-    elif ext in ['.zip', '.tar', '.gz', '.7z', '.rar']:
-        return 'archive'
-    elif ext in ['.mp4', '.avi', '.mov', '.mkv', '.webm']:
-        return 'video'
-    elif ext in ['.mp3', '.wav', '.ogg', '.flac']:
-        return 'audio'
-    else:
-        return 'unknown'
 
 
-def interpret_file(file_path: str, original_name: str) -> Dict[str, Any]:
-    """Interpret file metadata."""
-    meta = {}
-    try:
-        meta['size_bytes'] = os.path.getsize(file_path)
-        meta['extension'] = os.path.splitext(original_name)[1].lower()
-        meta['mime_guess'] = mimetypes.guess_type(original_name)[0]
-        
-        # Try to detect if it's text
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                sample = f.read(8192)
-                meta['is_text'] = True
-                meta['line_count'] = len(open(file_path).readlines())
-                
-                # Check if JSON
-                if meta['extension'] in ['.json', '.jsonl']:
-                    try:
-                        import json
-                        data = json.loads(sample if len(sample) < 8192 else open(file_path).read())
-                        meta['json_valid'] = True
-                        if isinstance(data, dict):
-                            meta['json_top_level_keys'] = list(data.keys())[:10]
-                    except:
-                        meta['json_valid'] = False
-                
-                # Check if CSV
-                if meta['extension'] in ['.csv', '.tsv']:
-                    try:
-                        import csv
-                        dialect = csv.Sniffer().sniff(sample[:1024])
-                        meta['csv_dialect'] = dialect.delimiter
-                    except:
-                        pass
-                        
-        except:
-            meta['is_text'] = False
-            
-        # Detect format
-        if meta['extension'] == '.pdf':
-            meta['format'] = 'pdf'
-        elif meta['extension'] in ['.jpg', '.jpeg', '.png', '.gif']:
-            meta['format'] = 'image'
-        elif meta.get('is_text'):
-            meta['format'] = 'text'
-        else:
-            meta['format'] = 'binary'
-            
-        # Detect language for code files
-        ext_to_lang = {
-            '.py': 'python',
-            '.js': 'javascript',
-            '.ts': 'typescript',
-            '.java': 'java',
-            '.cpp': 'cpp',
-            '.c': 'c',
-            '.cs': 'csharp',
-            '.go': 'go',
-            '.rs': 'rust',
-            '.rb': 'ruby',
-            '.php': 'php',
-            '.swift': 'swift',
-            '.kt': 'kotlin',
-            '.scala': 'scala',
-            '.r': 'r',
-            '.sql': 'sql',
-            '.sh': 'bash',
-            '.yml': 'yaml',
-            '.yaml': 'yaml',
-            '.json': 'json',
-            '.xml': 'xml',
-            '.html': 'html',
-            '.css': 'css',
-        }
-        if meta['extension'] in ext_to_lang:
-            meta['language'] = ext_to_lang[meta['extension']]
-            
-    except Exception as e:
-        meta['error'] = str(e)
-        
-    return meta
 
 
 def upload_file(app, project_id: int, request: Request, file: UploadFile, db: Session):

@@ -13,6 +13,17 @@ Notes
 
 ---
 
+Refactor summary (2025-09-27)
+- Canonical file upload handler: cedar_app/utils/file_operations.py::upload_file
+- Canonical file serving (path-based): cedar_app/api_routes.py::serve_project_upload
+- Deprecated but retained wrappers for compatibility:
+  - cedar_app/utils/file_upload.py::upload_file delegates to canonical
+  - cedar_app/utils/file_upload.py::serve_project_upload resolves file_id -> path and delegates
+- Removed duplicate helpers in favor of canonical ones:
+  - cedar_app/utils/file_management.py::interpret_file removed; now imports cedar_app/file_utils.py::interpret_file
+  - cedar_app/utils/file_management.py::file_extension_to_type removed; now imports from main_helpers
+- main.py cleaned of unused upload/serve imports from utils/file_upload; routes now call canonical implementations
+
 ## Function Index (Project only)
 
 - Root: /Users/leonardspeiser/Projects/cedarpy

@@ -589,7 +589,8 @@ except Exception as e:
 
 
 @app.get("/uploads/{project_id}/{path:path}")
-def serve_project_upload(project_id: int, path: str):
+def serve_project_upload_route(project_id: int, path: str):
+    """Route wrapper that delegates to cedar_app.api_routes. Renamed to avoid duplicate name confusion."""
     return _serve_project_upload(
         project_id=project_id,
         path=path,
@@ -930,7 +931,6 @@ from cedar_app.utils.page_rendering import projects_list_html
 from cedar_app.utils.page_rendering import project_page_html
 
 # Import extracted functions
-from cedar_app.utils.file_upload import serve_project_upload as _serve_project_upload_impl, upload_file as _upload_file_impl
 from cedar_app.utils.sql_websocket import ws_sqlx as _ws_sqlx_impl
 
 # Test-only tool execution API (local + CEDARPY_TEST_MODE only)
@@ -1751,29 +1751,6 @@ def thread_chat_endpoint(project_id: int, request: Request, content: str = Form(
 # ----------------------------------------------------------------------------------
 # WebSocket chat streaming endpoint (word-by-word)
 # ----------------------------------------------------------------------------------
-async def _ws_send_safe(ws: WebSocket, text: str) -> bool:
-    try:
-        if getattr(ws, 'client_state', None) != WebSocketState.CONNECTED:
-            return False
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            # Outside of loop; fallback
-            pass
-        try:
-            # Attempt send; catch RuntimeError from closed/closing socket
-            import json as _json  # ensure json exists in scope used elsewhere
-        except Exception:
-            pass
-        try:
-            # starlette will raise RuntimeError if closing/closed
-            return bool((await ws.send_text(text)) or True)
-        except RuntimeError:
-            return False
-        except Exception:
-            return False
-    except Exception:
-        return False
 
 # Legacy WebSocket endpoint removed - using only /ws/chat/{project_id}
 
@@ -1788,8 +1765,8 @@ from cedar_app.utils.file_operations import (
 
 
 @app.post("/project/{project_id}/files/upload")
-def upload_file(project_id: int, request: Request, file: UploadFile = File(...), db: Session = Depends(get_project_db)):
-    """Route handler for file uploads. Delegates to extracted module."""
+def upload_file_route(project_id: int, request: Request, file: UploadFile = File(...), db: Session = Depends(get_project_db)):
+    """Route handler for file uploads. Delegates to extracted module. Renamed to avoid duplicate name confusion."""
     return upload_file_impl(project_id, request, file, db)
 
 # Start the server if run directly
