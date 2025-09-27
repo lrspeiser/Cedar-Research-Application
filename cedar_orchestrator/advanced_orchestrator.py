@@ -2566,53 +2566,69 @@ Please provide this information so I can better assist you."""
         # Use Chief Agent's final answer
         result_text = final_answer
         
-        # Parse out the structured sections if they exist
-        answer_match = re.search(r'Answer:\s*(.+?)(?=\n\n|\n(?:Why:|Potential Issues:|Suggested Next Steps:)|$)', result_text, re.DOTALL)
-        why_match = re.search(r'Why:\s*(.+?)(?=\n\n|\n(?:Potential Issues:|Suggested Next Steps:)|$)', result_text, re.DOTALL)
-        issues_match = re.search(r'Potential Issues:\s*(.+?)(?=\n\n|\nSuggested Next Steps:|$)', result_text, re.DOTALL)
-        next_steps_match = re.search(r'Suggested Next Steps:\s*(.+?)(?=\n\n|$)', result_text, re.DOTALL)
+        # Check if the Chief Agent already provided a fully formatted response
+        # Look for the key structural elements that indicate it's already formatted
+        has_answer_section = '**Answer:**' in result_text or 'Answer:' in result_text
+        has_why_section = '**Why:**' in result_text or 'Why:' in result_text
+        has_agent_section = '**What Each Agent Found:**' in result_text or 'What Each Agent Found:' in result_text
+        has_next_steps = '**Suggested Next Steps:**' in result_text or 'Suggested Next Steps:' in result_text
         
-        # If Chief Agent provided a plain answer, use it directly
-        if not answer_match and not why_match:
-            answer = result_text
-            why = reasoning
-            issues = None
-            next_steps = None
+        # If the Chief Agent already formatted the response completely, use it as-is
+        if has_answer_section and (has_why_section or has_agent_section or has_next_steps):
+            # The Chief Agent has already provided a fully formatted response
+            final_text = result_text
+            logger.info("[ORCHESTRATOR] Using Chief Agent's pre-formatted response")
         else:
-            answer = answer_match.group(1).strip() if answer_match else result_text.split('\n')[0]
-            why = why_match.group(1).strip() if why_match else reasoning
-            issues = issues_match.group(1).strip() if issues_match else None
-            next_steps = next_steps_match.group(1).strip() if next_steps_match else None
-        
-        # Build final structured response
-        final_text = f"**Answer:** {answer}\n\n"
-        final_text += f"**Why:** {why}\n\n"
-        
-        # Add Agent Summaries section if we have results with summaries
-        agent_summaries = [r for r in valid_results if r.summary]
-        if agent_summaries:
-            final_text += "**What Each Agent Found:**\n"
-            for result in agent_summaries:
-                final_text += f"• **{result.display_name}:** {result.summary}\n"
-            final_text += "\n"
-        
-        if issues and issues.lower() != 'none':
-            final_text += f"**Potential Issues:** {issues}\n\n"
+            # The Chief Agent provided an unformatted response, so format it
+            logger.info("[ORCHESTRATOR] Formatting Chief Agent's raw response")
             
-        # Always include Suggested Next Steps
-        if next_steps:
-            final_text += f"**Suggested Next Steps:** {next_steps}\n\n"
-        else:
-            # Fallback if Chief Agent didn't provide next steps
-            final_text += "**Suggested Next Steps:** "
-            if "error" in result_text.lower() or "failed" in result_text.lower():
-                final_text += "Review the error details and try a different approach or provide more specific information.\n\n"
-            elif "code" in result_text.lower() or "function" in result_text.lower():
-                final_text += "Test the provided code, modify it for your specific use case, or ask for additional features.\n\n"
-            elif "file" in result_text.lower() or "download" in result_text.lower():
-                final_text += "Check the downloaded files, analyze their contents, or process them further as needed.\n\n"
+            # Parse out the structured sections if they exist
+            answer_match = re.search(r'Answer:\s*(.+?)(?=\n\n|\n(?:Why:|Potential Issues:|Suggested Next Steps:)|$)', result_text, re.DOTALL)
+            why_match = re.search(r'Why:\s*(.+?)(?=\n\n|\n(?:Potential Issues:|Suggested Next Steps:)|$)', result_text, re.DOTALL)
+            issues_match = re.search(r'Potential Issues:\s*(.+?)(?=\n\n|\nSuggested Next Steps:|$)', result_text, re.DOTALL)
+            next_steps_match = re.search(r'Suggested Next Steps:\s*(.+?)(?=\n\n|$)', result_text, re.DOTALL)
+            
+            # If Chief Agent provided a plain answer, use it directly
+            if not answer_match and not why_match:
+                answer = result_text
+                why = reasoning
+                issues = None
+                next_steps = None
             else:
-                final_text += "Let me know if you need clarification, want to explore this topic further, or have related questions.\n\n"
+                answer = answer_match.group(1).strip() if answer_match else result_text.split('\n')[0]
+                why = why_match.group(1).strip() if why_match else reasoning
+                issues = issues_match.group(1).strip() if issues_match else None
+                next_steps = next_steps_match.group(1).strip() if next_steps_match else None
+            
+            # Build final structured response
+            final_text = f"**Answer:** {answer}\n\n"
+            final_text += f"**Why:** {why}\n\n"
+            
+            # Add Agent Summaries section if we have results with summaries
+            agent_summaries = [r for r in valid_results if r.summary]
+            if agent_summaries:
+                final_text += "**What Each Agent Found:**\n"
+                for result in agent_summaries:
+                    final_text += f"• **{result.display_name}:** {result.summary}\n"
+                final_text += "\n"
+            
+            if issues and issues.lower() != 'none':
+                final_text += f"**Potential Issues:** {issues}\n\n"
+                
+            # Always include Suggested Next Steps
+            if next_steps:
+                final_text += f"**Suggested Next Steps:** {next_steps}\n\n"
+            else:
+                # Fallback if Chief Agent didn't provide next steps
+                final_text += "**Suggested Next Steps:** "
+                if "error" in result_text.lower() or "failed" in result_text.lower():
+                    final_text += "Review the error details and try a different approach or provide more specific information.\n\n"
+                elif "code" in result_text.lower() or "function" in result_text.lower():
+                    final_text += "Test the provided code, modify it for your specific use case, or ask for additional features.\n\n"
+                elif "file" in result_text.lower() or "download" in result_text.lower():
+                    final_text += "Check the downloaded files, analyze their contents, or process them further as needed.\n\n"
+                else:
+                    final_text += "Let me know if you need clarification, want to explore this topic further, or have related questions.\n\n"
         
         # Add metadata about processing
         if iteration > 0:
