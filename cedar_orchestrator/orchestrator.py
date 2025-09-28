@@ -61,10 +61,11 @@ class ChiefAgent:
     
     def __init__(self, llm_client: Optional[AsyncOpenAI]):
         self.llm_client = llm_client
-
         
-    async def review_and_decide(self, user_query: str, agent_results: List[AgentResult], iteration: int = 0, max_iterations: int = 10, previous_context: str = "") -> Dict[str, Any]:
-        """Review all agent results and make the final decision on what to do next"""
+        
+    async def review_and_decide(self, user_query: str, agent_results: List[AgentResult], iteration: int = 0, max_iterations: int = 10, previous_context: str = "", resources: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Review all agent results and make the final decision on what to do next.
+        resources: Optional index of project assets (files, code, databases, notes, images)."""
         start_time = time.time()
         remaining_loops = max_iterations - iteration - 1
         logger.info(f"[ChiefAgent] Starting review of {len(agent_results)} agent results (iteration {iteration}/{max_iterations}, {remaining_loops} loops remaining)")
@@ -121,16 +122,29 @@ You MUST respond in this EXACT JSON format:
 }}"""
 
             # Ask Chief Agent to review and decide
-            completion_params = {
-                "model": model,
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": system_prompt
-                    },
-                    {
+            # Build messages, including resource index if provided
+            msgs = [
+                {
+                    "role": "system",
+                    "content": system_prompt
+                }
+            ]
+            try:
+                if resources:
+                    import json as _json
+                    msgs.append({
                         "role": "user",
-                        "content": f"""User Query: {user_query}
+                        "content": "Resources Index:"
+                    })
+                    msgs.append({
+                        "role": "user",
+                        "content": _json.dumps(resources, ensure_ascii=False)
+                    })
+            except Exception:
+                pass
+            msgs.append({
+                "role": "user",
+                "content": f"""User Query: {user_query}
 
 Current Iteration: {iteration + 1} of {max_iterations}
 Remaining Loops: {remaining_loops}
@@ -140,10 +154,13 @@ Agent Responses from this iteration:
 {''.join(results_summary)}
 
 Be SPECIFIC about THIS query, not generic!
-Focus on getting a CONFIDENT answer - use multiple agents if needed.
-Always provide a user_facing_message that starts with the answer if you have it!"""
-                    }
-                ]
+Only loop if you have a SPECIFIC thing you need to get."""
+            })
+
+            completion_params = {
+                "model": model,
+                "messages": msgs
+            }
             }
             
             # GPT-5 models have different parameters
@@ -437,6 +454,10 @@ class ThinkerOrchestrator:
                 agent_explanations.append("• **Notes Agent**: Will document findings and create organized notes")
             elif agent_name == "FileAgent":
                 agent_explanations.append("• **File Agent**: Will download files or analyze file paths as requested")
+            elif agent_name == "ImageCreationAgent":
+                agent_explanations.append("• **Image Creation**: Will generate an image and save it to the project Files/Images")
+            elif agent_name == "ImageAnalysisAgent":
+                agent_explanations.append("• **Image Analysis**: Will analyze an image (vision) and update its metadata (title, description, tags)")
         
         agent_details = "\n".join(agent_explanations)
         
@@ -680,12 +701,75 @@ Task: {message[:200]}{'...' if len(message) > 200 else ''}"""
                 previous_context += f"- {prev_result.display_name}: {prev_result.result[:200]}...\n"
         
         # Have Chief Agent review all results and make a decision
+        # Build resource index for the Chief Agent (names + official IDs)
+        resources_index: Optional[Dict[str, Any]] = None
+        try:
+            if db_session and project_id and branch_id:
+                resources_index = {"files": [], "code": [], "databases": [], "notes": [], "images": []}
+                # Files and Images from FileEntry
+                try:
+                    from main_models import FileEntry
+                    files = db_session.query(FileEntry).filter(
+                        FileEntry.project_id == int(project_id),
+                        FileEntry.branch_id == int(branch_id)
+                    ).order_by(FileEntry.created_at.desc()).limit(1000).all()
+                    for f in files:
+                        title = (getattr(f, 'ai_title', None) or f.display_name or '').strip() or f.filename
+                        rec = {"id": f.id, "name": title, "structure": f.structure, "file_type": f.file_type}
+                        resources_index["files"].append(rec)
+                        # Basic image heuristic
+                        ft = (f.file_type or '').lower()
+                        if (f.structure or '').lower() == 'images' or ft in {"jpg","jpeg","png","gif","webp","bmp","tiff"}:
+                            resources_index["images"].append({"id": f.id, "name": title})
+                except Exception:
+                    pass
+                # Saved code snippets
+                try:
+                    from main_models import SavedCode
+                    codes = db_session.query(SavedCode).filter(
+                        SavedCode.project_id == int(project_id),
+                        SavedCode.branch_id == int(branch_id)
+                    ).order_by(SavedCode.created_at.desc()).limit(1000).all()
+                    for sc in codes:
+                        resources_index["code"].append({"id": sc.id, "name": (sc.name or '').strip() or f"Code {sc.id}"})
+                except Exception:
+                    pass
+                # Databases
+                try:
+                    from main_models import Dataset
+                    datasets = db_session.query(Dataset).filter(
+                        Dataset.project_id == int(project_id),
+                        Dataset.branch_id == int(branch_id)
+                    ).order_by(Dataset.created_at.desc()).limit(1000).all()
+                    for d in datasets:
+                        resources_index["databases"].append({"id": d.id, "name": d.name})
+                except Exception:
+                    pass
+                # Notes (include content)
+                try:
+                    from main_models import Note
+                    notes = db_session.query(Note).filter(
+                        Note.project_id == int(project_id),
+                        Note.branch_id == int(branch_id)
+                    ).order_by(Note.created_at.desc()).limit(1000).all()
+                    for n in notes:
+                        resources_index["notes"].append({
+                            "id": n.id,
+                            "title": (getattr(n, 'title', None) or '').strip() or f"Note {n.id}",
+                            "content": n.content or ""
+                        })
+                except Exception:
+                    pass
+        except Exception:
+            resources_index = None
+
         chief_decision = await self.chief_agent.review_and_decide(
             user_query=message, 
             agent_results=valid_results, 
             iteration=iteration,
             max_iterations=self.MAX_ITERATIONS,
-            previous_context=previous_context
+            previous_context=previous_context,
+            resources=resources_index
         )
         logger.info(f"[ORCHESTRATOR] Chief Agent decision: {chief_decision.get('decision')}")
         
