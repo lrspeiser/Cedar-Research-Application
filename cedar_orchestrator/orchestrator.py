@@ -161,7 +161,6 @@ Only loop if you have a SPECIFIC thing you need to get."""
                 "model": model,
                 "messages": msgs
             }
-            }
             
             # GPT-5 models have different parameters
             if "gpt-5" in model or "gpt-4.1" in model:
