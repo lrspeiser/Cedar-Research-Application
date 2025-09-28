@@ -98,6 +98,8 @@ class ChiefAgent:
             logger.info(f"[ChiefAgent] Using LLM for decision making with model: {model}")
             
             # Create the system prompt (shortened version for space)
+            # ⚠️ IMPORTANT: When updating this prompt, ALSO UPDATE cedar_app/routes/agents_route.py!
+            # The agents page should always reflect the actual prompts being used.
             system_prompt = f"""You are the Chief Agent - an intelligent orchestrator who analyzes queries and deploys the right agents to get confident, accurate answers.
 
 🎯 YOUR PRIMARY DIRECTIVE:
