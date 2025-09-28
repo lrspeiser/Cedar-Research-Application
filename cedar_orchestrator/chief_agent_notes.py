@@ -22,20 +22,43 @@ class ChiefAgentNoteTaker:
         
     async def save_agent_notes(self, agent_results: List[Any], user_query: str, chief_decision: Dict[str, Any]) -> Optional[int]:
         """Save notes from agent results to the SQL database"""
+        logger.info(f"[ChiefAgentNoteTaker] " + "="*50)
+        logger.info(f"[ChiefAgentNoteTaker] SAVE_AGENT_NOTES CALLED")
+        logger.info(f"[ChiefAgentNoteTaker] " + "="*50)
+        logger.info(f"[ChiefAgentNoteTaker] project_id: {self.project_id}")
+        logger.info(f"[ChiefAgentNoteTaker] branch_id: {self.branch_id}")
+        logger.info(f"[ChiefAgentNoteTaker] agent_results count: {len(agent_results) if agent_results else 0}")
+        logger.info(f"[ChiefAgentNoteTaker] user_query: {user_query[:100]}...")
+        logger.info(f"[ChiefAgentNoteTaker] chief_decision keys: {list(chief_decision.keys()) if chief_decision else []}")
+        
         try:
+            logger.info(f"[ChiefAgentNoteTaker] Importing Note model...")
             from main_models import Note
+            logger.info(f"[ChiefAgentNoteTaker] Note model imported successfully")
             
             # Check if NotesAgent provided content
+            logger.info(f"[ChiefAgentNoteTaker] Checking for NotesAgent content...")
             notes_agent_content = None
-            for result in agent_results:
-                if hasattr(result, 'agent_name') and result.agent_name == "NotesAgent":
-                    # Extract the actual notes from the NotesAgent response
-                    notes_match = re.search(r'Answer: Notes Created\n\n(.+?)\n\nWhy:', result.result, re.DOTALL)
-                    if notes_match:
-                        notes_agent_content = notes_match.group(1).strip()
-                    break
+            for i, result in enumerate(agent_results):
+                logger.debug(f"[ChiefAgentNoteTaker]   Checking result {i}: has agent_name? {hasattr(result, 'agent_name')}")
+                if hasattr(result, 'agent_name'):
+                    logger.debug(f"[ChiefAgentNoteTaker]     Agent name: {result.agent_name}")
+                    if result.agent_name == "NotesAgent":
+                        logger.info(f"[ChiefAgentNoteTaker] Found NotesAgent result, extracting content...")
+                        # Extract the actual notes from the NotesAgent response
+                        notes_match = re.search(r'Answer: Notes Created\n\n(.+?)\n\nWhy:', result.result, re.DOTALL)
+                        if notes_match:
+                            notes_agent_content = notes_match.group(1).strip()
+                            logger.info(f"[ChiefAgentNoteTaker] Extracted NotesAgent content: {len(notes_agent_content)} chars")
+                        else:
+                            logger.warning(f"[ChiefAgentNoteTaker] NotesAgent result found but content extraction failed")
+                        break
+            
+            if not notes_agent_content:
+                logger.info(f"[ChiefAgentNoteTaker] No NotesAgent content found")
             
             # Build comprehensive notes from all agent findings
+            logger.info(f"[ChiefAgentNoteTaker] Building comprehensive notes...")
             note_content = self._build_comprehensive_notes(
                 user_query=user_query,
                 agent_results=agent_results,
@@ -44,23 +67,38 @@ class ChiefAgentNoteTaker:
             )
             
             if not note_content:
+                logger.error(f"[ChiefAgentNoteTaker] ❌ No note content generated!")
                 return None
+            
+            logger.info(f"[ChiefAgentNoteTaker] Note content generated: {len(note_content)} chars")
+            logger.debug(f"[ChiefAgentNoteTaker] Note content preview: {note_content[:200]}...")
                 
             # Prepare tags
+            logger.info(f"[ChiefAgentNoteTaker] Generating tags...")
             tags = self._generate_tags(user_query, chief_decision)
+            logger.info(f"[ChiefAgentNoteTaker] Generated {len(tags)} tags: {tags}")
             
             # Create and save the note
+            logger.info(f"[ChiefAgentNoteTaker] Creating Note object...")
             note = Note(
                 project_id=self.project_id,
                 branch_id=self.branch_id,
                 content=note_content,
                 tags=tags  # This will be automatically converted to JSON by SQLAlchemy
             )
+            logger.info(f"[ChiefAgentNoteTaker] Note object created, adding to session...")
             
             self.db.add(note)
-            self.db.commit()
+            logger.info(f"[ChiefAgentNoteTaker] Note added to session, committing...")
             
-            logger.info(f"[ChiefAgent] Saved note ID {note.id} with {len(tags)} tags")
+            self.db.commit()
+            logger.info(f"[ChiefAgentNoteTaker] ✅ Database commit successful!")
+            
+            # Refresh to get the ID
+            self.db.refresh(note)
+            logger.info(f"[ChiefAgentNoteTaker] Note refreshed from DB, ID: {note.id}")
+            
+            logger.info(f"[ChiefAgentNoteTaker] ✅ Successfully saved note ID {note.id} with {len(tags)} tags")
             return note.id
             
         except Exception as e:
