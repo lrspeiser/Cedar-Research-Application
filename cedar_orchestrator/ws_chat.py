@@ -105,6 +105,8 @@ async def handle_ws_chat(
                     content = data.get("content", "").strip()
                     branch_id = data.get("branch_id", 1)  # Default to branch 1
                     chat_number = data.get("chat_number", current_chat_number)
+                    file_id = data.get("file_id")
+                    dataset_id = data.get("dataset_id")
                     
                     # Create or get chat
                     if not chat_number and project_id:
@@ -234,7 +236,9 @@ async def handle_ws_chat(
                             ws_to_use,
                             project_id=project_id,
                             branch_id=branch_id,
-                            db_session=db_session
+                            db_session=db_session,
+                            file_id=file_id,
+                            dataset_id=dataset_id
                         )
                     finally:
                         # Clean up database session

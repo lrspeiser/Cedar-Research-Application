@@ -283,6 +283,59 @@ def project_page_html(
         file_list_items.append(f"<li style='margin:6px 0; {li_style}'>{status_icon}<a href='{href}' class='thread-create' data-file-id='{f.id}' data-display-name='{disp_name}' style='text-decoration:none; color:inherit; margin-left:6px'>{label_text}</a><div class='small muted'>{sub}</div></li>")
     file_list_html = "<ul style='list-style:none; padding-left:0; margin:0'>" + ("".join(file_list_items) or "<li class='muted'>No files yet.</li>") + "</ul>"
 
+    # Build Images list (thumbnails)
+    image_items: List[str] = []
+    try:
+        import os as _os
+        from cedar_app.db_utils import _project_dirs as __proj_dirs
+        _base_root = __proj_dirs(project.id)["files_root"]
+        def _image_url_for(ff: FileEntry) -> str:
+            sp = ff.storage_path or ""
+            try:
+                ab = _os.path.abspath(sp)
+                if ab.startswith(_base_root):
+                    rel = ab[len(_base_root):].lstrip(_os.sep).replace(_os.sep, "/")
+                    return f"/uploads/{project.id}/{rel}"
+            except Exception:
+                pass
+            return ""
+        def _is_image(ff: FileEntry) -> bool:
+            try:
+                mt = (ff.mime_type or '').lower()
+                ext = (ff.file_type or '').lower()
+                if mt.startswith('image/'):
+                    return True
+                if ext in {"png","jpg","jpeg","gif","webp","bmp","tiff","svg"}:
+                    return True
+                if (ff.structure or '').lower() == 'images':
+                    return True
+            except Exception:
+                pass
+            return False
+        imgs = [f for f in files if _is_image(f)]
+        for f in imgs[:60]:
+            url = _image_url_for(f)
+            title = escape((getattr(f, 'ai_title', None) or f.display_name or '')[:80])
+            meta = escape((f.file_type or '') + ((' • ' + (f.ai_category or '')) if getattr(f, 'ai_category', None) else ''))
+            # Link opens thread with this file context
+            href = f"/project/{project.id}/threads/new?branch_id={current.id}&file_id={f.id}"
+            image_items.append(
+                "".join([
+                    "<div class='img-card' style='width:160px; display:inline-block; margin:6px; vertical-align:top'>",
+                    f"  <a href='{href}' class='thread-create' data-file-id='{f.id}' data-display-name='{escape(f.display_name or '')}'>",
+                    f"    <div style='width:160px; height:100px; background:#f3f4f6; display:flex; align-items:center; justify-content:center; overflow:hidden; border:1px solid var(--border); border-radius:6px'>",
+                    (f"      <img src='{url}' alt='{title}' style='max-width:100%; max-height:100%'>" if url else "      <div class='muted small'>(no preview)</div>"),
+                    "    </div>",
+                    "  </a>",
+                    f"  <div class='small' style='margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis' title='{title}'>{title}</div>",
+                    f"  <div class='small muted'>{meta}</div>",
+                    "</div>",
+                ])
+            )
+    except Exception:
+        image_items = []
+    images_list_html = "".join(image_items) if image_items else "<div class='muted small'>(No images yet)</div>"
+
     # Build right-side Code list
     code_items_safe = code_items or []
     def _code_label(ci: dict) -> str:
@@ -1899,6 +1952,7 @@ def project_page_html(
           <div class="tabs" data-pane="main">
             <a href="#" class="tab active" data-target="main-chat">Chat</a>
             <a href="#" class="tab" data-target="main-files">Files</a>
+            <a href="#" class="tab" data-target="main-images">Images</a>
             <a href="#" class="tab" data-target="main-history">History</a>
             <a href="#" class="tab" data-target="main-code">Code</a>
             <a href="#" class="tab" data-target="main-dbs">Databases</a>
@@ -1942,6 +1996,14 @@ def project_page_html(
                   </form>
                   <div style="max-height:400px; overflow:auto">
                     {file_list_html}
+                  </div>
+                </div>
+              </div>
+              <div id="main-images" class="panel hidden">
+                <div class="card" style="padding:12px">
+                  <h3 style='margin-bottom:6px'>Images</h3>
+                  <div style="max-height:600px; overflow:auto">
+                    {images_list_html}
                   </div>
                 </div>
               </div>

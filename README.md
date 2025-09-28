@@ -562,6 +562,30 @@ Recovery Playbook (documented attempts)
 Notes
 - Deprecation warnings for datetime.utcnow(): These do not block startup but will be addressed by migrating to timezone-aware datetime.now(timezone.utc) throughout. Some modules already use timezone-aware timestamps.
 
+## Images tab and image agents
+
+What’s new
+- Images tab on the project page shows thumbnails of all image files. Clicking a thumbnail opens a thread focused on that image.
+- Image Creation Agent: generates images via the OpenAI Images API and saves them under the project files store (structure="images").
+- Image Analysis Agent: sends the selected image to GPT Vision, returns a JSON description, and updates the FileEntry AI fields (ai_title, ai_description) and metadata_json. This metadata is always passed in context (via file_id) so the agent knows what to update.
+
+Configuration
+- Keys: Set OPENAI_API_KEY or CEDARPY_OPENAI_API_KEY (see earlier sections on .env and key loading). Never hardcode keys.
+- Models:
+  - CEDARPY_IMAGE_MODEL (default gpt-image-1) for image generation
+  - CEDARPY_VISION_MODEL (default gpt-4o-mini) for image analysis
+
+How to use
+- Create: In chat, ask to “generate an image …” (e.g., "generate an image of a bar chart comparing X and Y"). The Image Creation Agent will generate and save a PNG and add it to Files/Images.
+- Analyze: Open a file (or use the new Images tab), then in chat say “analyze this image” — the Image Analysis Agent will run and update the metadata for that file. You’ll see updated AI Title/Description and a vision section in metadata_json.
+
+Notes and logging
+- The agents log their activity with [ImageCreationAgent] and [ImageAnalysisAgent] prefixes. See /log for client logs and the standard server logs under ~/Library/Logs/CedarPy.
+- There is no fake output: if keys are missing, the agents report that image operations are unavailable.
+
+Security and keys
+- Code paths for Images include comments pointing back to this README section. Do not commit secrets; use the environment/.env guidance above. If running the packaged app, place your key in ~/CedarPyData/.env.
+
 ## Next steps (future stages)
 
 - Thread content & LLM runs

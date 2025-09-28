@@ -21,7 +21,7 @@ from fastapi import WebSocket
 from .execution_agents import AgentResult, ShellAgent, CodeAgent, SQLAgent
 
 # Import specialized agents
-from .specialized_agents import MathAgent, ResearchAgent, StrategyAgent, DataAgent, NotesAgent, FileAgent
+from .specialized_agents import MathAgent, ResearchAgent, StrategyAgent, DataAgent, NotesAgent, FileAgent, ImageCreationAgent, ImageAnalysisAgent
 
 # Import file processing agents if available
 try:
@@ -97,10 +97,10 @@ class ChiefAgent:
             logger.info(f"[ChiefAgent] Using LLM for decision making with model: {model}")
             
             # Create the system prompt (shortened version for space)
-            system_prompt = f"""You are the Chief Agent - an intelligent orchestrator who thinks carefully about each query before acting.
+            system_prompt = f"""You are the Chief Agent - an intelligent orchestrator who analyzes queries and deploys the right agents to get confident, accurate answers.
 
 🎯 YOUR PRIMARY DIRECTIVE:
-ASSESS the query complexity FIRST, then choose the MINIMAL agent strategy needed.
+ASSESS the query complexity, then deploy AS MANY agents as needed to achieve HIGH CONFIDENCE in the answer.
 
 CURRENT ITERATION STATUS:
 - Iteration: {iteration + 1} of {max_iterations}
@@ -109,14 +109,15 @@ CURRENT ITERATION STATUS:
 You MUST respond in this EXACT JSON format:
 {{
   "decision": "final" or "loop" or "clarify",
-  "query_assessment": "SPECIFIC assessment: Is this simple (like 2+2), moderate (like file search), or complex (like deriving equations)? WHY?",
-  "thinking_process": "SPECIFIC to THIS query: 'User asks about X. This specifically requires Y because Z. I will use [specific agents] because [specific reasons].'",
-  "final_answer": "The actual answer to the user's question (only if 'final')",
-  "additional_guidance": "SPECIFIC next action: 'Run Coding Agent with THIS specific code' or 'Query SQL for THIS specific data' (only if 'loop')"
+  "query_assessment": "Assess complexity: Is this simple (basic math/facts), moderate (requires research/analysis), or complex (multi-step reasoning/multiple data sources)? What confidence level do we need?",
+  "thinking_process": "SPECIFIC to THIS query: 'User asks about X. To get a confident answer, I need Y and Z. I will use [specific agents] because [specific reasons].'",
+  "user_facing_message": "Start with the answer/punchline if you have it! Then explain what data was gathered and what might be done next. Be conversational and helpful.",
+  "final_answer": "The comprehensive answer to the user's question (only if 'final')",
+  "additional_guidance": "SPECIFIC next action: 'Run Coding Agent with THIS specific code' or 'Query SQL for THIS specific data' (only if 'loop')",
   "clarification_question": "SPECIFIC question about ambiguity: 'When you say X, do you mean Y or Z?' (only if 'clarify')",
-  "selected_agent": "Single agent name OR 'combined' if truly needed",
-  "reasoning": "SPECIFIC explanation: 'For calculating 2+2, I only need Coding Agent' NOT generic statements",
-  "efficiency_note": "Why this is the MINIMAL approach needed (not maximum)"
+  "selected_agent": "Single agent name OR 'combined' for multiple agents",
+  "reasoning": "Why these agents will give us a CONFIDENT answer: 'For MOND theory, I need Research Agent for papers AND Notes Agent for documentation'",
+  "confidence_strategy": "How many agents and why: 'Using 3 agents for cross-validation' or 'Single agent sufficient for simple calc'"
 }}"""
 
             # Ask Chief Agent to review and decide
@@ -139,7 +140,8 @@ Agent Responses from this iteration:
 {''.join(results_summary)}
 
 Be SPECIFIC about THIS query, not generic!
-Only loop if you have a SPECIFIC thing you need to get."""
+Focus on getting a CONFIDENT answer - use multiple agents if needed.
+Always provide a user_facing_message that starts with the answer if you have it!"""
                     }
                 ]
             }
@@ -175,8 +177,10 @@ Only loop if you have a SPECIFIC thing you need to get."""
                     logger.info(f"[ChiefAgent] Query Assessment: {decision_data['query_assessment'][:200]}...")
                 if "thinking_process" in decision_data:
                     logger.info(f"[ChiefAgent] Thinking: {decision_data['thinking_process'][:200]}...")
-                if "efficiency_note" in decision_data:
-                    logger.info(f"[ChiefAgent] Efficiency: {decision_data['efficiency_note'][:100]}...")
+                if "confidence_strategy" in decision_data:
+                    logger.info(f"[ChiefAgent] Confidence Strategy: {decision_data['confidence_strategy'][:100]}...")
+                if "user_facing_message" in decision_data:
+                    logger.info(f"[ChiefAgent] User Message: {decision_data['user_facing_message'][:200]}...")
                 # Ensure final answer includes suggested next steps
                 if "Suggested Next Steps:" not in decision_data.get("final_answer", ""):
                     decision_data["final_answer"] += "\n\nSuggested Next Steps: Review the results and let me know if you need further clarification."
@@ -235,6 +239,9 @@ class ThinkerOrchestrator:
         self.data_agent = DataAgent(self.llm_client)
         self.notes_agent = NotesAgent(self.llm_client)
         self.file_agent = FileAgent(self.llm_client)  # Will get context during orchestration
+        # Images
+        self.image_creation_agent = ImageCreationAgent(self.llm_client)
+        self.image_analysis_agent = ImageAnalysisAgent(self.llm_client)
         
         # Initialize file processing orchestrator if available
         if FILE_PROCESSING_AVAILABLE:
@@ -254,8 +261,8 @@ class ThinkerOrchestrator:
         
         return await self.file_processor.process_file(file_path, file_type, websocket)
     
-    async def think(self, message: str) -> Dict[str, Any]:
-        """Thinker phase: Intelligently assess query complexity and choose minimal agent strategy"""
+    async def think(self, message: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Thinker phase: Assess query complexity and choose agents for confident answers"""
         thinking_process = {
             "input": message,
             "analysis": "",
@@ -263,17 +270,18 @@ class ThinkerOrchestrator:
             "agents_to_use": [],
             "selection_reasoning": "",
             "complexity": "simple",  # simple, moderate, or complex
-            "research_priority": "minimal"  # Keep this for compatibility
+            "confidence_strategy": "appropriate"  # appropriate, comprehensive, or exhaustive
         }
         
         # First: Assess query complexity
-        # Simple arithmetic or basic questions
+        # Simple arithmetic or basic questions - but still might benefit from multiple agents
         if any(pattern in message.lower() for pattern in ['2+2', '2 + 2', 'what is', 'calculate', 'compute']) and len(message) < 50:
             thinking_process["complexity"] = "simple"
             thinking_process["identified_type"] = "simple_calculation"
-            thinking_process["analysis"] = f"Simple calculation: {message}"
-            thinking_process["agents_to_use"] = ["CodeAgent"]
-            thinking_process["selection_reasoning"] = f"User asks '{message}' - this is a simple calculation that only needs Coding Agent"
+            thinking_process["analysis"] = f"Calculation query: {message}"
+            thinking_process["agents_to_use"] = ["CodeAgent", "MathAgent"]  # Use both for validation
+            thinking_process["selection_reasoning"] = f"User asks '{message}' - using Code and Math agents for confident verification"
+            thinking_process["confidence_strategy"] = "appropriate"
             return thinking_process
         
         # Analyze the message for research context
@@ -281,6 +289,12 @@ class ThinkerOrchestrator:
         has_url = bool(re.search(r'https?://[^\s]+', message))
         has_file_path = bool(re.search(r'(/[^\s]+\.[a-zA-Z]{2,4}|[A-Za-z]:\\[^\s]+|\./[^\s]+)', message))
         has_shell_command = bool(re.search(r'`[^`]+`', message)) or any(cmd in message.lower() for cmd in ['grep', 'find', 'ls', 'cat', 'brew install', 'pip install', 'npm install', 'apt-get', 'chmod', 'mkdir', 'rm', 'cp', 'mv'])
+        # Image-related heuristics
+        msg_lower = message.lower()
+        has_image_word = any(w in msg_lower for w in ['image','images','picture','photo','plot','chart','visualize','render','thumbnail'])
+        wants_create = any(w in msg_lower for w in ['create','generate','draw','render','visualize','plot','chart'])
+        wants_analyze = any(w in msg_lower for w in ['analyz','describe','what\'s in','what is in'])
+        file_ctx_present = bool((context or {}).get('file_id'))
         
         # CRITICAL: Check for file search keywords
         is_file_search = any(phrase in message.lower() for phrase in [
@@ -347,6 +361,20 @@ class ThinkerOrchestrator:
             thinking_process["analysis"] = f"File download from URL"
             thinking_process["agents_to_use"] = ["FileAgent"]
             thinking_process["selection_reasoning"] = f"URL download - only File Agent needed"
+        # Image creation / visualization
+        elif has_image_word and wants_create:
+            thinking_process["complexity"] = "moderate"
+            thinking_process["identified_type"] = "image_creation"
+            thinking_process["analysis"] = "Image generation or visualization requested"
+            thinking_process["agents_to_use"] = ["ImageCreationAgent"]
+            thinking_process["selection_reasoning"] = "Use Image Creation to generate an image and save it to Files/Images"
+        # Image analysis
+        elif (has_image_word and wants_analyze) or (file_ctx_present and has_image_word):
+            thinking_process["complexity"] = "simple"
+            thinking_process["identified_type"] = "image_analysis"
+            thinking_process["analysis"] = "Analyze an image and update metadata"
+            thinking_process["agents_to_use"] = ["ImageAnalysisAgent"]
+            thinking_process["selection_reasoning"] = "Use Image Analysis to describe and tag the image"
         # Default: Use minimal agents based on keywords
         else:
             # Try to be smart about the default
@@ -359,7 +387,7 @@ class ThinkerOrchestrator:
             
         return thinking_process
         
-    async def orchestrate(self, message: str, websocket, iteration: int = 0, previous_results: List[AgentResult] = None, project_id: int = None, branch_id: int = None, db_session = None):
+    async def orchestrate(self, message: str, websocket, iteration: int = 0, previous_results: List[AgentResult] = None, project_id: int = None, branch_id: int = None, db_session = None, file_id: Optional[int] = None, dataset_id: Optional[int] = None):
         """Full orchestration process controlled by Chief Agent decisions with optional notes persistence"""
         orchestration_start = time.time()
         logger.info("="*80)
@@ -385,7 +413,7 @@ class ThinkerOrchestrator:
         
         # Phase 1: Thinking
         logger.info("[ORCHESTRATOR] PHASE 1: Thinker Analysis")
-        thinking = await self.think(message)
+        thinking = await self.think(message, context={"file_id": file_id, "dataset_id": dataset_id})
         logger.info(f"[ORCHESTRATOR] Thinking result: Type={thinking['identified_type']}, Agents={thinking['agents_to_use']}")
         
         # Build detailed explanation of what each agent will do
@@ -462,6 +490,12 @@ I've analyzed your request as a {thinking['identified_type'].replace('_', ' ')}.
         if "NotesAgent" in thinking["agents_to_use"]:
             agents.append(self.notes_agent)
             logger.info("[ORCHESTRATOR] Added NotesAgent to processing queue")
+        if "ImageCreationAgent" in thinking["agents_to_use"]:
+            agents.append(self.image_creation_agent)
+            logger.info("[ORCHESTRATOR] Added ImageCreationAgent to processing queue")
+        if "ImageAnalysisAgent" in thinking["agents_to_use"]:
+            agents.append(self.image_analysis_agent)
+            logger.info("[ORCHESTRATOR] Added ImageAnalysisAgent to processing queue")
         if "FileAgent" in thinking["agents_to_use"]:
             # Update FileAgent with current context if available
             if db_session and project_id and branch_id:
@@ -489,6 +523,10 @@ I've analyzed your request as a {thinking['identified_type'].replace('_', ' ')}.
                     for prev in previous_results[:3]:
                         conversation_context += f"- {prev.display_name}: {prev.result[:100]}...\n"
                 agent_tasks.append(agent.process(message, conversation_context=conversation_context))
+            elif agent is self.image_creation_agent:
+                agent_tasks.append(agent.process(message, project_id=project_id, branch_id=branch_id, db_session=db_session))
+            elif agent is self.image_analysis_agent:
+                agent_tasks.append(agent.process(message, project_id=project_id, branch_id=branch_id, db_session=db_session, file_id=file_id))
             else:
                 agent_tasks.append(agent.process(message))
         
@@ -566,7 +604,9 @@ I've analyzed your request as a {thinking['identified_type'].replace('_', ' ')}.
                         "StrategyAgent": "Strategy Agent",
                         "DataAgent": "Data Agent",
                         "NotesAgent": "Notes Agent",
-                        "FileAgent": "File Manager"
+                        "FileAgent": "File Manager",
+                        "ImageCreationAgent": "Image Creation",
+                        "ImageAnalysisAgent": "Image Analysis"
                     }
                     display_name = agent_display_names.get(agent_name, agent_name)
                 
@@ -883,12 +923,15 @@ Please provide this information so I can better assist you."""
         
         # Chief Agent has made final decision - prepare the response
         final_answer = chief_decision.get('final_answer', '')
+        user_facing_message = chief_decision.get('user_facing_message', '')
         selected_agent = chief_decision.get('selected_agent', 'The Chief Agent')
         reasoning = chief_decision.get('reasoning', '')
         
         logger.info(f"[ORCHESTRATOR] Chief Agent FINAL decision")
         logger.info(f"[ORCHESTRATOR] Selected approach: {selected_agent}")
         logger.info(f"[ORCHESTRATOR] Reasoning: {reasoning}")
+        if user_facing_message:
+            logger.info(f"[ORCHESTRATOR] User-facing message: {user_facing_message[:200]}...")
         
         # Don't send stream update that would overwrite the bubble
         # Just proceed directly to the final message
@@ -896,8 +939,8 @@ Please provide this information so I can better assist you."""
         # Calculate total time before using it
         total_time = time.time() - orchestration_start
         
-        # Use Chief Agent's final answer
-        result_text = final_answer
+        # Use user_facing_message if available, otherwise use final_answer
+        result_text = user_facing_message if user_facing_message else final_answer
         
         # Check if the Chief Agent already provided a fully formatted response
         # Look for the key structural elements that indicate it's already formatted
