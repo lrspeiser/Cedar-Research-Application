@@ -199,17 +199,33 @@ async def handle_ws_chat(
                     
                     # Get per-project database session for persistence (notes, saved code, etc.)
                     db_session = None
+                    logger.info(f"[WebSocket-DB] Attempting to create project DB session...")
+                    logger.info(f"[WebSocket-DB]   project_id: {project_id}")
+                    logger.info(f"[WebSocket-DB]   has deps: {deps is not None}")
+                    logger.info(f"[WebSocket-DB]   has get_project_engine: {hasattr(deps, 'get_project_engine') if deps else False}")
+                    
                     try:
                         if project_id and hasattr(deps, 'get_project_engine'):
+                            logger.info(f"[WebSocket-DB] Getting project engine...")
                             from sqlalchemy.orm import sessionmaker
                             eng = deps.get_project_engine(project_id)
+                            logger.info(f"[WebSocket-DB] Got engine: {eng}")
+                            logger.info(f"[WebSocket-DB] Engine URL: {eng.url if hasattr(eng, 'url') else 'No URL'}")
                             SessionLocal = sessionmaker(bind=eng, autoflush=False, autocommit=False, future=True)
                             db_session = SessionLocal()
-                            logger.info(f"[WebSocket] ✅ Opened per-project DB session for project_id={project_id}")
+                            logger.info(f"[WebSocket-DB] ✅ Created project DB session")
+                            logger.info(f"[WebSocket-DB]   Session type: {type(db_session).__name__}")
+                            logger.info(f"[WebSocket-DB]   Session bind: {db_session.bind}")
                         else:
-                            logger.warning(f"[WebSocket] ⚠️ Missing get_project_engine or project_id; skipping per-project DB session")
+                            if not project_id:
+                                logger.warning(f"[WebSocket-DB] ⚠️ No project_id provided")
+                            if not hasattr(deps, 'get_project_engine'):
+                                logger.warning(f"[WebSocket-DB] ⚠️ deps missing get_project_engine")
                     except Exception as e:
-                        logger.error(f"[WebSocket] ❌ Could not create per-project DB session: {e}")
+                        logger.error(f"[WebSocket-DB] ❌ Failed to create project DB session")
+                        logger.error(f"[WebSocket-DB]   Error: {e}")
+                        import traceback
+                        logger.error(f"[WebSocket-DB]   Traceback:\n{traceback.format_exc()}")
                     
                     # Process with advanced orchestrator (with optional notes/code persistence)
                     try:

@@ -731,6 +731,8 @@ Task: {message[:200]}{'...' if len(message) > 200 else ''}"""
         
         if NOTES_AVAILABLE and db_session and project_id and branch_id:
             logger.info(f"[ORCHESTRATOR-NOTES] ✓ All conditions met, attempting to save notes...")
+            logger.info(f"[ORCHESTRATOR-NOTES] Using db_session of type: {type(db_session).__name__}")
+            logger.info(f"[ORCHESTRATOR-NOTES] db_session bind: {db_session.bind if hasattr(db_session, 'bind') else 'No bind attribute'}")
             try:
                 logger.info(f"[ORCHESTRATOR-NOTES] Creating ChiefAgentNoteTaker instance...")
                 note_taker = ChiefAgentNoteTaker(project_id, branch_id, db_session)
