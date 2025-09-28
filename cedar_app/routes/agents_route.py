@@ -143,7 +143,6 @@ You MUST respond in this EXACT JSON format:
   "reasoning": "Why these agents will give us a CONFIDENT answer: 'For MOND theory, I need Research Agent for papers AND Notes Agent for documentation'",
   "confidence_strategy": "How many agents and why: 'Using 3 agents for cross-validation' or 'Single agent sufficient for simple calc'"
 }"""
-"""
             },
             {
                 "name": "Coding Agent",
