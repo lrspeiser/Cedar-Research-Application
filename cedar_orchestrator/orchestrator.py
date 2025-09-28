@@ -628,11 +628,88 @@ Task: {message[:200]}{'...' if len(message) > 200 else ''}"""
         if chief_decision.get('thinking_process'):
             logger.info(f"[ORCHESTRATOR] Chief Agent thinking: {chief_decision['thinking_process'][:300]}...")
         
+        # Always run Notes Agent to create structured notes for every Chief Agent processing step
+        try:
+            if self.notes_agent is not None:
+                existing_notes_list = []
+                # If DB session and context are available, fetch recent notes for de-duplication
+                if db_session and project_id and branch_id and NOTES_AVAILABLE:
+                    try:
+                        note_taker_preview = ChiefAgentNoteTaker(project_id, branch_id, db_session)
+                        existing_notes_list = await note_taker_preview.get_existing_notes()
+                    except Exception as e:
+                        logger.warning(f"[ORCHESTRATOR-NOTES] Could not fetch existing notes for NotesAgent: {e}")
+                # Prepare concise content for the notes agent
+                snippets = []
+                try:
+                    fa = chief_decision.get('final_answer') or ''
+                    if fa:
+                        snippets.append(f"Final Answer: {fa}")
+                except Exception:
+                    pass
+                try:
+                    snippets.append("Agent Summaries:")
+                    for r in valid_results:
+                        try:
+                            if getattr(r, 'summary', None):
+                                snippets.append(f"- {r.display_name}: {r.summary}")
+                            else:
+                                snippets.append(f"- {r.display_name}")
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                content_to_note = "\n".join(snippets)
+                try:
+                    notes_agent_result = await self.notes_agent.process(
+                        task=message,
+                        content_to_note=content_to_note,
+                        existing_notes=existing_notes_list
+                    )
+                    if isinstance(notes_agent_result, AgentResult):
+                        # Include in results for persistence and UI
+                        valid_results.append(notes_agent_result)
+                        try:
+                            await websocket.send_json({
+                                "type": "agent_result",
+                                "agent_name": notes_agent_result.display_name,
+                                "text": notes_agent_result.result,
+                                "summary": getattr(notes_agent_result, 'summary', None),
+                                "metadata": {
+                                    "agent": "NotesAgent",
+                                    "confidence": notes_agent_result.confidence,
+                                    "method": notes_agent_result.method,
+                                }
+                            })
+                        except Exception as e:
+                            logger.warning(f"[ORCHESTRATOR-NOTES] Failed to send NotesAgent result to WS: {e}")
+                except Exception as e:
+                    logger.error(f"[ORCHESTRATOR-NOTES] NotesAgent processing failed: {e}")
+        except Exception as e:
+            logger.error(f"[ORCHESTRATOR-NOTES] Unexpected error in NotesAgent always-run block: {e}")
+        
         # ALWAYS save notes after every agent response cycle (whether loop or final)
         # This ensures all intermediate findings are captured in the database
+        logger.info(f"[ORCHESTRATOR-NOTES] " + "="*50)
+        logger.info(f"[ORCHESTRATOR-NOTES] NOTES SAVE CHECK - ITERATION {iteration + 1}")
+        logger.info(f"[ORCHESTRATOR-NOTES] " + "="*50)
+        logger.info(f"[ORCHESTRATOR-NOTES] NOTES_AVAILABLE: {NOTES_AVAILABLE}")
+        logger.info(f"[ORCHESTRATOR-NOTES] db_session exists: {db_session is not None}")
+        logger.info(f"[ORCHESTRATOR-NOTES] db_session type: {type(db_session).__name__ if db_session else 'None'}")
+        logger.info(f"[ORCHESTRATOR-NOTES] project_id: {project_id}")
+        logger.info(f"[ORCHESTRATOR-NOTES] branch_id: {branch_id}")
+        logger.info(f"[ORCHESTRATOR-NOTES] iteration: {iteration}")
+        logger.info(f"[ORCHESTRATOR-NOTES] chief_decision type: {chief_decision.get('decision')}")
+        logger.info(f"[ORCHESTRATOR-NOTES] valid_results count: {len(valid_results)}")
+        for i, r in enumerate(valid_results):
+            logger.info(f"[ORCHESTRATOR-NOTES]   Result {i}: {r.agent_name} - confidence: {r.confidence}")
+        
         if NOTES_AVAILABLE and db_session and project_id and branch_id:
+            logger.info(f"[ORCHESTRATOR-NOTES] ✓ All conditions met, attempting to save notes...")
             try:
+                logger.info(f"[ORCHESTRATOR-NOTES] Creating ChiefAgentNoteTaker instance...")
                 note_taker = ChiefAgentNoteTaker(project_id, branch_id, db_session)
+                logger.info(f"[ORCHESTRATOR-NOTES] ChiefAgentNoteTaker created successfully")
                 
                 # Include iteration info in the notes
                 enhanced_decision = dict(chief_decision)
@@ -640,27 +717,62 @@ Task: {message[:200]}{'...' if len(message) > 200 else ''}"""
                 enhanced_decision['is_final'] = chief_decision.get('decision') != 'loop'
                 enhanced_decision['total_iterations'] = iteration + 1
                 
+                logger.info(f"[ORCHESTRATOR-NOTES] Enhanced decision prepared:")
+                logger.info(f"[ORCHESTRATOR-NOTES]   iteration: {iteration}")
+                logger.info(f"[ORCHESTRATOR-NOTES]   is_final: {enhanced_decision['is_final']}")
+                logger.info(f"[ORCHESTRATOR-NOTES]   total_iterations: {enhanced_decision['total_iterations']}")
+                
+                logger.info(f"[ORCHESTRATOR-NOTES] Calling save_agent_notes...")
+                logger.info(f"[ORCHESTRATOR-NOTES]   agent_results: {len(valid_results)} results")
+                logger.info(f"[ORCHESTRATOR-NOTES]   user_query: {message[:100]}...")
+                
                 note_id = await note_taker.save_agent_notes(
                     agent_results=valid_results,
                     user_query=message, 
                     chief_decision=enhanced_decision
                 )
+                
+                logger.info(f"[ORCHESTRATOR-NOTES] save_agent_notes returned: {note_id}")
+                logger.info(f"[ORCHESTRATOR-NOTES] note_id type: {type(note_id).__name__}")
+                
                 if note_id:
-                    logger.info(f"[ORCHESTRATOR] Saved iteration {iteration + 1} notes to database with ID: {note_id}")
+                    logger.info(f"[ORCHESTRATOR-NOTES] ✅ SUCCESS: Saved iteration {iteration + 1} notes to database")
+                    logger.info(f"[ORCHESTRATOR-NOTES] Note ID: {note_id}")
+                    
                     # Send notification to websocket about note save
-                    await websocket.send_json({
+                    logger.info(f"[ORCHESTRATOR-NOTES] Sending note_saved notification to WebSocket...")
+                    note_saved_msg = {
                         "type": "note_saved",
                         "note_id": note_id,
                         "iteration": iteration + 1,
                         "is_final": chief_decision.get('decision') != 'loop',
                         "message": f"Iteration {iteration + 1} analysis saved to Notes"
-                    })
+                    }
+                    logger.info(f"[ORCHESTRATOR-NOTES] WebSocket message: {note_saved_msg}")
+                    await websocket.send_json(note_saved_msg)
+                    logger.info(f"[ORCHESTRATOR-NOTES] WebSocket notification sent successfully")
                 else:
-                    logger.warning(f"[ORCHESTRATOR] No note ID returned for iteration {iteration + 1}")
+                    logger.warning(f"[ORCHESTRATOR-NOTES] ⚠️ WARNING: No note ID returned for iteration {iteration + 1}")
+                    logger.warning(f"[ORCHESTRATOR-NOTES] save_agent_notes returned: {note_id}")
+                    logger.warning(f"[ORCHESTRATOR-NOTES] This likely means the note was not saved")
             except Exception as e:
-                logger.error(f"[ORCHESTRATOR] Failed to save notes for iteration {iteration + 1}: {e}")
+                logger.error(f"[ORCHESTRATOR-NOTES] ❌ ERROR: Failed to save notes for iteration {iteration + 1}")
+                logger.error(f"[ORCHESTRATOR-NOTES] Exception type: {type(e).__name__}")
+                logger.error(f"[ORCHESTRATOR-NOTES] Exception message: {str(e)}")
+                import traceback
+                logger.error(f"[ORCHESTRATOR-NOTES] Full traceback:\n{traceback.format_exc()}")
                 # Don't fail the whole orchestration if notes fail to save
                 # But make sure we log it prominently
+        else:
+            logger.warning(f"[ORCHESTRATOR-NOTES] ⚠️ SKIPPING NOTES SAVE - Missing requirements:")
+            if not NOTES_AVAILABLE:
+                logger.warning(f"[ORCHESTRATOR-NOTES]   ❌ NOTES_AVAILABLE is False")
+            if not db_session:
+                logger.warning(f"[ORCHESTRATOR-NOTES]   ❌ db_session is None")
+            if not project_id:
+                logger.warning(f"[ORCHESTRATOR-NOTES]   ❌ project_id is None or False: {project_id}")
+            if not branch_id:
+                logger.warning(f"[ORCHESTRATOR-NOTES]   ❌ branch_id is None or False: {branch_id}")
         
         # Handle clarification needs (still handled by individual agents)
         needs_clarification = any(r.needs_clarification for r in valid_results)
