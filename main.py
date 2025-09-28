@@ -1102,6 +1102,95 @@ def delete_project(project_id: int, db: Session = Depends(get_registry_db)):
 def undo_last_sql(project_id: int, request: Request, db: Session = Depends(get_project_db)):
     """Undo last SQL operation. Delegates to extracted module."""
     return undo_last_sql_impl(project_id, request, db)
+
+
+# -------------------- Notes: Add Note (manual) --------------------
+
+@app.get("/project/{project_id}/notes/add")
+def add_note_get(project_id: int, request: Request, db: Session = Depends(get_project_db)):
+    """Create a simple manual note for the given project/branch and redirect back to Notes.
+    Query params (optional):
+    - branch_id: target branch id (defaults to Main or first branch)
+    - title: note title
+    - content: note content (plain text or markdown-lite)
+    - tags: comma-separated tags
+    - priority: 0,1,2
+    """
+    # Resolve project
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        return RedirectResponse("/", status_code=303)
+
+    # Resolve branch
+    branch_q = request.query_params.get("branch_id")
+    try:
+        branch_id = int(branch_q) if branch_q is not None else None
+    except Exception:
+        branch_id = None
+
+    branch = None
+    if branch_id is not None:
+        branch = db.query(Branch).filter(Branch.project_id == project.id, Branch.id == branch_id).first()
+    if branch is None:
+        # Try default/Main
+        branch = (
+            db.query(Branch).filter(Branch.project_id == project.id, Branch.is_default == True).first()
+            or db.query(Branch).filter(Branch.project_id == project.id, Branch.name == "Main").first()
+            or db.query(Branch).filter(Branch.project_id == project.id).order_by(Branch.created_at.asc()).first()
+        )
+    if branch is None:
+        # Ensure at least one branch exists
+        ensure_main_branch = None
+        try:
+            from cedar_app.utils.thread_management import ensure_main_branch as _ensure_main
+            ensure_main_branch = _ensure_main
+        except Exception:
+            ensure_main_branch = None
+        if ensure_main_branch:
+            ensure_main_branch(db, project.id)
+            branch = db.query(Branch).filter(Branch.project_id == project.id).order_by(Branch.created_at.asc()).first()
+        else:
+            # Fallback create Main branch manually
+            b = Branch(project_id=project.id, name="Main", is_default=True)
+            db.add(b)
+            db.commit()
+            db.refresh(b)
+            branch = b
+
+    # Params
+    title = (request.query_params.get("title") or "New Note").strip()[:255]
+    content = (request.query_params.get("content") or "").strip() or "(empty)"
+    tags_param = request.query_params.get("tags") or ""
+    tags = [t.strip() for t in tags_param.split(",") if t.strip()] if tags_param else []
+    try:
+        priority = int(request.query_params.get("priority") or 0)
+    except Exception:
+        priority = 0
+
+    # Create note
+    n = Note(
+        project_id=project.id,
+        branch_id=branch.id,
+        title=title,
+        content=content,
+        tags=tags,
+        note_type='user_note',
+        agent_name='User',
+        priority=priority,
+    )
+    try:
+        db.add(n)
+        db.commit()
+        db.refresh(n)
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    # Redirect back to Notes tab with refresh
+    redirect_url = f"/project/{project.id}?branch_id={branch.id}&refresh_notes=1#main-notes"
+    return RedirectResponse(redirect_url, status_code=303)
 def execute_sql(project_id: int, request: Request, sql: str = Form(...), db: Session = Depends(get_project_db)):
     ensure_project_initialized(project_id)
     # resolve current project and branch

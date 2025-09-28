@@ -475,13 +475,27 @@ def project_page_html(
                     # JSON but not structured format - display as formatted JSON
                     body_html = f"<pre class='small' style='white-space:pre-wrap; background:#f8fafc; padding:8px; border-radius:6px'>{escape(_json.dumps(data, indent=2)[:1000])}</pre>"
             except _json.JSONDecodeError:
-                # Not JSON - display as plain text with proper formatting
+                # Not JSON - render with safe Markdown-lite formatting (headings, bold, italics, inline code)
                 content = str(getattr(n, 'content', '') or '')
-                # Check for markdown-style formatting
-                if content.startswith('#') or content.startswith('-') or content.startswith('*'):
-                    # Basic markdown rendering (just preserve line breaks and indentation)
-                    body_html = f"<div class='small' style='white-space:pre-wrap; font-family:ui-monospace,monospace'>{escape(content[:1000])}</div>"
-                else:
+                try:
+                    import re as _re_md
+                    from html import escape as _esc
+                    def _markdown_lite(txt: str) -> str:
+                        s = _esc(txt)
+                        # Headings
+                        s = _re_md.sub(r'^###\s+(.*)$', r'<h4>\1</h4>', s, flags=_re_md.MULTILINE)
+                        s = _re_md.sub(r'^##\s+(.*)$', r'<h3>\1</h3>', s, flags=_re_md.MULTILINE)
+                        s = _re_md.sub(r'^#\s+(.*)$', r'<h2>\1</h2>', s, flags=_re_md.MULTILINE)
+                        # Inline: bold, italics, code
+                        s = _re_md.sub(r'\*\*([^*]+)\*\*', r'<strong>\1</strong>', s)
+                        s = _re_md.sub(r'_([^_]+)_', r'<em>\1</em>', s)
+                        s = _re_md.sub(r'`([^`]+)`', r'<code>\1</code>', s)
+                        # Bullets (preserve plain bullets as-is) and line breaks
+                        s = s.replace('\n', '<br>')
+                        return s
+                    body_html = f"<div class='small' style='white-space:normal'>{_markdown_lite(content[:4000])}</div>"
+                except Exception:
+                    # Fallback to escaped plain text
                     body_html = f"<div class='small' style='white-space:pre-wrap'>{escape(content[:1000])}</div>"
             except Exception:
                 # Fallback for any other errors
