@@ -465,7 +465,7 @@ class ThinkerOrchestrator:
         await websocket.send_json({
             "type": "action",
             "function": "processing",
-            "text": f"""🤔 **Chief Agent Analysis** (Iteration {iteration + 1}/{self.MAX_ITERATIONS})
+            "text": f"""🤔 **Analyzing Request** (Iteration {iteration + 1}/{self.MAX_ITERATIONS})
 
 📊 **Problem Assessment:**
 I've analyzed your request as a {thinking['identified_type'].replace('_', ' ')}.
@@ -974,10 +974,10 @@ Please provide this information so I can better assist you."""
             
             await websocket.send_json({
                 "type": "agent_result",
-                "agent_name": "The Chief Agent",
+                "agent_name": "Orchestrator",
                 "text": f"""🔄 Refining Answer (Iteration {iteration + 2}/{self.MAX_ITERATIONS}, {self.MAX_ITERATIONS - iteration - 2} loops remaining)
 
-🤔 Chief Agent's Analysis:
+🤔 Analysis:
 {thinking}
 
 🎯 Next Approach:
