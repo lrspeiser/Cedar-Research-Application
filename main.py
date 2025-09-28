@@ -929,6 +929,7 @@ def serve_project_upload_route(project_id: int, path: str):
 # Moved to utils/page_rendering.py
 from cedar_app.utils.page_rendering import projects_list_html
 from cedar_app.utils.page_rendering import project_page_html
+from cedar_app.utils.code_collection import collect_code_items as _collect_code_items
 
 # Import extracted functions
 from cedar_app.utils.sql_websocket import ws_sqlx as _ws_sqlx_impl
