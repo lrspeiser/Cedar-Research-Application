@@ -545,8 +545,8 @@ Why: Generated and executed Python code to compute the exact result"""
                 if errors:
                     formatted_output += f"\n\nPotential Issues: {errors}"
                     formatted_output += f"\n\nSuggested Next Steps: Review the error messages and adjust the query if needed"
-                
-return AgentResult(
+
+                return AgentResult(
                     agent_name="CodeAgent",
                     display_name="Coding Agent",
                     result=formatted_output,
@@ -574,8 +574,8 @@ Why: The generated code encountered an execution error
 Potential Issues: The code failed during execution - see error above
 
 Suggested Next Steps: Review the code and error, then provide a more specific query"""
-                
-return AgentResult(
+
+                return AgentResult(
                     agent_name="CodeAgent",
                     display_name="Coding Agent",
                     result=formatted_output,

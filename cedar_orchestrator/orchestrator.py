@@ -504,6 +504,31 @@ I've analyzed your request as a {thinking['identified_type'].replace('_', ' ')}.
                 logger.info(f"[ORCHESTRATOR] Result {i+1} UI label: {result.display_name}")
                 logger.info(f"[ORCHESTRATOR] Result {i+1} content: {result.result[:200]}...")
                 
+                # Persist code artifacts even if not selected by Chief Agent
+                try:
+                    if db_session and project_id and branch_id and getattr(result, 'artifacts', None):
+                        art = result.artifacts or {}
+                        if str(art.get('type', '')).lower() == 'code' and str(art.get('source', '')).strip():
+                            from main_models import SavedCode
+                            name = (str(art.get('name') or '') or 'Generated Code')[:255]
+                            desc = str(art.get('description') or '')
+                            lang = str(art.get('language') or 'python')[:50]
+                            src = str(art.get('source') or '')
+                            sc = SavedCode(
+                                project_id=int(project_id),
+                                branch_id=int(branch_id),
+                                name=name,
+                                description=desc,
+                                language=lang,
+                                code=src,
+                                agent_name=(result.display_name or result.agent_name)[:100]
+                            )
+                            db_session.add(sc)
+                            db_session.commit()
+                            logger.info(f"[ORCHESTRATOR] Saved code snippet id={getattr(sc, 'id', None)} lang={lang} name={name[:40]}")
+                except Exception as e:
+                    logger.warning(f"[ORCHESTRATOR] Failed to persist code artifact: {type(e).__name__}: {e}")
+                
                 # Send agent completion status with display name
                 status_text = result.result  # Already formatted by the agent
                 

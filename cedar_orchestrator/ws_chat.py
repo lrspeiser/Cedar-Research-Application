@@ -197,23 +197,21 @@ async def handle_ws_chat(
                     if project_id and chat_number:
                         ws_to_use = PersistentWebSocket(websocket, chat_manager, project_id, branch_id, chat_number)
                     
-                    # Get database session if available for notes
-                    logger.info(f"[WebSocket] Checking for db_session: project_id={project_id}, has RegistrySessionLocal? {hasattr(deps, 'RegistrySessionLocal') if deps else 'No deps'}")
+                    # Get per-project database session for persistence (notes, saved code, etc.)
                     db_session = None
-                    if project_id and hasattr(deps, 'RegistrySessionLocal'):
-                        logger.info(f"[WebSocket] Attempting to create db_session from RegistrySessionLocal...")
-                        try:
-                            db_session = deps.RegistrySessionLocal()
-                            logger.info(f"[WebSocket] ✅ db_session created successfully: {type(db_session).__name__}")
-                        except Exception as e:
-                            logger.error(f"[WebSocket] ❌ Could not get database session for notes: {e}")
-                    else:
-                        if not project_id:
-                            logger.warning(f"[WebSocket] ⚠️ No project_id, skipping db_session creation")
-                        if not hasattr(deps, 'RegistrySessionLocal'):
-                            logger.warning(f"[WebSocket] ⚠️ deps has no RegistrySessionLocal attribute")
+                    try:
+                        if project_id and hasattr(deps, 'get_project_engine'):
+                            from sqlalchemy.orm import sessionmaker
+                            eng = deps.get_project_engine(project_id)
+                            SessionLocal = sessionmaker(bind=eng, autoflush=False, autocommit=False, future=True)
+                            db_session = SessionLocal()
+                            logger.info(f"[WebSocket] ✅ Opened per-project DB session for project_id={project_id}")
+                        else:
+                            logger.warning(f"[WebSocket] ⚠️ Missing get_project_engine or project_id; skipping per-project DB session")
+                    except Exception as e:
+                        logger.error(f"[WebSocket] ❌ Could not create per-project DB session: {e}")
                     
-                    # Process with advanced orchestrator (with optional notes persistence)
+                    # Process with advanced orchestrator (with optional notes/code persistence)
                     try:
                         await orchestrator.orchestrate(
                             content, 
