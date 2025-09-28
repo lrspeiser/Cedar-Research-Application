@@ -967,16 +967,36 @@ Please provide this information so I can better assist you."""
         # Chief Agent makes the final decision
         if chief_decision.get('decision') == 'loop' and iteration < self.MAX_ITERATIONS - 1:
             # Chief Agent wants another iteration
-            guidance = chief_decision.get('additional_guidance', '')
+            guidance = (chief_decision.get('additional_guidance', '') or '').strip()
             thinking = chief_decision.get('thinking_process', 'Analyzing how to improve the answer...')
             logger.info(f"[ORCHESTRATOR] Chief Agent requesting iteration {iteration + 1} with guidance: {guidance}")
-            
+
+            # If guidance is empty, synthesize concrete guidance from current agent results to avoid repeating the same request
+            if not guidance:
+                try:
+                    summaries = []
+                    for r in valid_results:
+                        if r.summary:
+                            summaries.append(f"- {r.display_name}: {r.summary}")
+                        else:
+                            # Fallback: first line of the result text
+                            first_line = (r.result or '').split('\n', 1)[0]
+                            summaries.append(f"- {r.display_name}: {first_line[:160]}")
+                    digest = "\n".join(summaries) if summaries else "(no agent results collected)"
+                    guidance = (
+                        "Use the agent results below; do not repeat the same tool calls. "
+                        "Incorporate their findings and propose a different, concrete next action (with code/SQL/shell as needed).\n" + digest
+                    )
+                    logger.info("[ORCHESTRATOR] Synthesized guidance for empty additional_guidance")
+                except Exception:
+                    guidance = "Use the previous agent results; do not repeat the same step. Choose a different concrete next action."
+
             await websocket.send_json({
                 "type": "agent_result",
-                "agent_name": "Orchestrator",
+                "agent_name": "The Chief Agent",
                 "text": f"""🔄 Refining Answer (Iteration {iteration + 2}/{self.MAX_ITERATIONS}, {self.MAX_ITERATIONS - iteration - 2} loops remaining)
 
-🤔 Analysis:
+🤔 Chief Agent's Analysis:
 {thinking}
 
 🎯 Next Approach:
@@ -984,7 +1004,7 @@ Please provide this information so I can better assist you."""
 
 ⏳ Running additional analysis..."""
             })
-            
+
             # Prepare enhanced message with Chief Agent's guidance
             # Check if the guidance contains a shell command (in backticks)
             if '`' in guidance:
@@ -997,10 +1017,10 @@ Please provide this information so I can better assist you."""
                     enhanced_message = f"{message}\n\nRefinement guidance: {guidance}"
             else:
                 enhanced_message = f"{message}\n\nRefinement guidance: {guidance}"
-            
+
             # Brief delay for UI
             await asyncio.sleep(0.3)
-            
+
             # Start next iteration with Chief Agent's guidance
             return await self.orchestrate(enhanced_message, websocket, iteration + 1, valid_results, project_id, branch_id, db_session)
         
