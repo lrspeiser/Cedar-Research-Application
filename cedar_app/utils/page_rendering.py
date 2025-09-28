@@ -938,12 +938,13 @@ def project_page_html(
             stepAdvance(roleClass, wrapM);
           } catch(_) { }
         } else if (m.type === 'prompt') {
+          // Store prompts for debugging but don't display them in the UI
           try {
             try {
               window.__cedar_last_prompts = window.__cedar_last_prompts || {};
               if (m.thread_id) { window.__cedar_last_prompts[String(m.thread_id)] = m.messages || []; }
             } catch(_){ }
-            // If server provided a thread_id and the form doesn't have one yet, set it now (no pre-create roundtrip)
+            // Update thread_id if needed
             try {
               if (m.thread_id) {
                 var chatForm2 = document.getElementById('chatForm');
@@ -955,37 +956,7 @@ def project_page_html(
                 }
               }
             } catch(_){}
-            var detIdP = 'det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
-            var wrapP = document.createElement('div'); wrapP.className = 'msg assistant';
-            var metaP = document.createElement('div'); metaP.className = 'meta small'; metaP.innerHTML = "<span class='title' style='font-weight:600'>System Debug</span>";
-            var bubP = document.createElement('div'); bubP.className = 'bubble assistant'; bubP.setAttribute('data-details-id', detIdP);
-            var contP = document.createElement('div'); contP.className='content'; contP.style.whiteSpace='pre-wrap';
-            try { contP.textContent = 'Prepared LLM prompt (click to view JSON).'; } catch(_){}
-            bubP.appendChild(contP);
-            var detailsP = document.createElement('div'); detailsP.id = detIdP; detailsP.style.display='none';
-            var preP = document.createElement('pre'); preP.className='small'; preP.style.whiteSpace='pre-wrap'; preP.style.background='#f8fafc'; preP.style.padding='8px'; preP.style.borderRadius='6px';
-            try { preP.textContent = JSON.stringify(m.messages || [], null, 2); } catch(_){ preP.textContent = String(m.messages || ''); }
-            // Action bar for details: Copy JSON
-            var barP = document.createElement('div'); barP.className='small'; barP.style.margin='6px 0 8px 0';
-            var copyBtnP = document.createElement('button'); copyBtnP.textContent='Copy JSON'; copyBtnP.className='secondary';
-            copyBtnP.addEventListener('click', function(){ try { navigator.clipboard.writeText(preP.textContent); } catch(_){} });
-            barP.appendChild(copyBtnP);
-            detailsP.appendChild(barP);
-            detailsP.appendChild(preP);
-            wrapP.appendChild(metaP); wrapP.appendChild(bubP); wrapP.appendChild(detailsP);
-            // Allow clicking the title to toggle details (to satisfy tests)
-            try {
-              var titleElP = metaP.querySelector('.title');
-              if (titleElP) {
-                titleElP.setAttribute('role', 'button');
-                titleElP.setAttribute('tabindex', '0');
-                var _tglP = function(){ try { var e=document.getElementById(detIdP); if (e) { e.style.display = (e.style.display==='none'?'block':'none'); } } catch(_){} };
-                titleElP.addEventListener('click', function(ev){ try { ev.preventDefault(); } catch(_){}; _tglP(); });
-                titleElP.addEventListener('keydown', function(ev){ try { if (ev && (ev.key==='Enter' || ev.key===' ')) { ev.preventDefault(); _tglP(); } } catch(_){} });
-              }
-            } catch(_) {}
-            if (msgs) msgs.appendChild(wrapP);
-            stepAdvance('assistant:prompt', wrapP);
+            // Skip rendering the prompt panel - don't show "Prepared LLM prompt" in UI
             ackEvent(m);
           } catch(_) { }
         } else if (m.type === 'agent_result') {
