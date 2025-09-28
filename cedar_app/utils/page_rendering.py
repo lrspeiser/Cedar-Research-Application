@@ -386,7 +386,8 @@ def project_page_html(
             if when:
                 meta_rows.append(f"<tr><th>Created</th><td class='small muted'>{when}</td></tr>")
             meta_tbl = "<table class='table'><tbody>" + "".join(meta_rows) + "</tbody></table>"
-            insert_btn = f"<button class='secondary' onclick=\"(function(){try{var ta=document.getElementById('chatInput'); if(!ta){alert('Chat input not found');return;} var lang='{lang}'; var src=document.getElementById('{pre_id}').innerText; var block = (lang?('```'+lang+'\\n'):'```') + src + '\\n```'; ta.value = block; ta.focus(); }catch(_){}})()\">Insert into chat</button>"
+            code_prefix = ("```" + lang + "\\n") if lang else "```"
+            insert_btn = f"<button class='secondary' onclick=\"var ta=document.getElementById('chatInput'); if(!ta)return; var src=document.getElementById('{pre_id}').innerText; ta.value='{code_prefix}' + src + '\\n```'; ta.focus();\">Insert into chat</button>"
             copy_btn = f"<button class='secondary' onclick=\"try{{navigator.clipboard.writeText(document.getElementById('{pre_id}').innerText);}}catch(_){{}}\">Copy</button>"
             code_pre = f"<pre id='{pre_id}' class='small' style='white-space:pre-wrap; background:#f8fafc; padding:8px; border-radius:6px; max-height:400px; overflow:auto'>" + escape(code_text) + "</pre>"
             code_details_html = ("<div class='card' style='margin-top:8px; padding:12px'><h3 style='margin-bottom:6px'>Code Details</h3>" + meta_tbl + "<div class='small' style='margin:6px 0; display:flex; gap:6px'>" + insert_btn + copy_btn + "</div>" + code_pre + "</div>")
