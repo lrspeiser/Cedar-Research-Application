@@ -18,7 +18,7 @@ import logging
 import asyncio
 import subprocess
 from typing import Dict, List, Any, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from openai import AsyncOpenAI
 from openai import AsyncOpenAI
 from fastapi import WebSocket
@@ -56,6 +56,7 @@ class AgentResult:
     rerun_reason: str = ""  # Why a rerun is needed
     needs_clarification: bool = False  # Whether the agent needs user clarification
     clarification_question: str = ""  # Question to ask the user
+    artifacts: dict = field(default_factory=dict)  # Optional artifacts produced by the agent (e.g., generated code)
     
 class ShellAgent:
     """Agent that executes shell commands exactly as provided by the Chief Agent"""
@@ -545,14 +546,21 @@ Why: Generated and executed Python code to compute the exact result"""
                     formatted_output += f"\n\nPotential Issues: {errors}"
                     formatted_output += f"\n\nSuggested Next Steps: Review the error messages and adjust the query if needed"
                 
-                return AgentResult(
+return AgentResult(
                     agent_name="CodeAgent",
                     display_name="Coding Agent",
                     result=formatted_output,
                     confidence=0.95 if output else 0.5,
                     method="LLM-generated and executed Python code",
                     explanation=f"Generated and executed Python code",
-                    summary=summary
+                    summary=summary,
+                    artifacts={
+                        "type": "code",
+                        "language": "python",
+                        "name": (summary[:80] if summary else "Generated Code"),
+                        "description": summary or "",
+                        "source": generated_code,
+                    }
                 )
                 
             except Exception as exec_error:
@@ -567,7 +575,7 @@ Potential Issues: The code failed during execution - see error above
 
 Suggested Next Steps: Review the code and error, then provide a more specific query"""
                 
-                return AgentResult(
+return AgentResult(
                     agent_name="CodeAgent",
                     display_name="Coding Agent",
                     result=formatted_output,
@@ -576,7 +584,14 @@ Suggested Next Steps: Review the code and error, then provide a more specific qu
                     explanation=f"Code execution error",
                     summary=summary if 'summary' in locals() else f"Failed to execute generated code: {str(exec_error)[:100]}",
                     needs_rerun=True,
-                    rerun_reason=f"Execution error: {str(exec_error)[:100]}"
+                    rerun_reason=f"Execution error: {str(exec_error)[:100]}",
+                    artifacts={
+                        "type": "code",
+                        "language": "python",
+                        "name": (summary[:80] if 'summary' in locals() and summary else "Generated Code (error)"),
+                        "description": (summary if 'summary' in locals() else "") or "",
+                        "source": generated_code,
+                    }
                 )
                 
         except Exception as e:

@@ -200,3 +200,26 @@ class Note(Base):
         Index("ix_notes_chat_thread", "chat_id", "thread_id"),
         Index("ix_notes_type", "note_type"),
     )
+
+
+class SavedCode(Base):
+    __tablename__ = "saved_code"
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, nullable=False, index=True)
+    branch_id = Column(Integer, nullable=False, index=True)
+    # Optional relationships to provide provenance
+    thread_id = Column(Integer, nullable=True)
+    chat_id = Column(Integer, nullable=True)  # Chat number from file-based chat manager if applicable
+    agent_name = Column(String(100), nullable=True)
+
+    # Snippet metadata
+    name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    language = Column(String(50), default='python')
+    code = Column(Text, nullable=False)
+
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        Index("ix_saved_code_project_branch", "project_id", "branch_id", "created_at"),
+    )
