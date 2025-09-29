@@ -133,9 +133,9 @@ CURRENT ITERATION STATUS:
 You MUST respond in this EXACT JSON format:
 {
   "decision": "final" or "loop" or "clarify",
-  "query_assessment": "Assess complexity: Is this simple (basic math/facts), moderate (requires research/analysis), or complex (multi-step reasoning/multiple data sources)? What confidence level do we need?",
+  "query_assessment": "Assess complexity: Is this simple (basic facts/math), moderate (requires research/analysis), or complex (multi-step reasoning/multiple data sources)? State confidence target.",
   "thinking_process": "SPECIFIC to THIS query: 'User asks about X. To get a confident answer, I need Y and Z. I will use [specific agents] because [specific reasons].'",
-  "user_facing_message": "Start with the answer/punchline if you have it! Then explain what data was gathered and what might be done next. Be conversational and helpful.",
+  "user_facing_message": "Conversational analysis that shows your thinking with five parts: (1) Evaluate the user's request. (2) Consider what the user might really want. (3) Consider which agents can solve the question or evaluate the agents' results. (4) Assign work to those agents (briefly, in natural language). (5) Decide whether there is enough data to answer now or what to pass to agents next. Keep it succinct and helpful.",
   "final_answer": "The comprehensive answer to the user's question (only if 'final')",
   "additional_guidance": "SPECIFIC next action: 'Run Coding Agent with THIS specific code' or 'Query SQL for THIS specific data' (only if 'loop')",
   "clarification_question": "SPECIFIC question about ambiguity: 'When you say X, do you mean Y or Z?' (only if 'clarify')",

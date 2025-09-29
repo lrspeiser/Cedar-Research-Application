@@ -112,11 +112,11 @@ CURRENT ITERATION STATUS:
 You MUST respond in this EXACT JSON format:
 {{
   "decision": "final" or "loop" or "clarify",
-  "query_assessment": "Assess complexity: Is this simple (basic math/facts), moderate (requires research/analysis), or complex (multi-step reasoning/multiple data sources)? What confidence level do we need?",
+  "query_assessment": "Assess complexity: Is this simple (basic facts/math), moderate (requires research/analysis), or complex (multi-step reasoning/multiple data sources)? State confidence target.",
   "thinking_process": "SPECIFIC to THIS query: 'User asks about X. To get a confident answer, I need Y and Z. I will use [specific agents] because [specific reasons].'",
-  "user_facing_message": "Start with the answer/punchline if you have it! Then explain what data was gathered and what might be done next. Be conversational and helpful.",
+  "user_facing_message": "Conversational analysis that shows your thinking with five parts: (1) Evaluate the user's request. (2) Consider what the user might really want. (3) Consider which agents can solve the question or evaluate the agents' results. (4) Assign work to those agents (briefly, in natural language). (5) Decide whether there is enough data to answer now or what to pass to agents next. Keep it succinct and helpful.",
   "final_answer": "The comprehensive answer to the user's question (only if 'final')",
-  "additional_guidance": "SPECIFIC next action: 'Run Coding Agent with THIS specific code' or 'Query SQL for THIS specific data' (only if 'loop')",
+  "additional_guidance": "SPECIFIC next action: 'Run Coding Agent with THIS code' or 'Query SQL for THIS data' (only if 'loop')",
   "clarification_question": "SPECIFIC question about ambiguity: 'When you say X, do you mean Y or Z?' (only if 'clarify')",
   "selected_agent": "Single agent name OR 'combined' for multiple agents",
   "reasoning": "Why these agents will give us a CONFIDENT answer: 'For MOND theory, I need Research Agent for papers AND Notes Agent for documentation'",
@@ -851,6 +851,20 @@ Task: {message[:200]}{'...' if len(message) > 200 else ''}"""
         # Log thinking process if available
         if chief_decision.get('thinking_process'):
             logger.info(f"[ORCHESTRATOR] Chief Agent thinking: {chief_decision['thinking_process'][:300]}...")
+        
+        # Show the Chief Agent's conversational analysis (thinking) to the user if provided
+        try:
+            user_msg = (chief_decision.get('user_facing_message') or '').strip()
+            if user_msg:
+                await websocket.send_json({
+                    "type": "agent_result",
+                    "agent_name": "The Chief Agent",
+                    "text": user_msg,
+                    "summary": None,
+                    "metadata": {"agent": "ChiefAgent", "phase": "analysis"}
+                })
+        except Exception as e:
+            logger.warning(f"[ORCHESTRATOR] Failed to send Chief Agent analysis message: {e}")
         
         # Always run Notes Agent to create structured notes for every Chief Agent processing step
         try:
