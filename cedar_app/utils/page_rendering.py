@@ -990,6 +990,23 @@ def project_page_html(
       }
       // All Chats functionality removed
       function handleEvent(m){
+        // Normalize and update thread_id as soon as we see it, so subsequent UI uses the correct thread
+        try {
+          if (m && m.thread_id) {
+            var tidStr0 = String(m.thread_id);
+            if (String(threadId||'') !== tidStr0) {
+              threadId = tidStr0;
+              try {
+                var chatForm3 = document.getElementById('chatForm');
+                if (chatForm3) {
+                  chatForm3.setAttribute('data-thread-id', tidStr0);
+                  var hiddenTid3 = chatForm3.querySelector("input[name='thread_id']");
+                  if (hiddenTid3) hiddenTid3.value = tidStr0; else { var h3 = document.createElement('input'); h3.type='hidden'; h3.name='thread_id'; h3.value=tidStr0; chatForm3.appendChild(h3); }
+                }
+              } catch(_){}
+            }
+          }
+        } catch(_){}
         // Handle chat creation notification
         if (m.type === 'chat_created') {
           window.currentChatNumber = m.chat_number;
@@ -1099,12 +1116,13 @@ def project_page_html(
               console.warn('[cedar-ui] Prompt event missing thread_id, cannot cache');
             }
             
-            // Update thread_id if needed
+            // Update thread_id if needed (ensure closure variable keeps new thread id)
             try {
               if (m.thread_id) {
+                var tidStr = String(m.thread_id);
+                if (String(threadId||'') !== tidStr) { threadId = tidStr; }
                 var chatForm2 = document.getElementById('chatForm');
                 if (chatForm2 && !(chatForm2.getAttribute('data-thread-id'))) {
-                  var tidStr = String(m.thread_id);
                   chatForm2.setAttribute('data-thread-id', tidStr);
                   var hiddenTid2 = chatForm2.querySelector("input[name='thread_id']");
                   if (hiddenTid2) hiddenTid2.value = tidStr; else { var hi2 = document.createElement('input'); hi2.type='hidden'; hi2.name='thread_id'; hi2.value=tidStr; chatForm2.appendChild(hi2); }
@@ -1121,6 +1139,34 @@ def project_page_html(
                 if (pre && (m.messages || []).length) {
                   try { pre.textContent = JSON.stringify(m.messages, null, 2); } catch(_){ pre.textContent = String(m.messages); }
                 }
+              }
+            } catch(_){}
+            
+            // Ensure a dedicated Chief Agent prompt bubble exists ASAP (not only at final)
+            try {
+              var titles0 = Array.from(document.querySelectorAll('#msgs .msg.assistant .meta .title'));
+              var haveChiefPrompt = false;
+              try { haveChiefPrompt = titles0.some(function(el){ return String(el.textContent||'').trim().toLowerCase() === 'chief agent'; }); } catch(_){}
+              if (!haveChiefPrompt) {
+                var detIdP = 'det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
+                var wrapP = document.createElement('div'); wrapP.className = 'msg assistant';
+                var metaP = document.createElement('div'); metaP.className = 'meta small'; metaP.innerHTML = "<span class='pill'>Chief Agent</span> <span class='title' style='font-weight:600'>Chief Agent</span>";
+                var bubP = document.createElement('div'); bubP.className = 'bubble assistant'; bubP.setAttribute('data-details-id', detIdP);
+                var contP = document.createElement('div'); contP.className='content'; contP.style.whiteSpace='pre-wrap';
+                try { contP.textContent = 'Prepared LLM prompt (click to view JSON).'; } catch(_){ }
+                bubP.appendChild(contP);
+                var detailsP = document.createElement('div'); detailsP.id = detIdP; detailsP.style.display='none';
+                var preP = document.createElement('pre'); preP.className='small'; preP.style.whiteSpace='pre-wrap'; preP.style.background='#f8fafc'; preP.style.padding='8px'; preP.style.borderRadius='6px';
+                try { preP.textContent = JSON.stringify(m.messages||[], null, 2); } catch(_){ preP.textContent = String(m.messages||[]); }
+                var barP = document.createElement('div'); barP.className='small'; barP.style.margin='6px 0 8px 0';
+                var copyBtnP = document.createElement('button'); copyBtnP.textContent='Copy JSON'; copyBtnP.className='secondary';
+                copyBtnP.addEventListener('click', function(){ try { navigator.clipboard.writeText(preP.textContent); } catch(_){} });
+                barP.appendChild(copyBtnP);
+                detailsP.appendChild(barP);
+                detailsP.appendChild(preP);
+                wrapP.appendChild(metaP); wrapP.appendChild(bubP); wrapP.appendChild(detailsP);
+                var msgsElP = document.getElementById('msgs'); if (msgsElP) msgsElP.appendChild(wrapP);
+                try { stepAdvance('assistant:prompt', wrapP); } catch(_){}
               }
             } catch(_){}
             
