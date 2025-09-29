@@ -82,16 +82,8 @@ class ChiefAgent:
             }
         
         try:
-            # Prepare agent results summary for Chief Agent review
-            results_summary = []
-            for result in agent_results:
-                results_summary.append(f"""
-                Agent: {result.display_name}
-                Summary: {result.summary if result.summary else 'No summary provided'}
-                Confidence: {result.confidence}
-                Method: {result.method}
-                Response: {result.result[:500]}
-                """)
+            # Build Chief Agent message without leaking orchestrator-internal content
+            # Only include the system prompt, optional resource index, and the raw user query.
             
             # Get model from environment
             model = os.getenv("CEDARPY_OPENAI_MODEL") or os.getenv("OPENAI_API_KEY_MODEL") or "gpt-5"
@@ -220,17 +212,7 @@ Examples (Routing Guidance):
                 pass
             msgs.append({
                 "role": "user",
-                "content": f"""User Query: {user_query}
-
-Current Iteration: {iteration + 1} of {max_iterations}
-Remaining Loops: {remaining_loops}
-
-{('Previous Context:\n' + previous_context + '\n') if previous_context else ''}
-Agent Responses from this iteration:
-{''.join(results_summary)}
-
-Be SPECIFIC about THIS query, not generic!
-Only loop if you have a SPECIFIC thing you need to get."""
+                "content": f"User Query: {user_query}"
             })
 
             completion_params = {
@@ -751,12 +733,8 @@ Task: {message[:200]}{'...' if len(message) > 200 else ''}"""
         
         # Don't send stream updates - let agent results speak for themselves
         
-        # Build context from previous iterations
+        # Do not pass previous iterations context to Chief Agent; keep input minimal
         previous_context = ""
-        if previous_results:
-            previous_context = "Previous iteration results:\n"
-            for prev_result in previous_results[:3]:  # Include top 3 from previous
-                previous_context += f"- {prev_result.display_name}: {prev_result.result[:200]}...\n"
         
         # Have Chief Agent review all results and make a decision
         # Build resource index for the Chief Agent (names + official IDs)
