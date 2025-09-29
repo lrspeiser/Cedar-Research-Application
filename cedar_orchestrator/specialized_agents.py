@@ -464,7 +464,7 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
                         "role": "system",
                         "content": """You are a strategic planning expert. Create detailed action plans that include:
                         1. Breaking down the problem into manageable steps
-                        2. Identifying which specialized agents should be used (available agents: Coding Agent, Math Agent, Research Agent, Data Agent, Notes Agent, Logical Reasoner, General Assistant)
+                        2. Identifying which specialized agents should be used (available agents: Coding Agent, Math Agent, Research Agent, Data Agent, Notes Agent, File Agent, Shell Executor, SQL Agent)
                         3. Determining the sequence of operations
                         4. Specifying how to gather source material
                         5. How to analyze data and compile results

@@ -19,10 +19,8 @@ The file contains 14 agent classes + 2 orchestrator classes all in one massive f
 1. **AgentResult** (Data class)
 2. **ShellAgent** (~340 lines)
 3. **CodeAgent** (~200 lines)
-4. **ReasoningAgent** (~100 lines)
-5. **SQLAgent** (~150 lines)
-6. **GeneralAgent** (~90 lines)
-7. **MathAgent** (~140 lines)
+4. **SQLAgent** (~150 lines)
+5. **MathAgent** (~140 lines)
 8. **ResearchAgent** (~95 lines)
 9. **StrategyAgent** (~95 lines)
 10. **DataAgent** (~120 lines)
@@ -53,15 +51,13 @@ cedar_orchestrator/
 │   │
 │   ├── analysis/
 │   │   ├── __init__.py
-│   │   ├── reasoning_agent.py     # ~100 lines - ReasoningAgent
 │   │   ├── math_agent.py          # ~140 lines - MathAgent
 │   │   └── data_agent.py          # ~120 lines - DataAgent
 │   │
 │   ├── research/
 │   │   ├── __init__.py
 │   │   ├── research_agent.py      # ~95 lines - ResearchAgent
-│   │   ├── strategy_agent.py      # ~95 lines - StrategyAgent
-│   │   └── general_agent.py       # ~90 lines - GeneralAgent
+│   │   └── strategy_agent.py      # ~95 lines - StrategyAgent
 │   │
 │   └── content/
 │       ├── __init__.py

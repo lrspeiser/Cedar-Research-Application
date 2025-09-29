@@ -2,7 +2,7 @@
 
 ## Overview
 This update optimizes the multi-agent orchestration system by:
-1. **Reducing redundant agent usage**: GeneralAgent and ReasoningAgent are now used sparingly
+1. **Removing redundant agents**: GeneralAgent and ReasoningAgent have been removed from the system
 2. **Adding FileAgent**: New specialized agent for file downloads and management
 3. **Improving agent selection**: More targeted agent selection based on query type
 
@@ -11,15 +11,15 @@ This update optimizes the multi-agent orchestration system by:
 ### 1. Reduced Agent Usage
 
 #### Before
-- GeneralAgent and ReasoningAgent were included in almost every query
+- GeneralAgent and ReasoningAgent were included in almost every query (now removed)
 - This led to redundant processing and slower response times
 - Example: A math calculation would run 4 agents (Code, Math, Reasoning, General)
 
 #### After
 - Agents are selected more precisely based on need
 - Most queries now use only 1-2 specialized agents
-- GeneralAgent is only used as a fallback for truly general queries
-- ReasoningAgent is only used for explanation and derivation tasks
+- GeneralAgent has been completely removed from the system
+- ReasoningAgent has been completely removed from the system
 
 ### 2. New FileAgent
 

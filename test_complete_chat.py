@@ -16,19 +16,19 @@ from typing import List, Dict, Any
 TEST_CASES = [
     {
         "query": "what is the square root of 3934934",
-        "expected_agents": ["Coding Agent", "Logical Reasoner", "General Assistant"],
+        "expected_agents": ["Coding Agent", "Math Agent"],
         "expected_answer_contains": ["1983", "1984"],  # Either precise or approximate
         "type": "mathematical"
     },
     {
         "query": "calculate 25 * 17 + 93",
-        "expected_agents": ["Coding Agent", "Logical Reasoner", "General Assistant"],
+        "expected_agents": ["Coding Agent", "Math Agent"],
         "expected_answer_contains": ["518"],
         "type": "mathematical"
     },
     {
         "query": "what is Python?",
-        "expected_agents": ["Logical Reasoner", "General Assistant"],
+        "expected_agents": ["Research Agent", "Strategy Agent"],
         "expected_answer_contains": ["programming", "language"],
         "type": "explanation"
     }

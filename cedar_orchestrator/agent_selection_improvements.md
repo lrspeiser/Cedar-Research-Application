@@ -6,15 +6,15 @@ The CedarPy orchestrator doesn't always use exactly 3 agents. The number varies 
 
 ### Current Agent Selection Logic:
 
-1. **Mathematical Derivation**: 3 agents (MathAgent, ReasoningAgent, CodeAgent)
-2. **Research Task**: 3 agents (ResearchAgent, GeneralAgent, NotesAgent) 
-3. **Strategic Planning**: 3 agents (StrategyAgent, ReasoningAgent, GeneralAgent)
-4. **Mathematical Computation**: 4 agents (CodeAgent, MathAgent, ReasoningAgent, GeneralAgent)
-5. **Coding Task**: 3 agents (CodeAgent, StrategyAgent, GeneralAgent)
-6. **Database Query**: 3 agents (DataAgent, SQLAgent, GeneralAgent)
-7. **Note Taking**: 2 agents (NotesAgent, GeneralAgent)
-8. **Explanation Query**: 3 agents (ReasoningAgent, ResearchAgent, GeneralAgent)
-9. **General Query**: 3 agents (GeneralAgent, ReasoningAgent, StrategyAgent)
+1. **Mathematical Derivation**: 2 agents (MathAgent, CodeAgent)
+2. **Research Task**: 2 agents (ResearchAgent, NotesAgent) 
+3. **Strategic Planning**: 1 agent (StrategyAgent)
+4. **Mathematical Computation**: 2 agents (CodeAgent, MathAgent)
+5. **Coding Task**: 2 agents (CodeAgent, StrategyAgent)
+6. **Database Query**: 2 agents (DataAgent, SQLAgent)
+7. **Note Taking**: 1 agent (NotesAgent)
+8. **Explanation Query**: 2 agents (ResearchAgent, StrategyAgent)
+9. **General Query**: 2 agents (StrategyAgent, ResearchAgent)
 
 ## Issues with Current System:
 

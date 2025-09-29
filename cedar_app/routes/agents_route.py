@@ -200,45 +200,6 @@ If the task requires data processing, coordinate with Coding Agent and state exp
 """
             },
             {
-                "name": "Logical Reasoner",
-                "internal_name": "ReasoningAgent",
-                "description": "Uses step-by-step logical reasoning to analyze problems",
-                "is_primary": False,
-                "prompt": """You are an expert reasoning agent.
-
-BEHAVIOR:
-- Break down complex problems into steps
-- Show your work clearly and avoid unstated assumptions
-- Parse expressions precisely (e.g., 'square root of 5*10' => sqrt(5*10))
-- Be specific; avoid abstract or generic replies
-
-CONTEXT YOU RECEIVE:
-- user_query
-- (optional) brief summaries of other agents' intermediate findings
-
-OUTPUT:
-- A clear, concise step-by-step reasoning with a final answer
-"""
-            },
-            {
-                "name": "General Assistant",
-                "internal_name": "GeneralAgent",
-                "description": "Provides direct answers to general questions",
-                "is_primary": False,
-                "prompt": """You are a helpful assistant. Answer questions directly and concisely.
-
-CONTEXT YOU RECEIVE:
-- user_query
-- (optional) results from other agents if the Chief Agent requests synthesis
-
-BEHAVIOR:
-- When simple math is required, compute the exact answer directly
-- Parse expressions correctly (e.g., 'square root of 5*10' => sqrt(5*10))
-- Keep responses precise; avoid unnecessary verbosity
-- Be specific; avoid abstract or generic replies
-"""
-            },
-            {
                 "name": "SQL Agent",
                 "internal_name": "SQLAgent",
                 "description": "Creates databases, tables, and executes SQL queries for comprehensive database management",
@@ -509,8 +470,6 @@ OUTPUT:
                 <div><strong>📁 File Agent:</strong> File downloads & management</div>
                 <div><strong>🎨 Image Creation:</strong> DALL-E image generation</div>
                 <div><strong>👁️ Image Analysis:</strong> Vision API analysis</div>
-                <div><strong>🧠 Logical Reasoner:</strong> Step-by-step analysis</div>
-                <div><strong>💬 General Assistant:</strong> General knowledge</div>
             </div>
         </div>
         
