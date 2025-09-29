@@ -287,44 +287,90 @@ Examples (Routing Guidance):
             else:
                 logger.info(f"[ChiefAgent] Response (truncated): {chief_response[:500]}...")
             
-            # Parse JSON response
-            try:
-                decision_data = json.loads(chief_response)
-                # Validate required fields
-                if "decision" not in decision_data:
-                    decision_data["decision"] = "final"
-                if "final_answer" not in decision_data:
-                    # Use best agent result as fallback
+            # Parse JSON response with LLM repair retries on failure
+            def _validate_and_normalize(d: Dict[str, Any]) -> Dict[str, Any]:
+                if "decision" not in d:
+                    d["decision"] = "final"
+                if "final_answer" not in d:
                     best_result = max(agent_results, key=lambda r: r.confidence) if agent_results else None
-                    decision_data["final_answer"] = best_result.result if best_result else "No results available"
-                # Log the new assessment fields
-                if "query_assessment" in decision_data:
-                    logger.info(f"[ChiefAgent] Query Assessment: {decision_data['query_assessment'][:200]}...")
-                if "thinking_process" in decision_data:
-                    logger.info(f"[ChiefAgent] Thinking: {decision_data['thinking_process'][:200]}...")
-                if "confidence_strategy" in decision_data:
-                    logger.info(f"[ChiefAgent] Confidence Strategy: {decision_data['confidence_strategy'][:100]}...")
-                if "user_facing_message" in decision_data:
-                    logger.info(f"[ChiefAgent] User Message: {decision_data['user_facing_message'][:200]}...")
-                # Ensure final answer includes suggested next steps
-                if "Suggested Next Steps:" not in decision_data.get("final_answer", ""):
-                    decision_data["final_answer"] += "\n\nSuggested Next Steps: Review the results and let me know if you need further clarification."
+                    d["final_answer"] = best_result.result if best_result else "No results available"
                 # Normalize decision value
-                if decision_data["decision"] not in ["final", "loop", "clarify"]:
-                    logger.warning(f"[ChiefAgent] Invalid decision value: {decision_data['decision']}, defaulting to 'final'")
-                    decision_data["decision"] = "final"
-            except json.JSONDecodeError:
-                # Fallback if JSON parsing fails
-                logger.warning("[ChiefAgent] Failed to parse JSON response, using fallback")
-                best_result = max(agent_results, key=lambda r: r.confidence) if agent_results else None
-                decision_data = {
-                    "decision": "final",
-                    "final_answer": best_result.result if best_result else "No results available",
-                    "additional_guidance": None,
-                    "selected_agent": best_result.display_name if best_result else "None",
-                    "reasoning": "JSON parsing failed - using best available result"
-                }
-            
+                if d.get("decision") not in ["final", "loop", "clarify"]:
+                    logger.warning(f"[ChiefAgent] Invalid decision value: {d.get('decision')}, defaulting to 'final'")
+                    d["decision"] = "final"
+                return d
+
+            decision_data: Dict[str, Any]
+            try:
+                decision_data = _validate_and_normalize(json.loads(chief_response))
+            except json.JSONDecodeError as e1:
+                logger.warning(f"[ChiefAgent] JSON parse failed: {e1}. Attempting repair retries…")
+                retries = 0
+                max_retries = 2
+                last_error = str(e1)
+                last_output = chief_response[:1500]
+                decision_data = {}
+                while retries < max_retries:
+                    retries += 1
+                    repair_system = (
+                        "You previously returned invalid JSON. Return ONLY valid JSON matching the schema you were given. "
+                        "Do NOT include any prose or code fences."
+                    )
+                    repair_user = (
+                        f"Previous JSON parse error: {last_error}\n\n"
+                        f"Your last output (truncated):\n{last_output}\n\n"
+                        "Re-emit the same decision as valid JSON, including agents_to_use when appropriate."
+                    )
+                    repair_msgs = [
+                        {"role": "system", "content": system_prompt},  # original instruction
+                        {"role": "system", "content": repair_system},
+                        {"role": "user", "content": repair_user},
+                    ]
+                    # Re-attach context for determinism
+                    if conversation_history:
+                        repair_msgs.append({"role": "user", "content": f"Conversation History (verbatim):\n{conversation_history}"})
+                    if agent_results:
+                        try:
+                            parts = []
+                            for r in agent_results:
+                                parts.append(f"Agent: {r.display_name}\nResponse (verbatim):\n{r.result}\n----")
+                            repair_msgs.append({"role": "user", "content": "Agent Responses (verbatim):\n" + "\n".join(parts)})
+                        except Exception:
+                            pass
+                    repair_msgs.append({"role": "user", "content": f"User Query: {user_query}"})
+
+                    try:
+                        repair_resp = await self.llm_client.chat.completions.create(model=model, messages=repair_msgs, max_completion_tokens=800)
+                        repaired = repair_resp.choices[0].message.content
+                        decision_data = _validate_and_normalize(json.loads(repaired))
+                        break
+                    except Exception as e2:
+                        last_error = str(e2)
+                        last_output = (repaired if 'repaired' in locals() else '')[:1500]
+                        logger.warning(f"[ChiefAgent] Repair attempt {retries} failed: {e2}")
+                        decision_data = {}
+
+                if not decision_data:
+                    # Last-resort fallback
+                    best_result = max(agent_results, key=lambda r: r.confidence) if agent_results else None
+                    decision_data = {
+                        "decision": "final",
+                        "final_answer": best_result.result if best_result else "No results available",
+                        "additional_guidance": None,
+                        "selected_agent": best_result.display_name if best_result else "None",
+                        "reasoning": f"JSON parsing failed after {max_retries} repair attempts"
+                    }
+
+            # Log the assessment fields
+            if "query_assessment" in decision_data:
+                logger.info(f"[ChiefAgent] Query Assessment: {decision_data['query_assessment'][:200]}...")
+            if "thinking_process" in decision_data:
+                logger.info(f"[ChiefAgent] Thinking: {decision_data['thinking_process'][:200]}...")
+            if "confidence_strategy" in decision_data:
+                logger.info(f"[ChiefAgent] Confidence Strategy: {decision_data['confidence_strategy'][:100]}...")
+            if "user_facing_message" in decision_data:
+                logger.info(f"[ChiefAgent] User Message: {decision_data['user_facing_message'][:200]}...")
+
             logger.info(f"[ChiefAgent] Decision: {decision_data.get('decision')}, Selected: {decision_data.get('selected_agent')}")
             logger.info(f"[ChiefAgent] Completed in {time.time() - start_time:.3f}s")
             
