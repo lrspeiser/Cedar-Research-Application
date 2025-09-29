@@ -113,18 +113,19 @@ CURRENT ITERATION STATUS:
 - Remaining loops: {remaining_loops}
 
 You MUST respond in this EXACT JSON format:
-{{
+{
   "decision": "final" or "loop" or "clarify",
   "query_assessment": "Assess complexity: Is this simple (basic facts/math), moderate (requires research/analysis), or complex (multi-step reasoning/multiple data sources)? State confidence target.",
   "thinking_process": "SPECIFIC to THIS query: 'User asks about X. To get a confident answer, I need Y and Z. I will use [specific agents] because [specific reasons].'",
   "user_facing_message": "Conversational analysis that shows your thinking with five parts: (1) Evaluate the user's request. (2) Consider what the user might really want. (3) Consider which agents can solve the question or evaluate the agents' results. (4) Assign work to those agents (briefly, in natural language). (5) Decide whether there is enough data to answer now or what to pass to agents next. Keep it succinct and helpful.",
   "final_answer": "The comprehensive answer to the user's question (only if 'final')",
-  "additional_guidance": "SPECIFIC next action: 'Run Coding Agent with THIS code' or 'Query SQL for THIS data' (only if 'loop')",
+  "additional_guidance": "SPECIFIC next action(s) for selected agents (only if 'loop')",
   "clarification_question": "SPECIFIC question about ambiguity: 'When you say X, do you mean Y or Z?' (only if 'clarify')",
-  "selected_agent": "Single agent name OR 'combined' for multiple agents",
+  "selected_agent": "Single agent name OR 'combined' for multiple agents (backward compatibility)",
+  "agents_to_use": ["CodeAgent" | "MathAgent" | "ResearchAgent" | "StrategyAgent" | "SQLAgent" | "DataAgent" | "NotesAgent" | "ShellAgent" | "FileAgent" | "ImageCreationAgent" | "ImageAnalysisAgent"],
   "reasoning": "Why these agents will give us a CONFIDENT answer: 'For MOND theory, I need Research Agent for papers AND Notes Agent for documentation'",
   "confidence_strategy": "How many agents and why: 'Using 3 agents for cross-validation' or 'Single agent sufficient for simple calc'"
-}}
+}
 
 Examples (Routing Guidance):
 - ResearchAgent (explanations with citations)
@@ -391,7 +392,6 @@ class ThinkerOrchestrator:
         
         return await self.file_processor.process_file(file_path, file_type, websocket)
     
-    async def think(self, message: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Thinker phase: Assess query complexity and choose agents for confident answers"""
         thinking_process = {
             "input": message,
@@ -544,10 +544,11 @@ class ThinkerOrchestrator:
                 })
             return
         
-        # Phase 1: Chief Agent planning (stream analysis before sub-agents)
+        # Phase 1: Chief Agent planning (stream analysis before sub-agents) and selection
         logger.info("[ORCHESTRATOR] PHASE 1: Chief Agent Planning (stream)")
+        planning_decision = None
         try:
-            await self.chief_agent.review_and_decide(
+            planning_decision = await self.chief_agent.review_and_decide(
                 user_query=message,
                 agent_results=[],  # no agent results yet
                 iteration=iteration,
@@ -559,88 +560,83 @@ class ThinkerOrchestrator:
             )
         except Exception as e:
             logger.warning(f"[ORCHESTRATOR] Pre-analysis planning emit failed: {e}")
-        
-        # Phase 2: Thinker selects agents to run (fast heuristic)
-        logger.info("[ORCHESTRATOR] PHASE 2: Thinker Analysis")
-        thinking = await self.think(message, context={"file_id": file_id, "dataset_id": dataset_id})
-        logger.info(f"[ORCHESTRATOR] Thinking result: Type={thinking['identified_type']}, Agents={thinking['agents_to_use']}")
-        
-        # Build detailed explanation of what each agent will do
-        agent_explanations = []
-        for agent_name in thinking['agents_to_use']:
-            if agent_name == "CodeAgent":
-                agent_explanations.append("• **Coding Agent**: Will generate and execute Python code to compute the exact result")
-            elif agent_name == "ShellAgent":
-                agent_explanations.append("• **Desktop Agent**: Will run system commands to complete the requested operation")
-            elif agent_name == "SQLAgent":
-                agent_explanations.append("• **SQL Agent**: Will create database queries or schema modifications as needed")
-            elif agent_name == "MathAgent":
-                agent_explanations.append("• **Math Agent**: Will derive formulas from first principles and show mathematical proofs")
-            elif agent_name == "ResearchAgent":
-                agent_explanations.append("• **Research Agent**: Will search for relevant sources and compile information")
-            elif agent_name == "StrategyAgent":
-                agent_explanations.append("• **Strategy Agent**: Will create a detailed action plan for solving this problem")
-            elif agent_name == "DataAgent":
-                agent_explanations.append("• **Data Agent**: Will analyze database schemas and suggest appropriate queries")
-            elif agent_name == "NotesAgent":
-                agent_explanations.append("• **Notes Agent**: Will document findings and create organized notes")
-            elif agent_name == "FileAgent":
-                agent_explanations.append("• **File Agent**: Will download files or analyze file paths as requested")
-            elif agent_name == "ImageCreationAgent":
-                agent_explanations.append("• **Image Creation**: Will generate an image and save it to the project Files/Images")
-            elif agent_name == "ImageAnalysisAgent":
-                agent_explanations.append("• **Image Analysis**: Will analyze an image (vision) and update its metadata (title, description, tags)")
-        
-        agent_details = "\n".join(agent_explanations)
-        
-        # Processing bubble removed: show only the Chief Agent response to the user prompt
-        # (Previously emitted an 'action: processing' message here.)
-        
-        # No need for redundant streaming update
-        
-        # Phase 2: Parallel agent processing
-        logger.info("[ORCHESTRATOR] PHASE 2: Parallel Agent Processing")
+            planning_decision = {"decision": "loop", "agents_to_use": []}
+
+        # Short-circuit if the Chief Agent wants to clarify or can finalize without agents
+        try:
+            if planning_decision.get('decision') == 'clarify':
+                clarification_question = planning_decision.get('clarification_question', 'Could you please provide more details about your request?')
+                thinking = planning_decision.get('thinking_process', 'Need more information from user')
+                await websocket.send_json({
+                    "type": "message",
+                    "role": "The Chief Agent",
+                    "text": f"""🤔 **Clarification Needed**\n\n{thinking}\n\n**Question:** {clarification_question}\n\nPlease provide this information so I can better assist you."""
+                })
+                return
+            if planning_decision.get('decision') == 'final':
+                # Send final response directly
+                final_text = planning_decision.get('final_answer') or planning_decision.get('user_facing_message') or ''
+                await websocket.send_json({
+                    "type": "final",
+                    "text": final_text or '',
+                    "json": {
+                        "role": 'The Chief Agent',
+                        "selected_agent": planning_decision.get('selected_agent'),
+                        "chief_reasoning": planning_decision.get('reasoning', ''),
+                        "method": "Chief Agent Decision (no agents)",
+                        "metadata": {}
+                    }
+                })
+                return
+        except Exception:
+            pass
+
+        # Determine which agents to run from planning_decision
+        agents_to_use = []
+        try:
+            if isinstance(planning_decision.get('agents_to_use'), list):
+                agents_to_use = [str(a).strip() for a in planning_decision.get('agents_to_use') if str(a).strip()]
+            elif isinstance(planning_decision.get('selected_agent'), str):
+                sel = planning_decision.get('selected_agent').strip()
+                if sel and sel.lower() != 'combined':
+                    agents_to_use = [sel]
+        except Exception:
+            agents_to_use = []
+        logger.info(f"[ORCHESTRATOR] Agents selected by Chief Agent: {agents_to_use}")
+
+        # Build additional guidance payload
+        guidance = (planning_decision.get('additional_guidance') or '').strip()
+        message_with_guidance = message
+        if guidance:
+            message_with_guidance = f"{message}\n\nGuidance: {guidance}"
+
+        # Phase 2: Parallel agent processing based on Chief Agent selection
+        logger.info("[ORCHESTRATOR] PHASE 2: Parallel Agent Processing (from Chief selection)")
         agents = []
-        if "CodeAgent" in thinking["agents_to_use"]:
-            agents.append(self.code_agent)
-            logger.info("[ORCHESTRATOR] Added CodeAgent to processing queue")
-        if "SQLAgent" in thinking["agents_to_use"]:
-            agents.append(self.sql_agent)
-            logger.info("[ORCHESTRATOR] Added SQLAgent to processing queue")
-        if "ShellAgent" in thinking["agents_to_use"]:
-            agents.append(self.shell_agent)
-            logger.info("[ORCHESTRATOR] Added ShellAgent to processing queue")
-        # Add new specialized agents
-        if "MathAgent" in thinking["agents_to_use"]:
-            agents.append(self.math_agent)
-            logger.info("[ORCHESTRATOR] Added MathAgent to processing queue")
-        if "ResearchAgent" in thinking["agents_to_use"]:
-            agents.append(self.research_agent)
-            logger.info("[ORCHESTRATOR] Added ResearchAgent to processing queue")
-        if "StrategyAgent" in thinking["agents_to_use"]:
-            agents.append(self.strategy_agent)
-            logger.info("[ORCHESTRATOR] Added StrategyAgent to processing queue")
-        if "DataAgent" in thinking["agents_to_use"]:
-            agents.append(self.data_agent)
-            logger.info("[ORCHESTRATOR] Added DataAgent to processing queue")
-        if "NotesAgent" in thinking["agents_to_use"]:
-            agents.append(self.notes_agent)
-            logger.info("[ORCHESTRATOR] Added NotesAgent to processing queue")
-        if "ImageCreationAgent" in thinking["agents_to_use"]:
-            agents.append(self.image_creation_agent)
-            logger.info("[ORCHESTRATOR] Added ImageCreationAgent to processing queue")
-        if "ImageAnalysisAgent" in thinking["agents_to_use"]:
-            agents.append(self.image_analysis_agent)
-            logger.info("[ORCHESTRATOR] Added ImageAnalysisAgent to processing queue")
-        if "FileAgent" in thinking["agents_to_use"]:
-            # Update FileAgent with current context if available
+        # Helper to add agent if requested
+        def _add(agent_name: str, agent_obj):
+            nonlocal agents
+            if agent_name in agents_to_use:
+                agents.append(agent_obj)
+                logger.info(f"[ORCHESTRATOR] Added {agent_name} to processing queue")
+        _add("CodeAgent", self.code_agent)
+        _add("SQLAgent", self.sql_agent)
+        _add("ShellAgent", self.shell_agent)
+        _add("MathAgent", self.math_agent)
+        _add("ResearchAgent", self.research_agent)
+        _add("StrategyAgent", self.strategy_agent)
+        _add("DataAgent", self.data_agent)
+        _add("NotesAgent", self.notes_agent)
+        _add("ImageCreationAgent", self.image_creation_agent)
+        _add("ImageAnalysisAgent", self.image_analysis_agent)
+        if "FileAgent" in agents_to_use:
             if db_session and project_id and branch_id:
                 self.file_agent.project_id = project_id
                 self.file_agent.branch_id = branch_id
                 self.file_agent.db_session = db_session
             agents.append(self.file_agent)
             logger.info("[ORCHESTRATOR] Added FileAgent to processing queue")
-            
+
         # Process all agents in parallel
         logger.info(f"[ORCHESTRATOR] Starting parallel processing with {len(agents)} agents")
         parallel_start = time.time()
@@ -648,23 +644,21 @@ class ThinkerOrchestrator:
         # Don't send stream updates that would overwrite the Chief Agent analysis
         # The detailed analysis message is complete and should stand on its own
         
-        # Create agent tasks - pass conversation context to Shell Agent
+        # Create agent tasks - pass conversation context/guidance
         agent_tasks = []
         for agent in agents:
             if isinstance(agent, ShellAgent):
-                # Pass conversation context to Shell Agent for better analysis
+                # Only run a concrete command if guidance includes backticked code; otherwise pass context
                 conversation_context = f"User Query: {message}\nIteration: {iteration + 1}"
-                if previous_results:
-                    conversation_context += "\nPrevious Results:\n"
-                    for prev in previous_results[:3]:
-                        conversation_context += f"- {prev.display_name}: {prev.result[:100]}...\n"
-                agent_tasks.append(agent.process(message, conversation_context=conversation_context))
+                if guidance:
+                    conversation_context += f"\nGuidance: {guidance}"
+                agent_tasks.append(agent.process(message_with_guidance, conversation_context=conversation_context))
             elif agent is self.image_creation_agent:
-                agent_tasks.append(agent.process(message, project_id=project_id, branch_id=branch_id, db_session=db_session))
+                agent_tasks.append(agent.process(message_with_guidance, project_id=project_id, branch_id=branch_id, db_session=db_session))
             elif agent is self.image_analysis_agent:
-                agent_tasks.append(agent.process(message, project_id=project_id, branch_id=branch_id, db_session=db_session, file_id=file_id))
+                agent_tasks.append(agent.process(message_with_guidance, project_id=project_id, branch_id=branch_id, db_session=db_session, file_id=file_id))
             else:
-                agent_tasks.append(agent.process(message))
+                agent_tasks.append(agent.process(message_with_guidance))
         
         results = await asyncio.gather(*agent_tasks, return_exceptions=True)
         logger.info(f"[ORCHESTRATOR] Parallel processing completed in {time.time() - parallel_start:.3f}s")
