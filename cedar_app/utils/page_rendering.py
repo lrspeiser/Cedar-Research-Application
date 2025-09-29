@@ -2003,18 +2003,18 @@ def project_page_html(
               try {
                 var t = document.getElementById('chatInput');
                 if (t) {
-                  var template = 'Image Context\n' +
-                                 'title: ' + (a.getAttribute('data-ai-title')||a.getAttribute('data-display-name')||'') + '\n' +
-                                 'file_id: ' + String(fid||'') + '\n' +
-                                 'image_url: ' + (a.getAttribute('data-image-url')||'') + '\n' +
-                                 'mime_type: ' + (a.getAttribute('data-mime-type')||'') + '\n' +
-                                 'file_type: ' + (a.getAttribute('data-file-type')||'') + '\n' +
-                                 'size_bytes: ' + (a.getAttribute('data-size')||'') + '\n' +
-                                 'created_at: ' + (a.getAttribute('data-created-at')||'') + '\n' +
-                                 'ai_category: ' + (a.getAttribute('data-ai-category')||'') + '\n' +
-                                 'ai_description: ' + (function(){ try { var b=a.getAttribute('data-ai-desc-b64')||''; return b ? (new TextDecoder('utf-8')).decode(Uint8Array.from(atob(b), c=>c.charCodeAt(0))) : ''; } catch(_){ return ''; } })() + '\n\n' +
-                                 '---\n\n' +
-                                 'Prompt:\n';
+                  var template = 'Image Context\\n' +
+                                 'title: ' + (a.getAttribute('data-ai-title')||a.getAttribute('data-display-name')||'') + '\\n' +
+                                 'file_id: ' + String(fid||'') + '\\n' +
+                                 'image_url: ' + (a.getAttribute('data-image-url')||'') + '\\n' +
+                                 'mime_type: ' + (a.getAttribute('data-mime-type')||'') + '\\n' +
+                                 'file_type: ' + (a.getAttribute('data-file-type')||'') + '\\n' +
+                                 'size_bytes: ' + (a.getAttribute('data-size')||'') + '\\n' +
+                                 'created_at: ' + (a.getAttribute('data-created-at')||'') + '\\n' +
+                                 'ai_category: ' + (a.getAttribute('data-ai-category')||'') + '\\n' +
+                                 'ai_description: ' + (function(){ try { var b=a.getAttribute('data-ai-desc-b64')||''; return b ? (new TextDecoder('utf-8')).decode(Uint8Array.from(atob(b), c=>c.charCodeAt(0))) : ''; } catch(_){ return ''; } })() + '\\n\\n' +
+                                 '---\\n\\n' +
+                                 'Prompt:\\n';
                   t.value = template; try { t.focus(); } catch(_){ }
                 }
               } catch(_){ }
@@ -2214,16 +2214,16 @@ def project_page_html(
       renderCodeContextPanel({ title:title, language:language, created_at:createdAt, thread_title:threadTitle, mid:mid, idx:idx, code_preview:codePreview, code_full:codeFull });
       var t = document.getElementById('chatInput');
       if (t) {
-        var template = 'Code Context\n' +
-                       'title: ' + title + '\n' +
-                       'language: ' + language + '\n' +
-                       'created_at: ' + createdAt + '\n' +
-                       'thread_title: ' + threadTitle + '\n' +
-                       'mid: ' + mid + '\n' +
-                       'idx: ' + idx + '\n\n' +
-                       '```' + language + '\n' + codePreview + '\n' + '```\n\n' +
-                       '---\n\n' +
-                       'Prompt:\n';
+        var template = 'Code Context\\n' +
+                       'title: ' + title + '\\n' +
+                       'language: ' + language + '\\n' +
+                       'created_at: ' + createdAt + '\\n' +
+                       'thread_title: ' + threadTitle + '\\n' +
+                       'mid: ' + mid + '\\n' +
+                       'idx: ' + idx + '\\n\\n' +
+                       '```' + language + '\\n' + codePreview + '\\n' + '```\\n\\n' +
+                       '---\\n\\n' +
+                       'Prompt:\\n';
         t.value = template; try { t.focus(); } catch(_){}
       }
       window.__codeCtx.active = true; window.__codeCtx.language = language || 'text'; window.__codeCtx.fullCode = codeFull || '';
@@ -2235,13 +2235,12 @@ def project_page_html(
       if (window.__codeCtx && window.__codeCtx.active){
         var t = document.getElementById('chatInput'); if (t){
           var txt = String(t.value||''); var lang = window.__codeCtx.language || 'text'; var full = window.__codeCtx.fullCode || '';
-          if (full){ var re = /```([a-zA-Z0-9_-]*)\n[\s\S]*?```/; if (re.test(txt)) { txt = txt.replace(re, '```' + lang + '\n' + full + '\n```'); } else { txt += '\n\n```' + lang + '\n' + full + '\n```\n'; } t.value = txt; }
+          if (full){ var re = /```([a-zA-Z0-9_-]*)[\s\S]*?```/; if (re.test(txt)) { txt = txt.replace(re, '```' + lang + '\n' + full + '\n```'); } else { txt += '\n\n```' + lang + '\n' + full + '\n```\n'; } t.value = txt; }
         }
         window.__codeCtx.active = false;
       }
-    }catch(e){ try{ console.debug(LOGP,'submit hook error',e); }catch(_){} }
+    }catch(e){ try{ console.debug(LOGP,'submit error',e); }catch(_){} }
   }, true);
-})();
 </script>
     """
     
@@ -2287,16 +2286,16 @@ def project_page_html(
                 </h3>
                 <style>
                 /* Chat area grows to fill viewport; input stays at bottom regardless of window size */
-                  #main-chat { display:flex; flex-direction:column; flex:1; min-height:0; height:100%; }
-                  #main-chat .chat-log { flex:1; display:flex; flex-direction:column; gap:8px; overflow-y:auto; padding-bottom:80px; }
-                  #main-chat .chat-input { position: sticky; bottom: 0; margin-top:auto; padding-top:6px; background:#fff; border-top:1px solid var(--border); }
-                  .msg { display:flex; flex-direction:column; max-width:80%; }
-                  .msg.user { align-self:flex-end; }
-                  .msg.assistant { align-self:flex-start; }
-                  .msg.system { align-self:flex-start; }
-                  .msg .meta { display:flex; gap:8px; align-items:center; margin-bottom:4px; }
-                  .bubble { border:1px solid var(--border); border-radius:18px; padding:12px 14px; font-size:14px; line-height:1.45; box-shadow: 0 1px 1px rgba(0,0,0,0.04); }
-                  .bubble.user { background:#d9fdd3; border-color:#b2e59a; }
+                  #main-chat {{ display:flex; flex-direction:column; flex:1; min-height:0; height:100%; }}
+                  #main-chat .chat-log {{ flex:1; display:flex; flex-direction:column; gap:8px; overflow-y:auto; padding-bottom:80px; }}
+                  #main-chat .chat-input {{ position: sticky; bottom: 0; margin-top:auto; padding-top:6px; background:#fff; border-top:1px solid var(--border); }}
+                  .msg {{ display:flex; flex-direction:column; max-width:80%; }}
+                  .msg.user {{ align-self:flex-end; }}
+                  .msg.assistant {{ align-self:flex-start; }}
+                  .msg.system {{ align-self:flex-start; }}
+                  .msg .meta {{ display:flex; gap:8px; align-items:center; margin-bottom:4px; }}
+                  .bubble {{ border:1px solid var(--border); border-radius:18px; padding:12px 14px; font-size:14px; line-height:1.45; box-shadow: 0 1px 1px rgba(0,0,0,0.04); }}
+                  .bubble.user {{ background:#d9fdd3; border-color:#b2e59a; }}
                   .bubble.assistant {{ background:#ffffff; border-color:#e6e6e6; }}
                   .bubble.system {{ background:#e7f3ff; border-color:#cfe8ff; }}
                 </style>
