@@ -63,7 +63,7 @@ class ChiefAgent:
         self.llm_client = llm_client
         
         
-    async def review_and_decide(self, user_query: str, agent_results: List[AgentResult], iteration: int = 0, max_iterations: int = 10, previous_context: str = "", resources: Optional[Dict[str, Any]] = None, conversation_history: Optional[str] = None, ws: Optional[WebSocket] = None) -> Dict[str, Any]:
+    async def review_and_decide(self, user_query: str, agent_results: List[AgentResult], iteration: int = 0, max_iterations: int = 10, previous_context: str = "", resources: Optional[Dict[str, Any]] = None, conversation_history: Optional[str] = None, ws: Optional[WebSocket] = None, run_logs: Optional[List[str]] = None) -> Dict[str, Any]:
         """Review all agent results and make the final decision on what to do next.
         resources: Optional index of project assets (files, code, databases, notes, images)."""
         start_time = time.time()
@@ -256,6 +256,21 @@ Examples (Routing Guidance):
                 "content": f"User Query: {user_query}"
             })
 
+            # Attach recent run logs (always include, even on success)
+            try:
+                if run_logs:
+                    # Limit to last 60 lines and 4000 chars to control prompt size
+                    logs_tail = run_logs[-60:]
+                    logs_text = "\n".join(logs_tail)
+                    if len(logs_text) > 4000:
+                        logs_text = logs_text[-4000:]
+                    msgs.append({
+                        "role": "user",
+                        "content": "Run Logs (recent):\n" + logs_text
+                    })
+            except Exception:
+                pass
+
             # Send prompt details for drilldown (clickable JSON in UI) after assembling all messages
             try:
                 if ws is not None:
@@ -278,7 +293,28 @@ Examples (Routing Guidance):
                 completion_params["max_tokens"] = 800
                 completion_params["temperature"] = 0.3
                 
-            response = await self.llm_client.chat.completions.create(**completion_params)
+            # LLM API call with general retries (e.g., transient API/network issues)
+            api_retries = 0
+            api_max_retries = 3
+            last_api_error = None
+            while True:
+                try:
+                    response = await self.llm_client.chat.completions.create(**completion_params)
+                    break
+                except Exception as api_e:
+                    last_api_error = str(api_e)
+                    api_retries += 1
+                    logger.warning(f"[ChiefAgent] LLM API error (attempt {api_retries}/{api_max_retries}): {api_e}")
+                    if api_retries >= api_max_retries:
+                        raise
+                    # Nudge with a system note about previous API error
+                    try:
+                        msgs.append({
+                            "role": "system",
+                            "content": f"Previous API error: {last_api_error}. Please try again and return ONLY valid JSON."
+                        })
+                    except Exception:
+                        pass
             
             chief_response = response.choices[0].message.content
             # Log full response for debugging JSON issues
@@ -338,6 +374,19 @@ Examples (Routing Guidance):
                         except Exception:
                             pass
                     repair_msgs.append({"role": "user", "content": f"User Query: {user_query}"})
+                    # Include logs again in repair attempts
+                    try:
+                        if run_logs:
+                            logs_tail = run_logs[-60:]
+                            logs_text = "\n".join(logs_tail)
+                            if len(logs_text) > 4000:
+                                logs_text = logs_text[-4000:]
+                            repair_msgs.append({
+                                "role": "user",
+                                "content": "Run Logs (recent):\n" + logs_text
+                            })
+                    except Exception:
+                        pass
 
                     try:
                         repair_resp = await self.llm_client.chat.completions.create(model=model, messages=repair_msgs, max_completion_tokens=800)
@@ -577,6 +626,12 @@ class ThinkerOrchestrator:
         # Ensure optional context vars exist to avoid NameError
         file_id = None
         dataset_id = None
+        # Structured run logs (always passed to the Chief Agent)
+        run_logs: List[str] = []
+        try:
+            run_logs.append(f"Start: t={orchestration_start:.3f}s message={message[:120]}")
+        except Exception:
+            pass
         logger.info("="*80)
         logger.info(f"[ORCHESTRATOR] Starting orchestration for message: {message} (iteration: {iteration})")
         logger.info("="*80)
@@ -600,6 +655,10 @@ class ThinkerOrchestrator:
         
         # Phase 1: Chief Agent planning (stream analysis before sub-agents) and selection
         logger.info("[ORCHESTRATOR] PHASE 1: Chief Agent Planning (stream)")
+        try:
+            run_logs.append("Phase: planning.start")
+        except Exception:
+            pass
         planning_decision = None
         try:
             planning_decision = await self.chief_agent.review_and_decide(
@@ -610,10 +669,15 @@ class ThinkerOrchestrator:
                 previous_context="",
                 resources=None,
                 conversation_history=conversation_history,
-                ws=websocket  # emit thinking_start + prompt + thinking
+                ws=websocket,  # emit thinking_start + prompt + thinking
+                run_logs=run_logs
             )
         except Exception as e:
             logger.warning(f"[ORCHESTRATOR] Pre-analysis planning emit failed: {e}")
+            try:
+                run_logs.append(f"Error: planning.emit_failed: {type(e).__name__}: {e}")
+            except Exception:
+                pass
             planning_decision = {"decision": "loop", "agents_to_use": []}
 
         # Short-circuit if the Chief Agent wants to clarify or can finalize without agents
@@ -658,6 +722,10 @@ class ThinkerOrchestrator:
         except Exception:
             agents_to_use = []
         logger.info(f"[ORCHESTRATOR] Agents selected by Chief Agent: {agents_to_use}")
+        try:
+            run_logs.append("Planning: agents_to_use=" + ",".join(agents_to_use))
+        except Exception:
+            pass
 
         # Build additional guidance payload
         guidance = (planning_decision.get('additional_guidance') or '').strip()
@@ -674,6 +742,10 @@ class ThinkerOrchestrator:
             if agent_name in agents_to_use:
                 agents.append(agent_obj)
                 logger.info(f"[ORCHESTRATOR] Added {agent_name} to processing queue")
+                try:
+                    run_logs.append(f"Queue: {agent_name}")
+                except Exception:
+                    pass
         _add("CodeAgent", self.code_agent)
         _add("SQLAgent", self.sql_agent)
         _add("ShellAgent", self.shell_agent)
@@ -720,6 +792,10 @@ class ThinkerOrchestrator:
         
         results = await asyncio.gather(*agent_tasks, return_exceptions=True)
         logger.info(f"[ORCHESTRATOR] Parallel processing completed in {time.time() - parallel_start:.3f}s")
+        try:
+            run_logs.append(f"Phase: agents.done dt={time.time() - parallel_start:.3f}s count={len(agents)}")
+        except Exception:
+            pass
         
         # Send agent results
         logger.info("[ORCHESTRATOR] Processing agent results")
@@ -771,6 +847,12 @@ class ThinkerOrchestrator:
                         "summary": result.summary  # Also include in metadata
                     }
                 })
+                try:
+                    short = (result.summary or (result.result or '').split('\n',1)[0] or '').strip()
+                    if len(short) > 160: short = short[:160]
+                    run_logs.append(f"AgentOK: {result.display_name} conf={result.confidence:.2f} sum={short}")
+                except Exception:
+                    pass
                 valid_results.append(result)
                 await asyncio.sleep(0.2)
             elif isinstance(result, Exception):
@@ -852,6 +934,10 @@ Task: {message[:200]}{'...' if len(message) > 200 else ''}"""
                         "summary": error_result.summary
                     }
                 })
+                try:
+                    run_logs.append(f"AgentERR: {display_name} type={error_type} msg={error_msg[:160]}")
+                except Exception:
+                    pass
                 valid_results.append(error_result)
                 await asyncio.sleep(0.2)
                 
@@ -935,7 +1021,8 @@ Task: {message[:200]}{'...' if len(message) > 200 else ''}"""
             previous_context=previous_context,
             resources=None,
             conversation_history=conversation_history,
-            ws=None  # Do not emit thinking during the final review to avoid duplicate planning bubble
+            ws=None,  # Do not emit thinking during the final review to avoid duplicate planning bubble
+            run_logs=run_logs
         )
         logger.info(f"[ORCHESTRATOR] Chief Agent decision: {chief_decision.get('decision')}")
         
