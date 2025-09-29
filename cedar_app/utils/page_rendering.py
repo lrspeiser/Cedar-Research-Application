@@ -1005,7 +1005,7 @@ def project_page_html(
             stepAdvance(roleClass, wrapM);
           } catch(_) { }
         } else if (m.type === 'prompt') {
-          // Store prompts for debugging but don't display them in the UI
+          // Attach prompt JSON to the live planning bubble details and cache for later
           try {
             try {
               window.__cedar_last_prompts = window.__cedar_last_prompts || {};
@@ -1023,7 +1023,17 @@ def project_page_html(
                 }
               }
             } catch(_){}
-            // Skip rendering the prompt panel - don't show "Prepared LLM prompt" in UI
+            // If a planning bubble exists, update its details panel to show the prompt JSON
+            try {
+              if (thinkWrap) {
+                var bubble = thinkWrap.querySelector('.bubble[data-details-id]');
+                var did = bubble ? bubble.getAttribute('data-details-id') : null;
+                var pre = did ? document.querySelector('#'+did+' pre') : null;
+                if (pre && (m.messages || []).length) {
+                  try { pre.textContent = JSON.stringify(m.messages, null, 2); } catch(_){ pre.textContent = String(m.messages); }
+                }
+              }
+            } catch(_){}
             ackEvent(m);
           } catch(_) { }
         } else if (m.type === 'agent_result') {
@@ -1200,6 +1210,8 @@ def project_page_html(
               thinkWrap = document.createElement('div'); thinkWrap.className = 'msg assistant';
               var metaTh = document.createElement('div'); metaTh.className = 'meta small'; metaTh.innerHTML = "<span class='pill'>Chief Agent</span> <span class='title' style='font-weight:600'>planning</span>";
               var bubTh = document.createElement('div'); bubTh.className = 'bubble assistant';
+              // Link bubble to details for click-to-toggle
+              bubTh.setAttribute('data-details-id', detIdTh);
               var contTh = document.createElement('div'); contTh.className = 'content'; contTh.style.whiteSpace='pre-wrap'; contTh.textContent = 'Planning…';
               // Spinner during planning
               thinkSpin = document.createElement('span'); thinkSpin.className = 'spinner'; thinkSpin.style.marginLeft = '6px'; contTh.appendChild(thinkSpin);
@@ -1229,6 +1241,8 @@ def project_page_html(
               thinkWrap = document.createElement('div'); thinkWrap.className = 'msg assistant';
               var metaTh2 = document.createElement('div'); metaTh2.className = 'meta small'; metaTh2.innerHTML = "<span class='pill'>Chief Agent</span> <span class='title' style='font-weight:600'>planning</span>";
               var bubTh2 = document.createElement('div'); bubTh2.className = 'bubble assistant';
+              // Link bubble to details for click-to-toggle
+              bubTh2.setAttribute('data-details-id', detIdTh2);
               var contTh2 = document.createElement('div'); contTh2.className = 'content'; contTh2.style.whiteSpace='pre-wrap';
               thinkText = contTh2;
               bubTh2.appendChild(contTh2);

@@ -63,7 +63,7 @@ class ChiefAgent:
         self.llm_client = llm_client
         
         
-    async def review_and_decide(self, user_query: str, agent_results: List[AgentResult], iteration: int = 0, max_iterations: int = 10, previous_context: str = "", resources: Optional[Dict[str, Any]] = None, conversation_history: Optional[str] = None) -> Dict[str, Any]:
+    async def review_and_decide(self, user_query: str, agent_results: List[AgentResult], iteration: int = 0, max_iterations: int = 10, previous_context: str = "", resources: Optional[Dict[str, Any]] = None, conversation_history: Optional[str] = None, ws: Optional[WebSocket] = None) -> Dict[str, Any]:
         """Review all agent results and make the final decision on what to do next.
         resources: Optional index of project assets (files, code, databases, notes, images)."""
         start_time = time.time()
@@ -88,6 +88,17 @@ class ChiefAgent:
             # Get model from environment
             model = os.getenv("CEDARPY_OPENAI_MODEL") or os.getenv("OPENAI_API_KEY_MODEL") or "gpt-5"
             logger.info(f"[ChiefAgent] Using LLM for decision making with model: {model}")
+            
+            # Stream thinking start to UI
+            try:
+                if ws is not None:
+                    await ws.send_json({
+                        "type": "thinking_start",
+                        "model": model,
+                        "iteration": iteration + 1
+                    })
+            except Exception:
+                pass
             
             # Create the system prompt (shortened version for space)
             # ⚠️ IMPORTANT: When updating this prompt, ALSO UPDATE cedar_app/routes/agents_route.py!
@@ -236,6 +247,16 @@ Examples (Routing Guidance):
                 "content": f"User Query: {user_query}"
             })
 
+            # Send prompt details for drilldown (clickable JSON in UI) after assembling all messages
+            try:
+                if ws is not None:
+                    await ws.send_json({
+                        "type": "prompt",
+                        "messages": msgs
+                    })
+            except Exception:
+                pass
+
             completion_params = {
                 "model": model,
                 "messages": msgs
@@ -297,6 +318,20 @@ Examples (Routing Guidance):
             
             logger.info(f"[ChiefAgent] Decision: {decision_data.get('decision')}, Selected: {decision_data.get('selected_agent')}")
             logger.info(f"[ChiefAgent] Completed in {time.time() - start_time:.3f}s")
+            
+            # Emit conversational thinking to UI (stream into the thinking bubble)
+            try:
+                if ws is not None:
+                    user_msg = (decision_data.get('user_facing_message') or '').strip()
+                    if user_msg:
+                        await ws.send_json({
+                            "type": "thinking",
+                            "text": user_msg,
+                            "model": model,
+                            "elapsed_ms": int((time.time() - start_time) * 1000)
+                        })
+            except Exception:
+                pass
             
             return decision_data
             
@@ -506,8 +541,24 @@ class ThinkerOrchestrator:
                 })
             return
         
-        # Phase 1: Thinking
-        logger.info("[ORCHESTRATOR] PHASE 1: Thinker Analysis")
+        # Phase 1: Chief Agent planning (stream analysis before sub-agents)
+        logger.info("[ORCHESTRATOR] PHASE 1: Chief Agent Planning (stream)")
+        try:
+            await self.chief_agent.review_and_decide(
+                user_query=message,
+                agent_results=[],  # no agent results yet
+                iteration=iteration,
+                max_iterations=self.MAX_ITERATIONS,
+                previous_context="",
+                resources=None,
+                conversation_history=conversation_history,
+                ws=websocket  # emit thinking_start + prompt + thinking
+            )
+        except Exception as e:
+            logger.warning(f"[ORCHESTRATOR] Pre-analysis planning emit failed: {e}")
+        
+        # Phase 2: Thinker selects agents to run (fast heuristic)
+        logger.info("[ORCHESTRATOR] PHASE 2: Thinker Analysis")
         thinking = await self.think(message, context={"file_id": file_id, "dataset_id": dataset_id})
         logger.info(f"[ORCHESTRATOR] Thinking result: Type={thinking['identified_type']}, Agents={thinking['agents_to_use']}")
         
@@ -827,8 +878,8 @@ Task: {message[:200]}{'...' if len(message) > 200 else ''}"""
             max_iterations=self.MAX_ITERATIONS,
             previous_context=previous_context,
             resources=None,
-            conversation_history=conversation_history
-        )
+            conversation_history=conversation_history,
+            ws=None  # Do not emit thinking during the final review to avoid duplicate planning bubble
         )
         logger.info(f"[ORCHESTRATOR] Chief Agent decision: {chief_decision.get('decision')}")
         
@@ -836,20 +887,7 @@ Task: {message[:200]}{'...' if len(message) > 200 else ''}"""
         if chief_decision.get('thinking_process'):
             logger.info(f"[ORCHESTRATOR] Chief Agent thinking: {chief_decision['thinking_process'][:300]}...")
         
-        # Show the Chief Agent's conversational analysis (thinking) to the user if provided
-        try:
-            user_msg = (chief_decision.get('user_facing_message') or '').strip()
-            if user_msg:
-                await websocket.send_json({
-                    "type": "agent_result",
-                    "agent_name": "The Chief Agent",
-                    "text": user_msg,
-                    "summary": None,
-                    "metadata": {"agent": "ChiefAgent", "phase": "analysis"}
-                })
-        except Exception as e:
-            logger.warning(f"[ORCHESTRATOR] Failed to send Chief Agent analysis message: {e}")
-        
+        # Chief Agent analysis is streamed from review_and_decide via 'thinking' event.
         # Always run Notes Agent to create structured notes for every Chief Agent processing step
         try:
             if self.notes_agent is not None:
