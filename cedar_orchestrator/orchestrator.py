@@ -951,27 +951,35 @@ Task: {message[:200]}{'...' if len(message) > 200 else ''}"""
                         existing_notes_list = await note_taker_preview.get_existing_notes()
                     except Exception as e:
                         logger.warning(f"[ORCHESTRATOR-NOTES] Could not fetch existing notes for NotesAgent: {e}")
-                # Prepare concise content for the notes agent
-                snippets = []
+                # Prepare concise content for the notes agent: summarize Chief Agent decision only
                 try:
-                    fa = chief_decision.get('final_answer') or ''
+                    decision = chief_decision or {}
+                except Exception:
+                    decision = {}
+                try:
+                    lines = []
+                    lines.append(f"Decision: {decision.get('decision','')}")
+                    tp = (decision.get('thinking_process') or '').strip()
+                    if tp:
+                        lines.append("Thinking Process:\n" + tp)
+                    fa = (decision.get('final_answer') or '').strip()
                     if fa:
-                        snippets.append(f"Final Answer: {fa}")
+                        lines.append("Final Answer:\n" + fa)
+                    ag = (decision.get('additional_guidance') or '').strip()
+                    if ag:
+                        lines.append("Additional Guidance:\n" + ag)
+                    sel = (decision.get('selected_agent') or '').strip()
+                    atu = decision.get('agents_to_use') or []
+                    if atu:
+                        lines.append("Agents To Use: " + ", ".join(atu))
+                    elif sel:
+                        lines.append("Selected Agent: " + sel)
+                    rsn = (decision.get('reasoning') or '').strip()
+                    if rsn:
+                        lines.append("Reasoning:\n" + rsn)
+                    content_to_note = "\n\n".join(lines)
                 except Exception:
-                    pass
-                try:
-                    snippets.append("Agent Summaries:")
-                    for r in valid_results:
-                        try:
-                            if getattr(r, 'summary', None):
-                                snippets.append(f"- {r.display_name}: {r.summary}")
-                            else:
-                                snippets.append(f"- {r.display_name}")
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
-                content_to_note = "\n".join(snippets)
+                    content_to_note = (chief_decision.get('final_answer') or '').strip() or 'Chief Agent summary'
                 try:
                     notes_agent_result = await self.notes_agent.process(
                         task=message,
@@ -1135,25 +1143,9 @@ Please provide this information so I can better assist you."""
             thinking = chief_decision.get('thinking_process', 'Analyzing how to improve the answer...')
             logger.info(f"[ORCHESTRATOR] Chief Agent requesting iteration {iteration + 1} with guidance: {guidance}")
 
-            # If guidance is empty, synthesize concrete guidance from current agent results to avoid repeating the same request
+            # Do not synthesize guidance locally; keep decisions LLM-driven. If missing, proceed without guidance.
             if not guidance:
-                try:
-                    summaries = []
-                    for r in valid_results:
-                        if r.summary:
-                            summaries.append(f"- {r.display_name}: {r.summary}")
-                        else:
-                            # Fallback: first line of the result text
-                            first_line = (r.result or '').split('\n', 1)[0]
-                            summaries.append(f"- {r.display_name}: {first_line[:160]}")
-                    digest = "\n".join(summaries) if summaries else "(no agent results collected)"
-                    guidance = (
-                        "Use the agent results below; do not repeat the same tool calls. "
-                        "Incorporate their findings and propose a different, concrete next action (with code/SQL/shell as needed).\n" + digest
-                    )
-                    logger.info("[ORCHESTRATOR] Synthesized guidance for empty additional_guidance")
-                except Exception:
-                    guidance = "Use the previous agent results; do not repeat the same step. Choose a different concrete next action."
+                logger.info("[ORCHESTRATOR] No additional_guidance provided by Chief Agent; proceeding without local synthesis.")
 
             await websocket.send_json({
                 "type": "agent_result",
@@ -1171,7 +1163,7 @@ Please provide this information so I can better assist you."""
 
             # Prepare enhanced message with Chief Agent's guidance
             # Check if the guidance contains a shell command (in backticks)
-            if '`' in guidance:
+            if guidance and '`' in guidance:
                 # Extract command from guidance if present
                 cmd_match = re.search(r'`([^`]+)`', guidance)
                 if cmd_match and 'ShellAgent' in thinking.get('agents_to_use', []):
@@ -1180,7 +1172,7 @@ Please provide this information so I can better assist you."""
                 else:
                     enhanced_message = f"{message}\n\nRefinement guidance: {guidance}"
             else:
-                enhanced_message = f"{message}\n\nRefinement guidance: {guidance}"
+                enhanced_message = f"{message}"
 
             # Brief delay for UI
             await asyncio.sleep(0.3)
