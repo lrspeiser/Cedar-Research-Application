@@ -103,7 +103,7 @@ class ChiefAgent:
             # Create the system prompt (shortened version for space)
             # ⚠️ IMPORTANT: When updating this prompt, ALSO UPDATE cedar_app/routes/agents_route.py!
             # The agents page should always reflect the actual prompts being used.
-            system_prompt = f"""You are the Chief Agent - an intelligent orchestrator who analyzes queries and deploys the right agents to get confident, accurate answers.
+            system_header = f"""You are the Chief Agent - an intelligent orchestrator who analyzes queries and deploys the right agents to get confident, accurate answers.
 
 🎯 YOUR PRIMARY DIRECTIVE:
 ASSESS the query complexity, then deploy AS MANY agents as needed to achieve HIGH CONFIDENCE in the answer.
@@ -113,6 +113,9 @@ CURRENT ITERATION STATUS:
 - Remaining loops: {remaining_loops}
 
 You MUST respond in this EXACT JSON format:
+"""
+
+            sample_json = """
 {
   "decision": "final" or "loop" or "clarify",
   "query_assessment": "Assess complexity: Is this simple (basic facts/math), moderate (requires research/analysis), or complex (multi-step reasoning/multiple data sources)? State confidence target.",
@@ -126,6 +129,9 @@ You MUST respond in this EXACT JSON format:
   "reasoning": "Why these agents will give us a CONFIDENT answer: 'For MOND theory, I need Research Agent for papers AND Notes Agent for documentation'",
   "confidence_strategy": "How many agents and why: 'Using 3 agents for cross-validation' or 'Single agent sufficient for simple calc'"
 }
+"""
+
+            examples = """
 
 Examples (Routing Guidance):
 - ResearchAgent (explanations with citations)
@@ -200,6 +206,8 @@ Examples (Routing Guidance):
   • User: "Fetch robots.txt from https://example.com, save it to the project, and report the Disallow rules."
     Agents to use: [FileAgent]
 """
+
+            system_prompt = system_header + sample_json + examples
 
             # Ask Chief Agent to review and decide
             # Build messages, including resource index if provided
