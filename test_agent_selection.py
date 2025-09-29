@@ -7,7 +7,7 @@ import asyncio
 import os
 import sys
 from pathlib import Path
-from cedar_orchestrator.advanced_orchestrator import ThinkerOrchestrator
+from cedar_orchestrator.orchestrator import ThinkerOrchestrator
 
 async def test_agent_selection():
     """Test that Chief Agent selects the correct agents for different tasks"""

@@ -80,7 +80,7 @@ def register_file_upload_routes(app: FastAPI):
                     
                     # Import orchestrator
                     try:
-                        from cedar_orchestrator.advanced_orchestrator import ThinkerOrchestrator
+        from cedar_orchestrator.orchestrator import ThinkerOrchestrator
                         
                         # Get API key
                         api_key = os.getenv("OPENAI_API_KEY") or os.getenv("CEDARPY_OPENAI_API_KEY")

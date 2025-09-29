@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 
-from cedar_orchestrator.advanced_orchestrator import ThinkerOrchestrator
+from cedar_orchestrator.orchestrator import ThinkerOrchestrator
 
 class MockWebSocket:
     """Mock WebSocket for testing"""

@@ -12,7 +12,8 @@ from pathlib import Path
 # Add the cedar_orchestrator to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from cedar_orchestrator.advanced_orchestrator import FileAgent, AgentResult
+from cedar_orchestrator.specialized_agents import FileAgent
+from cedar_orchestrator.execution_agents import AgentResult
 
 async def test_file_agent():
     """Test the FileAgent with various inputs"""

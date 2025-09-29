@@ -5,7 +5,7 @@ Agent module initialization and stub agents.
 
 Notes:
 - This older agent framework is retained only for historical tests (e.g., test_new_flow.py)
-- The live chat UI uses cedar_orchestrator/advanced_orchestrator.py with its own agent classes
+- The live chat UI uses cedar_orchestrator/orchestrator.py with its own agent classes
 - To avoid confusion, do not add new features here; migrate to cedar_orchestrator agents instead
 """
 
