@@ -229,15 +229,41 @@ async def handle_ws_chat(
                         import traceback
                         logger.error(f"[WebSocket-DB]   Traceback:\n{traceback.format_exc()}")
                     
-                    # Process with advanced orchestrator (with optional notes/code persistence)
+                    # Build conversation history from chat manager (full messages)
+                    conversation_history = None
+                    try:
+                        if project_id and chat_number:
+                            chat_data = chat_manager.get_chat(project_id, branch_id, chat_number)
+                            if chat_data:
+                                parts = []
+                                for m in (chat_data.get('messages') or []):
+                                    role = str(m.get('role') or '').strip()
+                                    text = str(m.get('content') or '').strip()
+                                    parts.append(f"{role}: {text}")
+                                # Optionally include prior agent_results text for richer context
+                                for ar in (chat_data.get('agent_results') or []):
+                                    try:
+                                        an = str(ar.get('agent_name') or 'Agent')
+                                        tx = str(ar.get('text') or '')
+                                        parts.append(f"{an}: {tx}")
+                                    except Exception:
+                                        pass
+                                conversation_history = "\n".join(parts)
+                    except Exception as e:
+                        logger.warning(f"[WebSocket] Failed to build conversation history: {e}")
+                    
+                    # Process with advanced orchestrator (with optional notes persistence)
                     try:
                         await orchestrator.orchestrate(
-                            content, 
+                            content,
                             ws_to_use,
+                            iteration=0,
+                            previous_results=None,
                             project_id=project_id,
                             branch_id=branch_id,
                             db_session=db_session,
-                            file_id=file_id,
+                            conversation_history=conversation_history
+                        )
                             dataset_id=dataset_id
                         )
                     finally:

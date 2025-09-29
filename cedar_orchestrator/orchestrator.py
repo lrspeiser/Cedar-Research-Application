@@ -63,7 +63,7 @@ class ChiefAgent:
         self.llm_client = llm_client
         
         
-    async def review_and_decide(self, user_query: str, agent_results: List[AgentResult], iteration: int = 0, max_iterations: int = 10, previous_context: str = "", resources: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def review_and_decide(self, user_query: str, agent_results: List[AgentResult], iteration: int = 0, max_iterations: int = 10, previous_context: str = "", resources: Optional[Dict[str, Any]] = None, conversation_history: Optional[str] = None) -> Dict[str, Any]:
         """Review all agent results and make the final decision on what to do next.
         resources: Optional index of project assets (files, code, databases, notes, images)."""
         start_time = time.time()
@@ -210,6 +210,27 @@ Examples (Routing Guidance):
                     })
             except Exception:
                 pass
+
+            # Provide full conversation history if available
+            if conversation_history:
+                msgs.append({
+                    "role": "user",
+                    "content": f"Conversation History (verbatim):\n{conversation_history}"
+                })
+
+            # Provide full agent responses from this iteration
+            try:
+                if agent_results:
+                    parts = []
+                    for r in agent_results:
+                        parts.append(f"Agent: {r.display_name}\nResponse (verbatim):\n{r.result}\n----")
+                    msgs.append({
+                        "role": "user",
+                        "content": "Agent Responses (verbatim):\n" + "\n".join(parts)
+                    })
+            except Exception:
+                pass
+
             msgs.append({
                 "role": "user",
                 "content": f"User Query: {user_query}"
@@ -461,7 +482,7 @@ class ThinkerOrchestrator:
             
         return thinking_process
         
-    async def orchestrate(self, message: str, websocket, iteration: int = 0, previous_results: List[AgentResult] = None, project_id: int = None, branch_id: int = None, db_session = None, file_id: Optional[int] = None, dataset_id: Optional[int] = None):
+    async def orchestrate(self, message: str, websocket, iteration: int = 0, previous_results: List[AgentResult] = None, project_id: int = None, branch_id: int = None, db_session = None, conversation_history: Optional[str] = None):
         """Full orchestration process controlled by Chief Agent decisions with optional notes persistence"""
         orchestration_start = time.time()
         logger.info("="*80)
@@ -800,12 +821,14 @@ Task: {message[:200]}{'...' if len(message) > 200 else ''}"""
             resources_index = None
 
         chief_decision = await self.chief_agent.review_and_decide(
-            user_query=message, 
-            agent_results=valid_results, 
+            user_query=message,
+            agent_results=valid_results,
             iteration=iteration,
             max_iterations=self.MAX_ITERATIONS,
             previous_context=previous_context,
-            resources=resources_index
+            resources=None,
+            conversation_history=conversation_history
+        )
         )
         logger.info(f"[ORCHESTRATOR] Chief Agent decision: {chief_decision.get('decision')}")
         
