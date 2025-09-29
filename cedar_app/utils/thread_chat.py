@@ -273,7 +273,7 @@ print('imported rows:', len(df))'''
                 reply_title = str(parsed.get("title") or "Chief Agent")
                 reply_payload = parsed.get("data")
                 reply_text = raw
-        except Exception:
+            except Exception:
                 reply_title = "Chief Agent"
                 reply_text = raw
         except Exception as e:
