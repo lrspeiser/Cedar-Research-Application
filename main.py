@@ -602,6 +602,17 @@ def settings_page(msg: Optional[str] = None):
         llm_client_config_fn=_llm_client_config
     )
 
+# Tiny in-memory favicon to avoid 404s in dev/test
+@app.get("/favicon.ico")
+def favicon_route():
+    # 1x1 transparent PNG
+    png_bytes = (
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+        b"\x00\x00\x00\x0bIDAT\x08\x1d\x63\x60\x60\x60\x00\x00\x00\x05\x00\x01\x0d\x0a\x2d\xb4"
+        b"\x00\x00\x00\x00IEND\xaeB`\x82"
+    )
+    return Response(content=png_bytes, media_type="image/png")
+
 
 @app.post("/settings/save")
 def settings_save(openai_key: str = Form(""), model: str = Form("")):
