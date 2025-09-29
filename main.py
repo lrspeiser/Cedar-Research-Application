@@ -498,12 +498,22 @@ except Exception as e:
 from cedar_app.routes import sql_routes
 
 # Register Agents route
+_AGENTS_ROUTE_REGISTERED = False
 try:
-    from cedar_app.routes.agents_route import register_agents_route
-    register_agents_route(app)
-    print("[startup] Agents route registered")
+    from cedar_app.routes.agents_route2 import register_agents_route as _register_agents_route
+    _register_agents_route(app)
+    _AGENTS_ROUTE_REGISTERED = True
+    print("[startup] Agents route registered (v2)")
 except Exception as e:
-    print(f"[startup] Could not register agents route: {e}")
+    print(f"[startup] agents_route2 failed: {e}")
+    try:
+        from cedar_app.routes.agents_route import register_agents_route as _register_agents_route
+        _register_agents_route(app)
+        _AGENTS_ROUTE_REGISTERED = True
+        print("[startup] Agents route registered (legacy)")
+    except Exception as e2:
+        _AGENTS_ROUTE_REGISTERED = False
+        print(f"[startup] Could not register agents route: {e2}")
 
 # Register Chat API routes
 try:
@@ -513,46 +523,46 @@ try:
 except Exception as e:
     print(f"[startup] Could not register chat API routes: {e}")
 
-# Fallback Agents page (HTML) in case module registration fails
-# Displays a simple, ASCII-only list of agents and their prompt summaries.
-@app.get("/agents", response_class=HTMLResponse)
-def agents_page(project_id: Optional[int] = None, branch_id: Optional[int] = None, thread_id: Optional[int] = None):
-    agents = [
-        {"name": "Chief Agent", "internal": "ChiefAgent", "desc": "Orchestrator; selects agents and decides final answer.", "prompt": "Analyze user query, pick agents, return JSON decision (final/loop/clarify)."},
-        {"name": "Code Agent", "internal": "CodeAgent", "desc": "Python coding & data analysis.", "prompt": "Write and run Python for calculations, analytics, parsing, plotting."},
-        {"name": "Shell Agent", "internal": "ShellAgent", "desc": "Executes non-interactive shell commands.", "prompt": "Output only the exact commands to run; no prose."},
-        {"name": "SQL Agent", "internal": "SQLAgent", "desc": "Creates tables and runs SQL queries.", "prompt": "Output only SQL; prefer SQLite; include proper constraints and indexes."},
-        {"name": "Math Agent", "internal": "MathAgent", "desc": "Derivations and proofs.", "prompt": "Derive from first principles; show steps and assumptions."},
-        {"name": "Research Agent", "internal": "ResearchAgent", "desc": "Web research with citations.", "prompt": "List sources with URLs, key findings, and a concise summary with citations."},
-        {"name": "Strategy Agent", "internal": "StrategyAgent", "desc": "Plans and playbooks.", "prompt": "Numbered plan: steps, agents per step, inputs/outputs, dependencies."},
-        {"name": "Data Agent", "internal": "DataAgent", "desc": "Schema analysis and query suggestions.", "prompt": "List relevant tables and propose SQL with expected results."},
-        {"name": "Notes Agent", "internal": "NotesAgent", "desc": "Structured notes and knowledge capture.", "prompt": "Concise notes with headings, tags; avoid duplication."},
-        {"name": "File Agent", "internal": "FileAgent", "desc": "Download/manage files.", "prompt": "Download from URLs, save to project, record metadata."},
-        {"name": "Image Creation", "internal": "ImageCreationAgent", "desc": "Generate images (OpenAI Images).", "prompt": "Create images from text; save into project files; record metadata."},
-        {"name": "Image Analysis", "internal": "ImageAnalysisAgent", "desc": "Vision analysis and metadata updates.", "prompt": "Analyze image: objects, text, tags, title/description; update DB metadata."},
-    ]
-    cards = []
-    for a in agents:
-        cards.append(
-            f"""
-            <div class='card' style='margin-bottom:16px'>
-              <h3>{escape(a['name'])}</h3>
-              <div class='small muted'>Internal: <span class='pill'>{escape(a['internal'])}</span></div>
-              <p style='margin-top:8px'>{escape(a['desc'])}</p>
-              <details style='margin-top:8px'>
-                <summary style='cursor:pointer;font-weight:600'>Prompt</summary>
-                <pre class='small' style='white-space:pre-wrap;background:#f8fafc;padding:12px;border-radius:6px'>{escape(a['prompt'])}</pre>
-              </details>
-            </div>
-            """
+# Fallback Agents page (only if the real route could not be registered)
+if not _AGENTS_ROUTE_REGISTERED:
+    @app.get("/agents", response_class=HTMLResponse)
+    def agents_page(project_id: Optional[int] = None, branch_id: Optional[int] = None, thread_id: Optional[int] = None):
+        agents = [
+            {"name": "Chief Agent", "internal": "ChiefAgent", "desc": "Orchestrator; selects agents and decides final answer.", "prompt": "Analyze user query, pick agents, return JSON decision (final/loop/clarify)."},
+            {"name": "Code Agent", "internal": "CodeAgent", "desc": "Python coding & data analysis.", "prompt": "Write and run Python for calculations, analytics, parsing, plotting."},
+            {"name": "Shell Agent", "internal": "ShellAgent", "desc": "Executes non-interactive shell commands.", "prompt": "Output only the exact commands to run; no prose."},
+            {"name": "SQL Agent", "internal": "SQLAgent", "desc": "Creates tables and runs SQL queries.", "prompt": "Output only SQL; prefer SQLite; include proper constraints and indexes."},
+            {"name": "Math Agent", "internal": "MathAgent", "desc": "Derivations and proofs.", "prompt": "Derive from first principles; show steps and assumptions."},
+            {"name": "Research Agent", "internal": "ResearchAgent", "desc": "Web research with citations.", "prompt": "List sources with URLs, key findings, and a concise summary with citations."},
+            {"name": "Strategy Agent", "internal": "StrategyAgent", "desc": "Plans and playbooks.", "prompt": "Numbered plan: steps, agents per step, inputs/outputs, dependencies."},
+            {"name": "Data Agent", "internal": "DataAgent", "desc": "Schema analysis and query suggestions.", "prompt": "List relevant tables and propose SQL with expected results."},
+            {"name": "Notes Agent", "internal": "NotesAgent", "desc": "Structured notes and knowledge capture.", "prompt": "Concise notes with headings, tags; avoid duplication."},
+            {"name": "File Agent", "internal": "FileAgent", "desc": "Download/manage files.", "prompt": "Download from URLs, save to project, record metadata."},
+            {"name": "Image Creation", "internal": "ImageCreationAgent", "desc": "Generate images (OpenAI Images).", "prompt": "Create images from text; save into project files; record metadata."},
+            {"name": "Image Analysis", "internal": "ImageAnalysisAgent", "desc": "Vision analysis and metadata updates.", "prompt": "Analyze image: objects, text, tags, title/description; update DB metadata."},
+        ]
+        cards = []
+        for a in agents:
+            cards.append(
+                f"""
+                <div class='card' style='margin-bottom:16px'>
+                  <h3>{escape(a['name'])}</h3>
+                  <div class='small muted'>Internal: <span class='pill'>{escape(a['internal'])}</span></div>
+                  <p style='margin-top:8px'>{escape(a['desc'])}</p>
+                  <details style='margin-top:8px'>
+                    <summary style='cursor:pointer;font-weight:600'>Prompt</summary>
+                    <pre class='small' style='white-space:pre-wrap;background:#f8fafc;padding:12px;border-radius:6px'>{escape(a['prompt'])}</pre>
+                  </details>
+                </div>
+                """
+            )
+        body = (
+            "<h1>AI Agents</h1>"
+            "<div class='muted' style='margin-bottom:12px'>Simple overview of available agents and their prompts.</div>"
+            + "".join(cards)
+            + "<div class='small muted' style='margin-top:16px'>Full prompts live in cedar_orchestrator/orchestrator.py and specialized_agents.py. See code comments.</div>"
         )
-    body = (
-        "<h1>AI Agents</h1>"
-        "<div class='muted' style='margin-bottom:12px'>Simple overview of available agents and their prompts.</div>"
-        + "".join(cards)
-        + "<div class='small muted' style='margin-top:16px'>Full prompts live in cedar_orchestrator/orchestrator.py and specialized_agents.py. See code comments.</div>"
-    )
-    return layout("Agents", body)
+        return layout("Agents", body)
 
 @app.post("/api/chat/ack")
 def api_chat_ack(payload: Dict[str, Any]):
