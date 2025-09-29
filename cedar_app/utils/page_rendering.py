@@ -7,6 +7,7 @@ from typing import List, Optional, Dict, Any
 from main_models import Project, Branch, Thread, ThreadMessage, FileEntry, Dataset, Note
 from main_helpers import escape
 import html
+import base64
 import json
 
 
@@ -97,6 +98,13 @@ def project_page_html(
     code_items: Optional[list] = None,
     selected_code: Optional[dict] = None,
 ) -> str:
+    # Server-side diagnostics for auto-chat conditions
+    try:
+        sf_id = getattr(selected_file, 'id', None)
+        st_id = getattr(selected_thread, 'id', None)
+        print(f"[project-page] autochat enabled={UPLOAD_AUTOCHAT_ENABLED} msg={(msg or '')} file_id={sf_id} thread_id={st_id} project_id={project.id} branch_id={current.id}")
+    except Exception:
+        pass
     # See PROJECT_SEPARATION_README.md
     # branch tabs
     tabs = []
@@ -354,18 +362,67 @@ def project_page_html(
             mid = ci.get('mid')
             idx = ci.get('idx', 0)
             href = f"/project/{project.id}?branch_id={current.id}&code_mid={mid}&code_idx={idx}"
+            # Visible label and basic fields (escaped)
             label = escape(_code_label(ci))
-            lang = escape(str(ci.get('language') or ''))
-            th_title = escape(str(ci.get('thread_title') or ''))
+            lang_raw = str(ci.get('language') or 'text')
+            lang = escape(lang_raw)
+            th_title_raw = str(ci.get('thread_title') or '')
+            th_title = escape(th_title_raw)
+            # Human-readable timestamp
             when = ''
+            when_iso = ''
             try:
-                when = ci.get('created_at').strftime("%Y-%m-%d %H:%M:%S") + " UTC" if ci.get('created_at') else ''
+                if ci.get('created_at'):
+                    when = ci.get('created_at').strftime("%Y-%m-%d %H:%M:%S") + " UTC"
+                    try:
+                        when_iso = ci.get('created_at').isoformat()
+                    except Exception:
+                        when_iso = when
             except Exception:
                 when = ''
+                when_iso = ''
             is_active = bool(selected_code and selected_code.get('mid') == mid and int(selected_code.get('idx', 0)) == int(idx))
             li_style = "font-weight:600" if is_active else ""
             sub = " · ".join([x for x in [lang, th_title, when] if x])
-            code_list_items.append(f"<li style='margin:6px 0; {li_style}'><a href='{href}' style='text-decoration:none; color:inherit'>{label}</a><div class='small muted'>{sub}</div></li>")
+            # Prepare code payloads (base64-encoded to keep attributes safe)
+            try:
+                full_code = str(ci.get('code') or '')
+            except Exception:
+                full_code = ''
+            try:
+                preview_max = 5000
+                preview = full_code[:preview_max]
+                if len(full_code) > preview_max:
+                    preview = preview + "\n\n... (truncated)"
+            except Exception:
+                preview = full_code
+            try:
+                code_b64 = base64.b64encode(full_code.encode('utf-8')).decode('ascii') if isinstance(full_code, str) else ''
+            except Exception:
+                code_b64 = ''
+            try:
+                code_preview_b64 = base64.b64encode(preview.encode('utf-8')).decode('ascii') if isinstance(preview, str) else ''
+            except Exception:
+                code_preview_b64 = ''
+            # Data attributes for click-to-chat
+            data_attrs = (
+                f"data-title='{escape(str(ci.get('title') or ''))}' "
+                f"data-language='{escape(lang_raw)}' "
+                f"data-code-b64='{code_b64}' "
+                f"data-code-preview-b64='{code_preview_b64}' "
+                f"data-created-at='{escape(when_iso)}' "
+                f"data-thread-title='{escape(th_title_raw)}' "
+                f"data-mid='{escape(str(mid))}' "
+                f"data-idx='{escape(str(idx))}'"
+            )
+            # Primary: open chat with code; Secondary: Details keeps existing behavior
+            code_list_items.append(
+                "<li style='margin:6px 0; " + li_style + "'>"
+                + f"<a href='#' class='js-open-code-chat' {data_attrs} style='text-decoration:none; color:inherit'>{label}</a>"
+                + f" <a href='{href}' class='small code-details-link' style='margin-left:8px' title='View details'>(Details)</a>"
+                + f"<div class='small muted'>{sub}</div>"
+                + "</li>"
+            )
         except Exception:
             pass
     code_list_html = "<ul style='list-style:none; padding-left:0; margin:0'>" + ("".join(code_list_items) or "<li class='muted'>No code yet.</li>") + "</ul>"
@@ -652,8 +709,7 @@ def project_page_html(
     script_js = """
 <script>
 (function(){
-  // Selected file details for upload auto-chat (injected from server). May be null.
-  var __UPLOAD_FILE_DETAILS = __FILE_DETAILS__;
+  // Initial auto-chat message for uploads (injected from server as a string)
   var PROJECT_ID = __PID__;
   var BRANCH_ID = __BID__;
   var UPLOAD_AUTOCHAT = __UPLOAD_AUTOCHAT__;
@@ -1693,22 +1749,26 @@ def project_page_html(
 
       // Auto-start chat once after upload redirect so user sees processing in Chat
       try {
+        var sp = new URLSearchParams(location.search || '');
+        var msg = (sp.get('msg')||'').replace(/\\+/g,' ');
+        var tid0 = sp.get('thread_id') || (chatForm && chatForm.getAttribute('data-thread-id')) || null;
+        var fid0 = sp.get('file_id') || (chatForm && chatForm.getAttribute('data-file-id')) || null;
+        var dsid0 = sp.get('dataset_id') || (chatForm && chatForm.getAttribute('data-dataset-id')) || null;
+        console.log('[auto-chat] cfg=', UPLOAD_AUTOCHAT, 'msg=', msg, 'tid0=', tid0, 'fid0=', fid0, 'dsid0=', dsid0, 'started=', !!window.__uploadAutoChatStarted);
         if (UPLOAD_AUTOCHAT && !window.__uploadAutoChatStarted) {
-          var sp = new URLSearchParams(location.search || '');
-          var msg = (sp.get('msg')||'').replace(/\\+/g,' ');
-          var tid0 = sp.get('thread_id') || (chatForm && chatForm.getAttribute('data-thread-id')) || null;
-          var fid0 = sp.get('file_id') || (chatForm && chatForm.getAttribute('data-file-id')) || null;
-          var dsid0 = sp.get('dataset_id') || (chatForm && chatForm.getAttribute('data-dataset-id')) || null;
           if (msg === 'File uploaded' && (tid0 || fid0)) {
             window.__uploadAutoChatStarted = true;
-            var initialUserMsg = 'User uploaded a file with the following details:\n' +
-                                 ( __UPLOAD_FILE_DETAILS ? JSON.stringify(__UPLOAD_FILE_DETAILS, null, 2)
-                                                          : '(details unavailable)');
+            var initialUserMsg = __INITIAL_UPLOAD_USER_MESSAGE__;
+            console.log('[auto-chat] starting WS with initial message and context');
             // Pass thread_id and file_id so the server can emit a processing bubble immediately
             startWS(initialUserMsg, tid0, fid0, dsid0);
+          } else {
+            console.log('[auto-chat] conditions not met; skipping');
           }
+        } else if (!UPLOAD_AUTOCHAT) {
+          console.log('[auto-chat] disabled by config');
         }
-      } catch(_) {}
+      } catch(e) { try { console.error('[auto-chat] exception', e); } catch(_) {} }
 
       // Load file content if file_id is in URL on page load
       try {
@@ -1919,7 +1979,7 @@ def project_page_html(
     script_js = script_js.replace("__UPLOAD_AUTOCHAT__", "true" if UPLOAD_AUTOCHAT_ENABLED else "false")
     
     # Inject file details JSON for auto-chat (null when no selected file)
-    file_details_json = "null"
+    file_details_json_text = None
     try:
         if selected_file is not None:
             # Build first_lines from sample_text (up to 40 lines, ~2000 chars)
@@ -1945,10 +2005,15 @@ def project_page_html(
                 "sha256": meta.get('sha256'),
                 "first_lines": first_lines,
             }
-            file_details_json = json.dumps(details, ensure_ascii=False)
+            file_details_json_text = json.dumps(details, ensure_ascii=False)
     except Exception:
-        file_details_json = "null"
-    script_js = script_js.replace("__FILE_DETAILS__", file_details_json)
+        file_details_json_text = None
+    # Build the full initial user message as a JS string literal
+    if file_details_json_text is not None:
+        initial_msg_text = "User uploaded a file with the following details:\n" + file_details_json_text
+    else:
+        initial_msg_text = "User uploaded a file with the following details:\n(details unavailable)"
+    script_js = script_js.replace("__INITIAL_UPLOAD_USER_MESSAGE__", json.dumps(initial_msg_text))
     
     # Add script to handle refresh_notes parameter and switch to Notes tab
     refresh_notes_script = """
@@ -1964,11 +2029,111 @@ def project_page_html(
     // Switch to Notes tab after page load
     window.addEventListener('DOMContentLoaded', function() {
       setTimeout(function() {
-        const notesTab = document.querySelector('.tab[data-target="main-notes"]');
+        const notesTab = document.querySelector('.tab[data-target=\"main-notes\"]');
         if (notesTab) notesTab.click();
       }, 100);
     });
   }
+})();
+</script>
+    """
+
+    # Click-to-chat for Code tab titles: open Chat, start new chat, render context, prefill, and inject full code on submit
+    code_to_chat_js = """
+<script>
+(function(){
+  var LOGP='[Code→Chat]';
+  function b64utf8(b){
+    try{
+      var bytes = Uint8Array.from(atob(b||''), function(c){ return c.charCodeAt(0); });
+      try { return new TextDecoder('utf-8').decode(bytes); } catch(e){
+        var s=''; for (var i=0;i<bytes.length;i++){ s += String.fromCharCode(bytes[i]); } return s;
+      }
+    }catch(e){ return ''; }
+  }
+  function switchToChatTab(){
+    try{ var chatTab = document.querySelector('.tabs .tab[data-target="main-chat"]'); if (chatTab) { chatTab.click(); return true; } } catch(_){}
+    return false;
+  }
+  function renderCodeContextPanel(ds){
+    try{
+      var chatPanel = document.getElementById('main-chat');
+      var msgs = document.getElementById('msgs');
+      if (!chatPanel || !msgs) return;
+      var panel = document.getElementById('code-context-panel');
+      if (!panel){
+        panel = document.createElement('div');
+        panel.id = 'code-context-panel';
+        panel.className = 'card';
+        panel.style.marginBottom = '12px';
+        panel.style.padding = '12px';
+        panel.style.background = '#f8fafc';
+        panel.style.borderRadius = '8px';
+        msgs.parentNode.insertBefore(panel, msgs);
+      }
+      panel.innerHTML='';
+      var h = document.createElement('h3'); h.textContent='Code Context'; panel.appendChild(h);
+      var tbl = document.createElement('table'); tbl.className='table';
+      var tbody = document.createElement('tbody');
+      [
+        ['Title', ds.title||''],
+        ['Language', ds.language||''],
+        ['Created', ds.created_at||''],
+        ['Thread', ds.thread_title||''],
+        ['mid', String(ds.mid||'')],
+        ['idx', String(ds.idx||'')]
+      ].forEach(function(kv){ var tr=document.createElement('tr'); var th=document.createElement('th'); th.textContent=kv[0]; var td=document.createElement('td'); td.textContent=kv[1]; tr.appendChild(th); tr.appendChild(td); tbody.appendChild(tr); });
+      tbl.appendChild(tbody); panel.appendChild(tbl);
+      var pre = document.createElement('pre'); pre.className='small'; pre.style.whiteSpace='pre-wrap'; pre.style.background='#f1f5f9'; pre.style.padding='8px'; pre.style.borderRadius='6px'; pre.style.maxHeight='260px'; pre.style.overflow='auto'; pre.textContent = ds.code_preview || ''; panel.appendChild(pre);
+      if ((ds.code_full||'') !== (ds.code_preview||'')) { var btn=document.createElement('button'); btn.className='secondary'; btn.textContent='Show full code'; btn.style.marginTop='6px'; btn.addEventListener('click', function(){ try{ pre.textContent=ds.code_full||''; btn.remove(); }catch(_){}}); panel.appendChild(btn); }
+    }catch(e){ try{ console.debug(LOGP,'render error',e); }catch(_){} }
+  }
+  window.__codeCtx = window.__codeCtx || { active:false, language:'text', fullCode:'' };
+  document.addEventListener('click', function(ev){
+    var a = ev.target && ev.target.closest ? ev.target.closest('a.js-open-code-chat') : null; if (!a) return;
+    try { ev.preventDefault(); } catch(_){}
+    try{
+      var ds = a.dataset || {};
+      var title = ds.title || '';
+      var language = ds.language || 'text';
+      var codePreview = b64utf8(ds.codePreviewB64 || '');
+      var codeFull = b64utf8(ds.codeB64 || '');
+      var createdAt = ds.createdAt || '';
+      var threadTitle = ds.threadTitle || '';
+      var mid = ds.mid || '';
+      var idx = ds.idx || '';
+      switchToChatTab();
+      try { if (window.startNewChat) window.startNewChat(PROJECT_ID, BRANCH_ID); } catch(_){ }
+      renderCodeContextPanel({ title:title, language:language, created_at:createdAt, thread_title:threadTitle, mid:mid, idx:idx, code_preview:codePreview, code_full:codeFull });
+      var t = document.getElementById('chatInput');
+      if (t) {
+        var template = 'Code Context\n' +
+                       'title: ' + title + '\n' +
+                       'language: ' + language + '\n' +
+                       'created_at: ' + createdAt + '\n' +
+                       'thread_title: ' + threadTitle + '\n' +
+                       'mid: ' + mid + '\n' +
+                       'idx: ' + idx + '\n\n' +
+                       '```' + language + '\n' + codePreview + '\n' + '```\n\n' +
+                       '---\n\n' +
+                       'Prompt:\n';
+        t.value = template; try { t.focus(); } catch(_){}
+      }
+      window.__codeCtx.active = true; window.__codeCtx.language = language || 'text'; window.__codeCtx.fullCode = codeFull || '';
+    }catch(e){ try{ console.debug(LOGP,'click error',e); }catch(_){} }
+  }, true);
+  document.addEventListener('submit', function(ev){
+    var form = ev.target && ev.target.closest ? ev.target.closest('#chatForm') : null; if (!form) return;
+    try{
+      if (window.__codeCtx && window.__codeCtx.active){
+        var t = document.getElementById('chatInput'); if (t){
+          var txt = String(t.value||''); var lang = window.__codeCtx.language || 'text'; var full = window.__codeCtx.fullCode || '';
+          if (full){ var re = /```([a-zA-Z0-9_-]*)\n[\s\S]*?```/; if (re.test(txt)) { txt = txt.replace(re, '```' + lang + '\n' + full + '\n```'); } else { txt += '\n\n```' + lang + '\n' + full + '\n```\n'; } t.value = txt; }
+        }
+        window.__codeCtx.active = false;
+      }
+    }catch(e){ try{ console.debug(LOGP,'submit hook error',e); }catch(_){} }
+  }, true);
 })();
 </script>
     """
@@ -2030,6 +2195,7 @@ def project_page_html(
                 <div id='msgs' class='chat-log'>{msgs_html}</div>
                 <div class='chat-input'>{chat_form}</div>
                 {script_js}
+                {code_to_chat_js}
                 { ("<div class='card' style='margin-top:8px; padding:12px'><h3>File Details</h3>" + left_details + "</div>") if selected_file else "" }
                 {code_details_html}
               </div>
