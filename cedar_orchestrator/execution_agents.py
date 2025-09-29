@@ -153,9 +153,9 @@ Suggested Next Steps: Please provide the exact shell command to execute.""",
                 env={**os.environ}  # Pass current environment
             )
             
-            # Get output (keep more for analysis)
-            output = result.stdout[:5000] if result.stdout else ""
-            error = result.stderr[:2000] if result.stderr else ""
+            # Get output (full console logs)
+            output = result.stdout if result.stdout else ""
+            error = result.stderr if result.stderr else ""
             exit_code = result.returncode
             
             # Build execution report
@@ -265,14 +265,14 @@ Format follow-up commands exactly as they should be run."""
 - Execution Time: {time.time() - start_time:.2f}s
 """
             
-            # Add output preview
+            # Console logs (full)
+            formatted_output += "\n**Console Logs:**\n"
             if output:
-                preview = output[:1000] + "..." if len(output) > 1000 else output
-                formatted_output += f"\n**Output Preview:**\n```\n{preview}\n```\n"
-            
+                formatted_output += f"\nStdout:\n```\n{output}\n```\n"
+            else:
+                formatted_output += "\nStdout:\n```\n(empty)\n```\n"
             if error:
-                error_preview = error[:500] + "..." if len(error) > 500 else error
-                formatted_output += f"\n**Error Output:**\n```\n{error_preview}\n```\n"
+                formatted_output += f"\nStderr:\n```\n{error}\n```\n"
             
             # Add follow-up suggestions
             if suggested_followups:
@@ -291,21 +291,21 @@ Format follow-up commands exactly as they should be run."""
             else:
                 formatted_output += "Review the error message and adjust the command as needed."
             
-            return AgentResult(
-                agent_name="ShellAgent",
-                display_name="Shell Executor",
-                result=formatted_output,
-                confidence=confidence,
-                method=f"Shell execution (exit code: {exit_code})",
-                explanation=f"Executed: {shell_command[:50]}{'...' if len(shell_command) > 50 else ''}",
-                summary=summary if 'summary' in locals() else f"Executed shell command '{shell_command[:50]}{'...' if len(shell_command) > 50 else ''}' with {'success' if exit_code == 0 else f'exit code {exit_code}'}"
-            )
+                return AgentResult(
+                    agent_name="ShellAgent",
+                    display_name="Desktop Agent",
+                    result=formatted_output,
+                    confidence=confidence,
+                    method=f"Shell execution (exit code: {exit_code})",
+                    explanation=f"Executed: {shell_command[:50]}{'...' if len(shell_command) > 50 else ''}",
+                    summary=summary if 'summary' in locals() else f"Executed shell command '{shell_command[:50]}{'...' if len(shell_command) > 50 else ''}' with {'success' if exit_code == 0 else f'exit code {exit_code}'}"
+                )
             
         except subprocess.TimeoutExpired:
             logger.error(f"[ShellAgent] Command timed out: {shell_command}")
             return AgentResult(
                 agent_name="ShellAgent",
-                display_name="Shell Executor",
+                display_name="Desktop Agent",
                 result=f"""Answer: ⏱️ Command timed out after 60 seconds
 
 **Command:** `{shell_command}`
@@ -325,7 +325,7 @@ Format follow-up commands exactly as they should be run."""
             logger.error(f"[ShellAgent] Execution error: {e}")
             return AgentResult(
                 agent_name="ShellAgent",
-                display_name="Shell Executor",
+                display_name="Desktop Agent",
                 result=f"""Answer: ❌ Failed to execute command
 
 **Command:** `{shell_command}`

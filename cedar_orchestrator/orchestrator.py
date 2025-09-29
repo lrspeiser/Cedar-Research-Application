@@ -440,7 +440,7 @@ class ThinkerOrchestrator:
             if agent_name == "CodeAgent":
                 agent_explanations.append("• **Coding Agent**: Will generate and execute Python code to compute the exact result")
             elif agent_name == "ShellAgent":
-                agent_explanations.append("• **Shell Executor**: Will run system commands to complete the requested operation")
+                agent_explanations.append("• **Desktop Agent**: Will run system commands to complete the requested operation")
             elif agent_name == "SQLAgent":
                 agent_explanations.append("• **SQL Agent**: Will create database queries or schema modifications as needed")
             elif agent_name == "MathAgent":
@@ -619,7 +619,7 @@ I've analyzed your request as a {thinking['identified_type'].replace('_', ' ')}.
                     # Map agent to display name
                     agent_display_names = {
                         "CodeAgent": "Coding Agent",
-                        "ShellAgent": "Shell Executor",
+                        "ShellAgent": "Desktop Agent",
                         "SQLAgent": "SQL Agent",
                         "MathAgent": "Math Agent",
                         "ResearchAgent": "Research Agent",
