@@ -2033,14 +2033,6 @@ def project_page_html(
     </div>
     
     {refresh_notes_script}
-    
-    <!-- Delete button at bottom right corner -->
-    <div style="position: fixed; bottom: 20px; right: 20px; z-index: 100;">
-      <form method="post" action="/project/{project.id}/delete" class="inline" 
-            onsubmit="return confirmProjectDelete('{escape(project.title)}');">
-        <button type="submit" class="secondary" style="background-color: #ef4444; color: white; border-color: #dc2626; padding: 8px 16px; border-radius: 6px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">Delete Project</button>
-      </form>
-    </div>
 
     """
 
