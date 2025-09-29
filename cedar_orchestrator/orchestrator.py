@@ -306,7 +306,7 @@ Examples (Routing Guidance):
             except json.JSONDecodeError as e1:
                 logger.warning(f"[ChiefAgent] JSON parse failed: {e1}. Attempting repair retries…")
                 retries = 0
-                max_retries = 2
+                max_retries = 3
                 last_error = str(e1)
                 last_output = chief_response[:1500]
                 decision_data = {}
@@ -696,6 +696,9 @@ class ThinkerOrchestrator:
         logger.info(f"[ORCHESTRATOR] Starting parallel processing with {len(agents)} agents")
         parallel_start = time.time()
         
+        # Track whether any agent error occurred
+        had_errors = False
+        
         # Don't send stream updates that would overwrite the Chief Agent analysis
         # The detailed analysis message is complete and should stand on its own
         
@@ -772,6 +775,7 @@ class ThinkerOrchestrator:
                 await asyncio.sleep(0.2)
             elif isinstance(result, Exception):
                 logger.error(f"[ORCHESTRATOR] Agent {i+1} failed with exception: {result}")
+                had_errors = True
                 
                 # Determine which agent failed based on index
                 agent_name = "Unknown Agent"
@@ -1137,7 +1141,9 @@ Please provide this information so I can better assist you."""
             return
         
         # Chief Agent makes the final decision
-        if chief_decision.get('decision') == 'loop' and iteration < self.MAX_ITERATIONS - 1:
+        # Limit looping to 3 iterations if errors occurred; otherwise use MAX_ITERATIONS
+        allowed_loops = 3 if 'had_errors' in locals() and had_errors else self.MAX_ITERATIONS
+        if chief_decision.get('decision') == 'loop' and iteration < allowed_loops - 1:
             # Chief Agent wants another iteration
             guidance = (chief_decision.get('additional_guidance', '') or '').strip()
             thinking = chief_decision.get('thinking_process', 'Analyzing how to improve the answer...')
@@ -1166,7 +1172,7 @@ Please provide this information so I can better assist you."""
             if guidance and '`' in guidance:
                 # Extract command from guidance if present
                 cmd_match = re.search(r'`([^`]+)`', guidance)
-                if cmd_match and 'ShellAgent' in thinking.get('agents_to_use', []):
+                if cmd_match:
                     # Pass the command directly for Shell Agent
                     enhanced_message = f"Execute: `{cmd_match.group(1)}`\n\nOriginal request: {message}"
                 else:
