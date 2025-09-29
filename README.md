@@ -144,14 +144,25 @@ What was wrong and how it was fixed
 
 ## Auto-start chat on upload
 
-When an upload completes, CedarPy now automatically opens the chat for the upload-created thread and posts an initial user message:
+When an upload completes, CedarPy automatically opens the chat for the upload-created thread and posts an initial user message containing structured details:
 
-- "The user uploaded this file to the system"
+- First user message text prefix:
+  "User uploaded a file with the following details:"
+- JSON body fields included:
+  - project_id, branch_id, thread_id, file_id
+  - name (display_name), file_type, structure, mime_type, size_bytes
+  - storage_path (absolute disk path)
+  - sha256 (if available)
+  - first_lines: first 40 lines from metadata_json.sample_text (if readable), clipped to ~2000 chars total
 
 This lets you watch classification, tabular import (when applicable), and LangExtract indexing activity in one place and immediately start planning follow-up analysis.
 
 Configuration
-- CEDARPY_UPLOAD_AUTOCHAT=1 (default). Set to 0/false to disable auto-start (useful for demos/tests that don’t want the chat to kick off).
+- CEDARPY_UPLOAD_AUTOCHAT=1 (default). Set to 0/false to disable auto-start (useful for demos/tests that don’t want the chat to kick off). The app reads this into cedar_app.config.UPLOAD_AUTOCHAT_ENABLED.
+
+What the UI shows immediately
+- On WebSocket chat start (when file_id is present), the server emits an action event that renders an assistant bubble with a spinner:
+  "Processing <filename>…"
 
 Notes
 - The right-side Files panel still opens so the UI remains consistent with existing tests.

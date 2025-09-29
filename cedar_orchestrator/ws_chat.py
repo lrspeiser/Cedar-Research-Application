@@ -229,6 +229,28 @@ async def handle_ws_chat(
                         import traceback
                         logger.error(f"[WebSocket-DB]   Traceback:\n{traceback.format_exc()}")
                     
+                    # Emit immediate processing bubble if a file context is present (upload auto-chat)
+                    try:
+                        if project_id and db_session is not None and file_id:
+                            from main_models import FileEntry
+                            rec = db_session.query(FileEntry).filter(FileEntry.id == int(file_id), FileEntry.project_id == int(project_id)).first()
+                            if rec:
+                                await websocket.send_json({
+                                    "type": "action",
+                                    "function": "processing",
+                                    "text": f"Processing {rec.display_name}…",
+                                    "call": {
+                                        "event": "upload_autochat",
+                                        "file_id": int(rec.id),
+                                        "filename": rec.display_name,
+                                        "size_bytes": rec.size_bytes,
+                                        "mime_type": rec.mime_type
+                                    }
+                                })
+                                logger.info(f"[WebSocket] Emitted processing bubble for file_id={rec.id}")
+                    except Exception as e:
+                        logger.warning(f"[WebSocket] Failed to emit processing bubble: {e}")
+                    
                     # Build conversation history from chat manager (full messages)
                     conversation_history = None
                     try:

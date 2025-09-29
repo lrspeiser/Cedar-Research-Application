@@ -7,6 +7,7 @@ from typing import List, Optional, Dict, Any
 from main_models import Project, Branch, Thread, ThreadMessage, FileEntry, Dataset, Note
 from main_helpers import escape
 import html
+import json
 
 
 def projects_list_html(projects: List[Project], msg: Optional[str] = None) -> str:
@@ -75,12 +76,9 @@ import os
 from typing import Any
 from cedar_app.db_utils import _project_dirs
 
-# Import the UPLOAD_AUTOCHAT_ENABLED setting
-try:
-    UPLOAD_AUTOCHAT_ENABLED = str(os.getenv("CEDARPY_UPLOAD_AUTOCHAT_ENABLED", "0")).strip().lower() not in {"", "0", "false", "no", "off"}
-except Exception:
-    UPLOAD_AUTOCHAT_ENABLED = False
-
+# Import the unified UPLOAD_AUTOCHAT_ENABLED setting
+# See README "Auto-start chat on upload" for details about CEDARPY_UPLOAD_AUTOCHAT
+from cedar_app.config import UPLOAD_AUTOCHAT_ENABLED
 
 def project_page_html(
     project: Project,
@@ -654,6 +652,8 @@ def project_page_html(
     script_js = """
 <script>
 (function(){
+  // Selected file details for upload auto-chat (injected from server). May be null.
+  var __UPLOAD_FILE_DETAILS = __FILE_DETAILS__;
   var PROJECT_ID = __PID__;
   var BRANCH_ID = __BID__;
   var UPLOAD_AUTOCHAT = __UPLOAD_AUTOCHAT__;
@@ -1695,13 +1695,17 @@ def project_page_html(
       try {
         if (UPLOAD_AUTOCHAT && !window.__uploadAutoChatStarted) {
           var sp = new URLSearchParams(location.search || '');
-  var msg = (sp.get('msg')||'').replace(/\\+/g,' ');
+          var msg = (sp.get('msg')||'').replace(/\\+/g,' ');
           var tid0 = sp.get('thread_id') || (chatForm && chatForm.getAttribute('data-thread-id')) || null;
           var fid0 = sp.get('file_id') || (chatForm && chatForm.getAttribute('data-file-id')) || null;
           var dsid0 = sp.get('dataset_id') || (chatForm && chatForm.getAttribute('data-dataset-id')) || null;
           if (msg === 'File uploaded' && (tid0 || fid0)) {
             window.__uploadAutoChatStarted = true;
-            startWS('The user uploaded this file to the system', tid0, fid0, dsid0);
+            var initialUserMsg = 'User uploaded a file with the following details:\n' +
+                                 ( __UPLOAD_FILE_DETAILS ? JSON.stringify(__UPLOAD_FILE_DETAILS, null, 2)
+                                                          : '(details unavailable)');
+            // Pass thread_id and file_id so the server can emit a processing bubble immediately
+            startWS(initialUserMsg, tid0, fid0, dsid0);
           }
         }
       } catch(_) {}
@@ -1913,6 +1917,38 @@ def project_page_html(
     _ws_timeout_ms = max(1000, _ws_timeout_s * 1000)
     script_js = script_js.replace("__PID__", str(project.id)).replace("__BID__", str(current.id)).replace("__WS_TIMEOUT_MS__", str(_ws_timeout_ms))
     script_js = script_js.replace("__UPLOAD_AUTOCHAT__", "true" if UPLOAD_AUTOCHAT_ENABLED else "false")
+    
+    # Inject file details JSON for auto-chat (null when no selected file)
+    file_details_json = "null"
+    try:
+        if selected_file is not None:
+            # Build first_lines from sample_text (up to 40 lines, ~2000 chars)
+            meta = getattr(selected_file, 'metadata_json', None) or {}
+            sample_text = meta.get('sample_text') or ''
+            if isinstance(sample_text, str):
+                first_lines = "\n".join(sample_text.splitlines()[:40])
+                if len(first_lines) > 2000:
+                    first_lines = first_lines[:2000]
+            else:
+                first_lines = ''
+            details = {
+                "project_id": project.id,
+                "branch_id": current.id,
+                "thread_id": (selected_thread.id if selected_thread else None),
+                "file_id": selected_file.id,
+                "name": selected_file.display_name,
+                "file_type": selected_file.file_type,
+                "structure": selected_file.structure,
+                "mime_type": selected_file.mime_type,
+                "size_bytes": selected_file.size_bytes,
+                "storage_path": selected_file.storage_path,
+                "sha256": meta.get('sha256'),
+                "first_lines": first_lines,
+            }
+            file_details_json = json.dumps(details, ensure_ascii=False)
+    except Exception:
+        file_details_json = "null"
+    script_js = script_js.replace("__FILE_DETAILS__", file_details_json)
     
     # Add script to handle refresh_notes parameter and switch to Notes tab
     refresh_notes_script = """
