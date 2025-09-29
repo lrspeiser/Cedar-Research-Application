@@ -297,14 +297,48 @@ Examples (Routing Guidance):
             api_retries = 0
             api_max_retries = 3
             last_api_error = None
+            # Per-call timeout (seconds)
+            try:
+                llm_timeout_s = int(os.getenv("CEDARPY_LLM_TIMEOUT_SECONDS", "45"))
+            except Exception:
+                llm_timeout_s = 45
             while True:
                 try:
-                    response = await self.llm_client.chat.completions.create(**completion_params)
+                    # Enforce a timeout on the LLM call
+                    response = await asyncio.wait_for(
+                        self.llm_client.chat.completions.create(**completion_params),
+                        timeout=llm_timeout_s
+                    )
                     break
+                except asyncio.TimeoutError as api_e:
+                    last_api_error = f"Timeout after {llm_timeout_s}s"
+                    api_retries += 1
+                    logger.warning(f"[ChiefAgent] LLM API timeout (attempt {api_retries}/{api_max_retries}): {last_api_error}")
+                    # Inform UI
+                    try:
+                        if ws is not None:
+                            await ws.send_json({"type": "info", "stage": f"planning.timeout.attempt_{api_retries}"})
+                    except Exception:
+                        pass
+                    if api_retries >= api_max_retries:
+                        raise
+                    try:
+                        msgs.append({
+                            "role": "system",
+                            "content": f"Previous API timeout: {last_api_error}. Please try again and return ONLY valid JSON."
+                        })
+                    except Exception:
+                        pass
                 except Exception as api_e:
                     last_api_error = str(api_e)
                     api_retries += 1
                     logger.warning(f"[ChiefAgent] LLM API error (attempt {api_retries}/{api_max_retries}): {api_e}")
+                    # Inform UI
+                    try:
+                        if ws is not None:
+                            await ws.send_json({"type": "info", "stage": f"planning.retry.attempt_{api_retries}", "message": last_api_error[:160]})
+                    except Exception:
+                        pass
                     if api_retries >= api_max_retries:
                         raise
                     # Nudge with a system note about previous API error
@@ -400,14 +434,20 @@ Examples (Routing Guidance):
                         decision_data = {}
 
                 if not decision_data:
-                    # Last-resort fallback
+                    # Last-resort fallback with explicit error messaging
                     best_result = max(agent_results, key=lambda r: r.confidence) if agent_results else None
+                    final_text = best_result.result if best_result else ""
+                    if not final_text:
+                        final_text = (
+                            "The Chief Agent could not obtain a valid response from the model after multiple attempts. "
+                            "Please try again or adjust the request."
+                        )
                     decision_data = {
                         "decision": "final",
-                        "final_answer": best_result.result if best_result else "No results available",
+                        "final_answer": final_text,
                         "additional_guidance": None,
                         "selected_agent": best_result.display_name if best_result else "None",
-                        "reasoning": f"JSON parsing failed after {max_retries} repair attempts"
+                        "reasoning": f"Model unresponsive: JSON parsing failed after {max_retries} repair attempts"
                     }
 
             # Log the assessment fields
