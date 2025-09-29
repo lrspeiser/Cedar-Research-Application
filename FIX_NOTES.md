@@ -40,17 +40,41 @@ This document tracks all bugs fixed and improvements made during the orchestrati
 
 ## Fixes Applied
 
-### Fix 1: [Placeholder - will be updated as fixes are applied]
+### Fix 1: Prompt event missing thread_id field
 
 **What was wrong:**
+- Prompt events were emitted at line 277-280 of orchestrator.py
+- Event payload only included `{"type": "prompt", "messages": [...]}`
+- Missing `thread_id` field meant frontend couldn't correlate prompts to threads
+- Frontend cache lookup failed, showing "No LLM prompt available"
+- Thread ID was never passed through the orchestration chain
 
 **How it was fixed:**
+- Added `thread_id` parameter to `orchestrate()` method signature
+- Added `thread_id` parameter to `review_and_decide()` method signature  
+- Updated prompt event payload to include:
+  - `thread_id` (as string for consistent caching)
+  - `iteration` (current iteration number)
+  - `stage` ("chief_first_pass" or "chief_synthesis")
+  - `agent` ("Chief Agent")
+  - `timestamp` (for debugging)
+- Derived thread_id from chat_number in ws_chat.py
+- Passed thread_id through both review_and_decide calls in orchestrate()
+- Added README comment about API key configuration
 
 **Tests run:**
+- Code compiles without errors
+- Server starts successfully
+- Need to run: Submit "what is 2+2?" and check browser console for prompt events with thread_id
 
 **Logging added:**
+```python
+logger.info(f"[ChiefAgent] EMIT prompt: thread_id={thread_id_str}, iteration={iteration}, stage={prompt_payload['stage']}, msg_count={len(msgs)}")
+logger.info(f"[ChiefAgent] EMIT prompt: SUCCESS")
+logger.warning(f"[ChiefAgent] EMIT prompt: FAILED: {e}")
+```
 
-**Commit:**
+**Commit:** `f863299` - "Fix: Add thread_id to prompt events for UI caching"
 
 ---
 

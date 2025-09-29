@@ -1068,11 +1068,37 @@ def project_page_html(
           } catch(_) { }
         } else if (m.type === 'prompt') {
           // Attach prompt JSON to the live planning bubble details and cache for later
+          // [cedar-ui] Prompt event handler - caches prompts by thread_id for "Prepared LLM prompt" bubble
           try {
-            try {
-              window.__cedar_last_prompts = window.__cedar_last_prompts || {};
-              if (m.thread_id) { window.__cedar_last_prompts[String(m.thread_id)] = m.messages || []; }
-            } catch(_){ }
+            console.debug('[cedar-ui] Received prompt event', {thread_id: m.thread_id, iteration: m.iteration, stage: m.stage, msg_count: (m.messages||[]).length});
+            
+            // Initialize cache if missing
+            window.__cedar_last_prompts = window.__cedar_last_prompts || {};
+            
+            // Normalize thread_id as string for consistent caching
+            if (m.thread_id) {
+              var threadIdStr = String(m.thread_id);
+              
+              // Create cache entry with metadata
+              var cacheEntry = {
+                stage: m.stage || 'unknown',
+                iteration: m.iteration || 0,
+                agent: m.agent || 'Chief Agent',
+                prompt_json: m.messages || [],
+                timestamp: m.timestamp || Date.now() / 1000
+              };
+              
+              // Initialize array for this thread if needed, then append
+              if (!window.__cedar_last_prompts[threadIdStr]) {
+                window.__cedar_last_prompts[threadIdStr] = [];
+              }
+              window.__cedar_last_prompts[threadIdStr].push(cacheEntry);
+              
+              console.debug('[cedar-ui] Cached prompt for thread', threadIdStr, 'entry:', cacheEntry, 'total entries:', window.__cedar_last_prompts[threadIdStr].length);
+            } else {
+              console.warn('[cedar-ui] Prompt event missing thread_id, cannot cache');
+            }
+            
             // Update thread_id if needed
             try {
               if (m.thread_id) {
@@ -1085,6 +1111,7 @@ def project_page_html(
                 }
               }
             } catch(_){}
+            
             // If a planning bubble exists, update its details panel to show the prompt JSON
             try {
               if (thinkWrap) {
@@ -1096,8 +1123,11 @@ def project_page_html(
                 }
               }
             } catch(_){}
+            
             ackEvent(m);
-          } catch(_) { }
+          } catch(e) { 
+            console.error('[cedar-ui] Prompt caching error:', e);
+          }
         } else if (m.type === 'agent_result') {
           // Handle agent results from orchestrator
           try {
@@ -1380,8 +1410,15 @@ def project_page_html(
             var contF = document.createElement('div'); contF.className='content'; contF.style.whiteSpace='pre-wrap'; contF.textContent = (fnF ? (fnF + ' ') : '') + (m.text||'');
             // Add edit prompt link if we have a stored prompt for this thread
             try {
-              var last = (window.__cedar_last_prompts||{})[String(threadId||'')];
-              if (last && last.length) {
+              var threadIdStr = String(threadId || '');
+              var cachedEntries = (window.__cedar_last_prompts||{})[threadIdStr];
+              var lastPromptJson = null;
+              if (cachedEntries && Array.isArray(cachedEntries) && cachedEntries.length > 0) {
+                var latestEntry = cachedEntries[cachedEntries.length - 1];
+                lastPromptJson = latestEntry.prompt_json || null;
+              }
+              
+              if (lastPromptJson && lastPromptJson.length) {
                 var edit = document.createElement('a'); edit.href='#'; edit.className='small muted'; edit.style.marginLeft='8px'; edit.textContent='(edit prompt)';
                 edit.addEventListener('click', function(ev){
                   try { ev.preventDefault(); } catch(_){}
@@ -1406,7 +1443,7 @@ def project_page_html(
                     document.body.appendChild(overlay);
                     cancelBtn.addEventListener('click', function(){ try { overlay.remove(); } catch(_){} });
                     copyBtnM.addEventListener('click', function(){ try { navigator.clipboard.writeText(ta.value||''); } catch(_){} });
-                    var _orig = null; try { _orig = JSON.stringify(last, null, 2); } catch(_) { _orig = '[]'; }
+                    var _orig = null; try { _orig = JSON.stringify(lastPromptJson, null, 2); } catch(_) { _orig = '[]'; }
                     restoreBtn.addEventListener('click', function(){ try { ta.value = _orig; } catch(_){} });
                     runBtn.addEventListener('click', function(){
                       try {
@@ -1420,7 +1457,7 @@ def project_page_html(
                       }
                     });
                   }
-                  try { document.getElementById('promptEditArea').value = JSON.stringify(last, null, 2); } catch(_){}
+                  try { document.getElementById('promptEditArea').value = JSON.stringify(lastPromptJson, null, 2); } catch(_){}
                 });
                 contF.appendChild(edit);
               }
@@ -1461,10 +1498,26 @@ def project_page_html(
                 var detailsP2 = document.createElement('div'); detailsP2.id = detIdP2; detailsP2.style.display='none';
                 var preP2 = document.createElement('pre'); preP2.className='small'; preP2.style.whiteSpace='pre-wrap'; preP2.style.background='#f8fafc'; preP2.style.padding='8px'; preP2.style.borderRadius='6px';
                 var fallbackMsgs = null;
+                
+                // [cedar-ui] Retrieve cached prompt for this thread
                 try {
-                  var last = (window.__cedar_last_prompts||{})[String(threadId||'')];
-                  if (last && last.length) { fallbackMsgs = last; }
-                } catch(_){ }
+                  var threadIdStr = String(threadId || '');
+                  console.debug('[cedar-ui] Looking up cached prompt for thread:', threadIdStr);
+                  console.debug('[cedar-ui] Cache state:', window.__cedar_last_prompts);
+                  
+                  var cachedEntries = (window.__cedar_last_prompts || {})[threadIdStr];
+                  if (cachedEntries && Array.isArray(cachedEntries) && cachedEntries.length > 0) {
+                    // Get the latest cached entry (last one in array)
+                    var latestEntry = cachedEntries[cachedEntries.length - 1];
+                    fallbackMsgs = latestEntry.prompt_json || null;
+                    console.debug('[cedar-ui] Retrieved cached prompt:', {stage: latestEntry.stage, iteration: latestEntry.iteration, msg_count: (fallbackMsgs||[]).length});
+                  } else {
+                    console.warn('[cedar-ui] No cached prompts found for thread', threadIdStr);
+                  }
+                } catch(e) { 
+                  console.error('[cedar-ui] Error retrieving cached prompt:', e);
+                }
+                
                 if (!fallbackMsgs) {
                   var fromFinal = null;
                   try { if (m && m.prompt) { fromFinal = m.prompt; } } catch(_){ }
@@ -1474,6 +1527,7 @@ def project_page_html(
                     var reason = 'No LLM prompt available';
                     try { if (m && m.json && m.json.meta && m.json.meta.fastpath) { reason = 'No LLM prompt: fast-path (' + String(m.json.meta.fastpath) + ')'; } } catch(_){ }
                     fallbackMsgs = [{ role: 'system', content: reason }];
+                    console.warn('[cedar-ui] Using fallback message:', reason);
                   }
                 }
                 try { preP2.textContent = JSON.stringify(fallbackMsgs, null, 2); } catch(_){ preP2.textContent = String(fallbackMsgs); }
