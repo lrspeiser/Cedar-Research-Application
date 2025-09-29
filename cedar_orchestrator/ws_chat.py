@@ -264,8 +264,6 @@ async def handle_ws_chat(
                             db_session=db_session,
                             conversation_history=conversation_history
                         )
-                            dataset_id=dataset_id
-                        )
                     finally:
                         # Clean up database session
                         if db_session:
