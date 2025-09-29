@@ -63,9 +63,10 @@ class ChiefAgent:
         self.llm_client = llm_client
         
         
-    async def review_and_decide(self, user_query: str, agent_results: List[AgentResult], iteration: int = 0, max_iterations: int = 10, previous_context: str = "", resources: Optional[Dict[str, Any]] = None, conversation_history: Optional[str] = None, ws: Optional[WebSocket] = None, run_logs: Optional[List[str]] = None) -> Dict[str, Any]:
+    async def review_and_decide(self, user_query: str, agent_results: List[AgentResult], iteration: int = 0, max_iterations: int = 10, previous_context: str = "", resources: Optional[Dict[str, Any]] = None, conversation_history: Optional[str] = None, ws: Optional[WebSocket] = None, run_logs: Optional[List[str]] = None, thread_id: Optional[int] = None) -> Dict[str, Any]:
         """Review all agent results and make the final decision on what to do next.
-        resources: Optional index of project assets (files, code, databases, notes, images)."""
+        resources: Optional index of project assets (files, code, databases, notes, images).
+        thread_id: Thread ID for WebSocket event correlation (will be converted to string for caching)."""
         start_time = time.time()
         remaining_loops = max_iterations - iteration - 1
         logger.info(f"[ChiefAgent] Starting review of {len(agent_results)} agent results (iteration {iteration}/{max_iterations}, {remaining_loops} loops remaining)")
@@ -272,14 +273,27 @@ Examples (Routing Guidance):
                 pass
 
             # Send prompt details for drilldown (clickable JSON in UI) after assembling all messages
+            # See README "WebSocket Events" section for API key configuration and event payload documentation
             try:
                 if ws is not None:
-                    await ws.send_json({
+                    # Ensure thread_id is consistently a string for frontend caching
+                    thread_id_str = str(thread_id) if thread_id is not None else ''
+                    
+                    prompt_payload = {
                         "type": "prompt",
-                        "messages": msgs
-                    })
-            except Exception:
-                pass
+                        "thread_id": thread_id_str,
+                        "iteration": iteration,
+                        "stage": "chief_first_pass" if not agent_results else "chief_synthesis",
+                        "agent": "Chief Agent",
+                        "messages": msgs,
+                        "timestamp": time.time()
+                    }
+                    
+                    logger.info(f"[ChiefAgent] EMIT prompt: thread_id={thread_id_str}, iteration={iteration}, stage={prompt_payload['stage']}, msg_count={len(msgs)}")
+                    await ws.send_json(prompt_payload)
+                    logger.info(f"[ChiefAgent] EMIT prompt: SUCCESS")
+            except Exception as e:
+                logger.warning(f"[ChiefAgent] EMIT prompt: FAILED: {e}")
 
             completion_params = {
                 "model": model,
@@ -660,7 +674,7 @@ class ThinkerOrchestrator:
             
         return thinking_process
         
-    async def orchestrate(self, message: str, websocket, iteration: int = 0, previous_results: List[AgentResult] = None, project_id: int = None, branch_id: int = None, db_session = None, conversation_history: Optional[str] = None):
+    async def orchestrate(self, message: str, websocket, iteration: int = 0, previous_results: List[AgentResult] = None, project_id: int = None, branch_id: int = None, thread_id: int = None, db_session = None, conversation_history: Optional[str] = None):
         """Full orchestration process controlled by Chief Agent decisions with optional notes persistence"""
         orchestration_start = time.time()
         # Ensure optional context vars exist to avoid NameError
@@ -710,7 +724,8 @@ class ThinkerOrchestrator:
                 resources=None,
                 conversation_history=conversation_history,
                 ws=websocket,  # emit thinking_start + prompt + thinking
-                run_logs=run_logs
+                run_logs=run_logs,
+                thread_id=thread_id  # pass thread_id for WebSocket event correlation
             )
         except Exception as e:
             logger.warning(f"[ORCHESTRATOR] Pre-analysis planning emit failed: {e}")
@@ -1062,7 +1077,8 @@ Task: {message[:200]}{'...' if len(message) > 200 else ''}"""
             resources=None,
             conversation_history=conversation_history,
             ws=None,  # Do not emit thinking during the final review to avoid duplicate planning bubble
-            run_logs=run_logs
+            run_logs=run_logs,
+            thread_id=thread_id  # pass thread_id for WebSocket event correlation
         )
         logger.info(f"[ORCHESTRATOR] Chief Agent decision: {chief_decision.get('decision')}")
         

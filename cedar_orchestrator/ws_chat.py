@@ -276,6 +276,10 @@ async def handle_ws_chat(
                     
                     # Process with advanced orchestrator (with optional notes persistence)
                     try:
+                        # Derive thread_id from chat_number for event correlation
+                        # Chat numbers map to threads in this implementation
+                        derived_thread_id = chat_number if chat_number else None
+                        
                         await orchestrator.orchestrate(
                             content,
                             ws_to_use,
@@ -283,6 +287,7 @@ async def handle_ws_chat(
                             previous_results=None,
                             project_id=project_id,
                             branch_id=branch_id,
+                            thread_id=derived_thread_id,  # pass for WebSocket event correlation
                             db_session=db_session,
                             conversation_history=conversation_history
                         )
