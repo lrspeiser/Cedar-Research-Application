@@ -291,11 +291,6 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
                     {"role": "user", "content": f"Derive from first principles: {task}"}
                 ]
             }
-            
-            if "gpt-5" in model or "gpt-4.1" in model:
-                completion_params["max_completion_tokens"] = 50000
-            else:
-                completion_params["max_tokens"] = 50000
 
             response = await self.llm_client.chat.completions.create(**completion_params)
             derivation = response.choices[0].message.content
@@ -385,11 +380,6 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
                     {"role": "user", "content": f"Research this topic and find relevant sources: {task}"}
                 ]
             }
-            
-            if "gpt-5" in model or "gpt-4.1" in model:
-                completion_params["max_completion_tokens"] = 50000
-            else:
-                completion_params["max_tokens"] = 50000
 
             response = await self.llm_client.chat.completions.create(**completion_params)
             research_results = response.choices[0].message.content
@@ -477,11 +467,6 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
                     {"role": "user", "content": f"Create a strategic plan to address: {task}"}
                 ]
             }
-            
-            if "gpt-5" in model or "gpt-4.1" in model:
-                completion_params["max_completion_tokens"] = 50000
-            else:
-                completion_params["max_tokens"] = 50000
 
             response = await self.llm_client.chat.completions.create(**completion_params)
             strategic_plan = response.choices[0].message.content
@@ -594,11 +579,6 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
                     {"role": "user", "content": f"Database Schema:\n{db_metadata}\n\nUser Query: {task}\n\nSuggest relevant SQL queries."}
                 ]
             }
-            
-            if "gpt-5" in model or "gpt-4.1" in model:
-                completion_params["max_completion_tokens"] = 50000
-            else:
-                completion_params["max_tokens"] = 50000
 
             response = await self.llm_client.chat.completions.create(**completion_params)
             sql_suggestions = response.choices[0].message.content
@@ -922,11 +902,6 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
                     {"role": "user", "content": f"Existing Notes:\n{existing_notes_text}\n\nContent to create notes from:\n{content_to_note or task}\n\nCreate new notes without duplicating existing ones."}
                 ]
             }
-            
-            if "gpt-5" in model or "gpt-4.1" in model:
-                completion_params["max_completion_tokens"] = 50000
-            else:
-                completion_params["max_tokens"] = 50000
 
             response = await self.llm_client.chat.completions.create(**completion_params)
             notes = response.choices[0].message.content

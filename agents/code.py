@@ -84,8 +84,7 @@ Generate Python code to address this query."""
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
-                ],
-                max_tokens=50000
+                ]
             )
             
             code = response.choices[0].message.content

@@ -96,8 +96,7 @@ class QuestionAgent(BaseAgent):
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt}
-                    ],
-                    max_tokens=50000
+                    ]
                 )
                 question = response.choices[0].message.content
                 return self.create_success_result(

@@ -108,8 +108,7 @@ Please provide a clear, final answer to the query."""
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
-                ],
-                max_tokens=50000
+                ]
             )
             
             answer = response.choices[0].message.content

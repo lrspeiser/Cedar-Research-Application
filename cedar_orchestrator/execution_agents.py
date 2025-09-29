@@ -207,11 +207,6 @@ Format follow-up commands exactly as they should be run."""
                             {"role": "user", "content": f"Command: {shell_command}\n\nExecution Report:\n{execution_report}"}
                         ]
                     }
-                    if "gpt-5" in model:
-                        completion_params["max_completion_tokens"] = 50000
-                    else:
-                        completion_params["max_tokens"] = 50000
-
                     response = await self.llm_client.chat.completions.create(**completion_params)
                     analysis = response.choices[0].message.content.strip()
                     
@@ -447,11 +442,6 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
             }
             
             # GPT-5 models have different parameters
-            if "gpt-5" in model or "gpt-4.1" in model:
-                completion_params["max_completion_tokens"] = 50000
-            else:
-                completion_params["max_tokens"] = 50000
-
             # Add check for ambiguous queries that might need clarification
             if "unclear" in task.lower() or "ambiguous" in task.lower() or task.count('?') > 2:
                 return AgentResult(
@@ -690,12 +680,6 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
                 ]
             }
             
-            # GPT-5 models have different parameters
-            if "gpt-5" in model or "gpt-4.1" in model:
-                completion_params["max_completion_tokens"] = 50000
-            else:
-                completion_params["max_tokens"] = 50000
-
             response = await self.llm_client.chat.completions.create(**completion_params)
             
             generated_sql = response.choices[0].message.content.strip()

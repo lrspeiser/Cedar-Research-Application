@@ -940,32 +940,32 @@ def project_page_html(
         try { if (timeoutId) clearTimeout(timeoutId); } catch(_){}
         timeoutId = setTimeout(function(){
             if (!finalOrError) {
-            try {
-              // Create a new timeout bubble instead of rewriting existing one
-              var budgetS = Math.round(timeoutMs/1000);
-              var elapsedS = (function(){ try { return (( _now() - (wsStartMs||0) )/1000).toFixed(1); } catch(_) { return 'unknown'; } })();
-              var timeoutWrap = document.createElement('div');
-              timeoutWrap.className = 'msg system';
-              var timeoutMeta = document.createElement('div');
-              timeoutMeta.className = 'meta small';
-              timeoutMeta.innerHTML = "<span class='title' style='font-weight:600'>System</span>";
-              var timeoutBub = document.createElement('div');
-              timeoutBub.className = 'bubble system';
-              var timeoutCont = document.createElement('div');
-              timeoutCont.className = 'content';
-              timeoutCont.style.whiteSpace = 'pre-wrap';
-              timeoutCont.textContent = '[timeout] Took too long. Exceeded ' + budgetS + 's budget; elapsed ' + elapsedS + 's. Please try again.';
-              timeoutBub.appendChild(timeoutCont);
-              timeoutWrap.appendChild(timeoutMeta);
-              timeoutWrap.appendChild(timeoutBub);
-              if (msgs) msgs.appendChild(timeoutWrap);
-            } catch(_){ }
-            clearSpinner();
-            _clearRunningTimer(); // Stop timer on timeout
-            stepAdvance('timeout', null);
-            finalOrError = true; timedOut = true;
-            try { ws.close(); } catch(_){ }
-          }
+              try {
+                // Create a new timeout bubble instead of rewriting existing one
+                var budgetS = Math.round(timeoutMs/1000);
+                var elapsedS = (function(){ try { return (( _now() - (wsStartMs||0) )/1000).toFixed(1); } catch(_) { return 'unknown'; } })();
+                var timeoutWrap = document.createElement('div');
+                timeoutWrap.className = 'msg system';
+                var timeoutMeta = document.createElement('div');
+                timeoutMeta.className = 'meta small';
+                timeoutMeta.innerHTML = "<span class='title' style='font-weight:600'>System</span>";
+                var timeoutBub = document.createElement('div');
+                timeoutBub.className = 'bubble system';
+                var timeoutCont = document.createElement('div');
+                timeoutCont.className = 'content';
+                timeoutCont.style.whiteSpace = 'pre-wrap';
+                timeoutCont.textContent = '[timeout] Took too long. Exceeded ' + budgetS + 's budget; elapsed ' + elapsedS + 's. Please try again.';
+                timeoutBub.appendChild(timeoutCont);
+                timeoutWrap.appendChild(timeoutMeta);
+                timeoutWrap.appendChild(timeoutBub);
+                if (msgs) msgs.appendChild(timeoutWrap);
+              } catch(_){ }
+              clearSpinner();
+              _clearRunningTimer(); // Stop timer on timeout
+              stepAdvance('timeout', null);
+              finalOrError = true; timedOut = true;
+              try { ws.close(); } catch(_){ }
+            }
         }, timeoutMs);
       }
 

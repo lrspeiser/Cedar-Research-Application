@@ -300,12 +300,6 @@ Examples (Routing Guidance):
                 "messages": msgs
             }
             
-            # Use 50000 tokens for all models to allow full responses
-            if "gpt-5" in model or "gpt-4.1" in model:
-                completion_params["max_completion_tokens"] = 50000
-            else:
-                completion_params["max_tokens"] = 50000
-                
             # LLM API call with general retries (e.g., transient API/network issues)
             api_retries = 0
             api_max_retries = 3

@@ -99,8 +99,7 @@ Think through how to best handle this query."""
                     {"role": "user", "content": user_prompt}
                 ],
                 stream=True,
-                temperature=0.7,
-                max_tokens=2000
+                temperature=0.7
             )
             
             full_response = ""
