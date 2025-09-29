@@ -574,20 +574,21 @@ class ThinkerOrchestrator:
                 })
                 return
             if planning_decision.get('decision') == 'final':
-                # Send final response directly
-                final_text = planning_decision.get('final_answer') or planning_decision.get('user_facing_message') or ''
-                await websocket.send_json({
-                    "type": "final",
-                    "text": final_text or '',
-                    "json": {
-                        "role": 'The Chief Agent',
-                        "selected_agent": planning_decision.get('selected_agent'),
-                        "chief_reasoning": planning_decision.get('reasoning', ''),
-                        "method": "Chief Agent Decision (no agents)",
-                        "metadata": {}
-                    }
-                })
-                return
+                # Only finalize early if we have a substantive final answer
+                final_text = (planning_decision.get('final_answer') or planning_decision.get('user_facing_message') or '').strip()
+                if final_text and final_text.lower() != 'no results available':
+                    await websocket.send_json({
+                        "type": "final",
+                        "text": final_text,
+                        "json": {
+                            "role": 'The Chief Agent',
+                            "selected_agent": planning_decision.get('selected_agent'),
+                            "chief_reasoning": planning_decision.get('reasoning', ''),
+                            "method": "Chief Agent Decision (no agents)",
+                            "metadata": {}
+                        }
+                    })
+                    return
         except Exception:
             pass
 
