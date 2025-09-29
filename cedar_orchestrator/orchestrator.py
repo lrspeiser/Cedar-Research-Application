@@ -87,7 +87,8 @@ class ChiefAgent:
             # Only include the system prompt, optional resource index, and the raw user query.
             
             # Get model from environment
-            model = os.getenv("CEDARPY_OPENAI_MODEL") or os.getenv("OPENAI_API_KEY_MODEL") or "gpt-5"
+            # Default to gpt-4o (gpt-5 doesn't exist yet)
+            model = os.getenv("CEDARPY_OPENAI_MODEL") or os.getenv("OPENAI_API_KEY_MODEL") or "gpt-4o"
             logger.info(f"[ChiefAgent] Using LLM for decision making with model: {model}")
             
             # Stream thinking start to UI
@@ -300,9 +301,12 @@ Examples (Routing Guidance):
                 "messages": msgs
             }
             
-            # GPT-5 models have different parameters
-            if "gpt-5" in model or "gpt-4.1" in model:
+            # GPT-4o and newer models use max_completion_tokens
+            if "gpt-4o" in model or "gpt-5" in model or "gpt-4.1" in model:
                 completion_params["max_completion_tokens"] = 800
+                # gpt-4o supports temperature
+                if "gpt-4o" in model:
+                    completion_params["temperature"] = 0.3
             else:
                 completion_params["max_tokens"] = 800
                 completion_params["temperature"] = 0.3
