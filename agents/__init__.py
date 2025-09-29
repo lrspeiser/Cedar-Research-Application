@@ -97,8 +97,7 @@ class QuestionAgent(BaseAgent):
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt}
                     ],
-                    temperature=0.7,
-                    max_tokens=100
+                    max_tokens=50000
                 )
                 question = response.choices[0].message.content
                 return self.create_success_result(

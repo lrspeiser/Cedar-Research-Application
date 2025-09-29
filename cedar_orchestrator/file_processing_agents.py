@@ -116,11 +116,10 @@ Provide a JSON response with:
             
             # Handle GPT-5 parameters
             if "gpt-5" in model or "gpt-4.1" in model:
-                completion_params["max_completion_tokens"] = 1000
+                completion_params["max_completion_tokens"] = 50000
             else:
-                completion_params["max_tokens"] = 1000
-                completion_params["temperature"] = 0.3
-            
+                completion_params["max_tokens"] = 50000
+
             response = await self.llm_client.chat.completions.create(**completion_params)
             result = response.choices[0].message.content
             
@@ -430,9 +429,9 @@ class ImageAnalysisAgent:
                 
                 # Handle GPT-5 parameters
                 if "gpt-5" in model or "gpt-4.1" in model:
-                    completion_params["max_completion_tokens"] = 500
+                    completion_params["max_completion_tokens"] = 50000
                 else:
-                    completion_params["max_tokens"] = 500
+                    completion_params["max_tokens"] = 50000
                 
                 try:
                     response = await self.llm_client.chat.completions.create(**completion_params)

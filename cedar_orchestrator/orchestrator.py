@@ -300,16 +300,11 @@ Examples (Routing Guidance):
                 "messages": msgs
             }
             
-            # GPT-5 is a reasoning model that uses tokens for thinking + output
-            # Need much higher token limit: reasoning tokens + actual response
-            if "gpt-5" in model:
-                # GPT-5 needs more tokens: ~800 for reasoning + ~1500 for JSON response
-                completion_params["max_completion_tokens"] = 3000
-            elif "gpt-4.1" in model:
-                completion_params["max_completion_tokens"] = 800
+            # Use 50000 tokens for all models to allow full responses
+            if "gpt-5" in model or "gpt-4.1" in model:
+                completion_params["max_completion_tokens"] = 50000
             else:
-                completion_params["max_tokens"] = 800
-                completion_params["temperature"] = 0.3
+                completion_params["max_tokens"] = 50000
                 
             # LLM API call with general retries (e.g., transient API/network issues)
             api_retries = 0
@@ -452,7 +447,7 @@ Examples (Routing Guidance):
                         pass
 
                     try:
-                        repair_resp = await self.llm_client.chat.completions.create(model=model, messages=repair_msgs, max_completion_tokens=800)
+                        repair_resp = await self.llm_client.chat.completions.create(model=model, messages=repair_msgs, max_completion_tokens=50000)
                         repaired = repair_resp.choices[0].message.content
                         decision_data = _validate_and_normalize(json.loads(repaired))
                         break

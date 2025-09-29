@@ -109,8 +109,7 @@ Please provide a clear, final answer to the query."""
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                temperature=0.7,
-                max_tokens=500
+                max_tokens=50000
             )
             
             answer = response.choices[0].message.content

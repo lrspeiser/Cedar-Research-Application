@@ -208,11 +208,10 @@ Format follow-up commands exactly as they should be run."""
                         ]
                     }
                     if "gpt-5" in model:
-                        completion_params["max_completion_tokens"] = 800
+                        completion_params["max_completion_tokens"] = 50000
                     else:
-                        completion_params["max_tokens"] = 800
-                        completion_params["temperature"] = 0.2
-                    
+                        completion_params["max_tokens"] = 50000
+
                     response = await self.llm_client.chat.completions.create(**completion_params)
                     analysis = response.choices[0].message.content.strip()
                     
@@ -449,12 +448,10 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
             
             # GPT-5 models have different parameters
             if "gpt-5" in model or "gpt-4.1" in model:
-                completion_params["max_completion_tokens"] = 500
-                # GPT-5 doesn't support custom temperature
+                completion_params["max_completion_tokens"] = 50000
             else:
-                completion_params["max_tokens"] = 500
-                completion_params["temperature"] = 0.1
-            
+                completion_params["max_tokens"] = 50000
+
             # Add check for ambiguous queries that might need clarification
             if "unclear" in task.lower() or "ambiguous" in task.lower() or task.count('?') > 2:
                 return AgentResult(
@@ -612,7 +609,6 @@ Model: {model if 'model' in locals() else 'Not determined'}"""
                 summary=f"Failed to generate code - {error_type}: {str(e)[:100]}"
             )
 
-
 class SQLAgent:
     """Agent that uses LLM to write and execute SQL queries, create databases, and manage schemas"""
     
@@ -696,11 +692,10 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
             
             # GPT-5 models have different parameters
             if "gpt-5" in model or "gpt-4.1" in model:
-                completion_params["max_completion_tokens"] = 300
+                completion_params["max_completion_tokens"] = 50000
             else:
-                completion_params["max_tokens"] = 300
-                completion_params["temperature"] = 0.1
-                
+                completion_params["max_tokens"] = 50000
+
             response = await self.llm_client.chat.completions.create(**completion_params)
             
             generated_sql = response.choices[0].message.content.strip()
@@ -766,8 +761,6 @@ Suggested Next Steps:
                 method="Error",
                 explanation=f"SQL generation error: {str(e)[:100]}"
             )
-
-
 
 # Export the execution agents
 __all__ = ['AgentResult', 'ShellAgent', 'CodeAgent', 'SQLAgent']

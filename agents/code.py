@@ -85,8 +85,7 @@ Generate Python code to address this query."""
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                temperature=0.3,
-                max_tokens=1000
+                max_tokens=50000
             )
             
             code = response.choices[0].message.content

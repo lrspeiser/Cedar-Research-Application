@@ -293,11 +293,10 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
             }
             
             if "gpt-5" in model or "gpt-4.1" in model:
-                completion_params["max_completion_tokens"] = 1500
+                completion_params["max_completion_tokens"] = 50000
             else:
-                completion_params["max_tokens"] = 1500
-                completion_params["temperature"] = 0.3
-            
+                completion_params["max_tokens"] = 50000
+
             response = await self.llm_client.chat.completions.create(**completion_params)
             derivation = response.choices[0].message.content
             
@@ -388,11 +387,10 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
             }
             
             if "gpt-5" in model or "gpt-4.1" in model:
-                completion_params["max_completion_tokens"] = 1000
+                completion_params["max_completion_tokens"] = 50000
             else:
-                completion_params["max_tokens"] = 1000
-                completion_params["temperature"] = 0.5
-            
+                completion_params["max_tokens"] = 50000
+
             response = await self.llm_client.chat.completions.create(**completion_params)
             research_results = response.choices[0].message.content
             
@@ -481,11 +479,10 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
             }
             
             if "gpt-5" in model or "gpt-4.1" in model:
-                completion_params["max_completion_tokens"] = 1200
+                completion_params["max_completion_tokens"] = 50000
             else:
-                completion_params["max_tokens"] = 1200
-                completion_params["temperature"] = 0.4
-            
+                completion_params["max_tokens"] = 50000
+
             response = await self.llm_client.chat.completions.create(**completion_params)
             strategic_plan = response.choices[0].message.content
             
@@ -599,11 +596,10 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
             }
             
             if "gpt-5" in model or "gpt-4.1" in model:
-                completion_params["max_completion_tokens"] = 800
+                completion_params["max_completion_tokens"] = 50000
             else:
-                completion_params["max_tokens"] = 800
-                completion_params["temperature"] = 0.3
-            
+                completion_params["max_tokens"] = 50000
+
             response = await self.llm_client.chat.completions.create(**completion_params)
             sql_suggestions = response.choices[0].message.content
             
@@ -722,9 +718,9 @@ class FileAgent:
                                         ]
                                     }
                                     if "gpt-5" in model:
-                                        completion_params["max_completion_tokens"] = 100
+                                        completion_params["max_completion_tokens"] = 50000
                                     else:
-                                        completion_params["max_tokens"] = 100
+                                        completion_params["max_tokens"] = 50000
                                     
                                     response = await self.llm_client.chat.completions.create(**completion_params)
                                     ai_description = response.choices[0].message.content.strip()
@@ -928,11 +924,10 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
             }
             
             if "gpt-5" in model or "gpt-4.1" in model:
-                completion_params["max_completion_tokens"] = 600
+                completion_params["max_completion_tokens"] = 50000
             else:
-                completion_params["max_tokens"] = 600
-                completion_params["temperature"] = 0.3
-            
+                completion_params["max_tokens"] = 50000
+
             response = await self.llm_client.chat.completions.create(**completion_params)
             notes = response.choices[0].message.content
             
@@ -963,8 +958,6 @@ Why: Created structured notes from the provided content, avoiding duplication wi
                 method="Error",
                 explanation="Note creation error"
             )
-
-
 
 # Export the specialized agents
 __all__ = ['MathAgent', 'ResearchAgent', 'StrategyAgent', 'DataAgent', 'NotesAgent', 'FileAgent']
