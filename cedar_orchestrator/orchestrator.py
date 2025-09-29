@@ -300,8 +300,12 @@ Examples (Routing Guidance):
                 "messages": msgs
             }
             
-            # GPT-5 models have different parameters
-            if "gpt-5" in model or "gpt-4.1" in model:
+            # GPT-5 is a reasoning model that uses tokens for thinking + output
+            # Need much higher token limit: reasoning tokens + actual response
+            if "gpt-5" in model:
+                # GPT-5 needs more tokens: ~800 for reasoning + ~1500 for JSON response
+                completion_params["max_completion_tokens"] = 3000
+            elif "gpt-4.1" in model:
                 completion_params["max_completion_tokens"] = 800
             else:
                 completion_params["max_tokens"] = 800
