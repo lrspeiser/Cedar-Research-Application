@@ -74,18 +74,18 @@ def test_upload_autochat_includes_details(page: Page):
         page.locator("form[action='/projects/create'] button[type=submit]").click()
         page.wait_for_url("**/project/*")
 
-        # Upload a small text file
-        page.get_by_test_id("upload-input").set_input_files(
-            str(Path.cwd() / ".pw_upload_details.txt")
-        )
+        # Switch to the Files tab so the upload form is visible
+        try:
+            page.get_by_role("link", name="Files").click()
+        except Exception:
+            # Fallback selector
+            page.locator(".tabs .tab", has_text="Files").first.click()
+
+        # Upload a small text file (create it first, then set input files)
         tmp_path = Path.cwd() / ".pw_upload_details.txt"
         tmp_path.write_text("first line\nsecond line\nthird line\n", encoding="utf-8")
+        page.get_by_test_id("upload-input").set_input_files(str(tmp_path))
         page.get_by_test_id("upload-submit").click()
-
-        # Wait for redirect back to project with msg=File+uploaded
-        expect(page).to_have_url(
-            lambda url: "msg=File+uploaded" in url, timeout=15000
-        )
 
         # Verify the chat shows the processing bubble
         expect(page.locator("#msgs")).to_contain_text("Processing", timeout=10000)

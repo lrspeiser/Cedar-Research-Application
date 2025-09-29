@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Agents route - displays information about the AI agents and their prompts.
 """
@@ -73,7 +74,7 @@ def register_agents_route(app: FastAPI):
                         "branch_name": b.name,
                         "thread_id": getattr(th, 'id', None),
                         "thread_title": getattr(th, 'title', None),
-                        "user_query": (user_prompt[:500] + ("…" if user_prompt and len(user_prompt) > 500 else "")) if user_prompt else None,
+                        "user_query": (user_prompt[:500] + ("..." if user_prompt and len(user_prompt) > 500 else "")) if user_prompt else None,
                         "sqlite_path": sqlite_path,
                         "uploads_base": uploads_base,
                         "files_root": files_root,
@@ -90,9 +91,9 @@ def register_agents_route(app: FastAPI):
                       <div class='small muted'>This preview shows what the orchestrator passes to agents when project/thread context is present.</div>
                       <div style='display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:12px; margin-top:12px'>
                         <div>
-                          <div><strong>Project:</strong> <a href='{escape(project_link)}'>#{proj.id} – {escape(proj.title)}</a></div>
-                          <div><strong>Branch:</strong> #{b.id} – {escape(b.name)}</div>
-                          <div><strong>Thread:</strong> {('#'+str(th.id)+' – '+escape(th.title)) if th else '(none)'} </div>
+<div><strong>Project:</strong> <a href='{escape(project_link)}'>#{proj.id} - {escape(proj.title)}</a></div>
+<div><strong>Branch:</strong> #{b.id} - {escape(b.name)}</div>
+<div><strong>Thread:</strong> {('#'+str(th.id)+' - '+escape(th.title)) if th else '(none)'} </div>
                           <div><strong>SQLite DB:</strong> <code>{escape(sqlite_path or '')}</code></div>
                           <div><strong>Uploads base:</strong> <code>{escape(uploads_base)}</code></div>
                         </div>
@@ -113,7 +114,7 @@ def register_agents_route(app: FastAPI):
             context_card = ""
         
         # Define agent information with their system prompts
-        # ⚠️ IMPORTANT: When updating agent prompts in orchestrator.py, ALSO UPDATE HERE!
+# IMPORTANT: When updating agent prompts in orchestrator.py, ALSO UPDATE HERE!
         # This page should always reflect the actual prompts being used by the agents.
         agents = [
             {
@@ -123,7 +124,7 @@ def register_agents_route(app: FastAPI):
                 "is_primary": True,
                 "prompt": """You are the Chief Agent - an intelligent orchestrator who analyzes queries and deploys the right agents to get confident, accurate answers.
 
-🎯 YOUR PRIMARY DIRECTIVE:
+TARGET: YOUR PRIMARY DIRECTIVE:
 ASSESS the query complexity, then deploy AS MANY agents as needed to achieve HIGH CONFIDENCE in the answer.
 
 CURRENT ITERATION STATUS:
@@ -268,8 +269,8 @@ OUTPUT:
 - Be specific; avoid abstract or generic claims without sources
 
 FORMAT:
-- Source 1: [URL/Title] — Key findings
-- Source 2: [URL/Title] — Key findings
+- Source 1: [URL/Title] - Key findings
+- Source 2: [URL/Title] - Key findings
 - ...
 
 Then provide a concise, well-cited summary.
@@ -345,7 +346,7 @@ FORMAT:
 - Title
 - Timestamp
 - Tags
-- Key points (bullets) — be specific and concrete
+- Key points (bullets) - be specific and concrete
 - Action items (optional)
 """
             },
@@ -456,23 +457,23 @@ OUTPUT:
           <div class='small muted'>Realistic prompts and which agent(s) the Chief Agent should deploy.</div>
           <div style='display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:12px; margin-top:12px'>
             <div>
-              <h4>🔍 ResearchAgent</h4>
+<h4>ResearchAgent</h4>
               <ul>
-                <li>Explain MOND at a high level and contrast it with the dark-matter paradigm; include 2–3 citations.</li>
+                <li>Explain MOND at a high level and contrast it with the dark-matter paradigm; include 2-3 citations.</li>
                 <li>What are the main differences between L1 and L2 regularization in ML? Cite authoritative sources.</li>
-                <li>Summarize the latest (past 12 months) changes to Apple’s App Store policy and link to the official page.</li>
+                <li>Summarize the latest (past 12 months) changes to Apple's App Store policy and link to the official page.</li>
               </ul>
             </div>
             <div>
-              <h4>🧮 MathAgent</h4>
+              <h4>MathAgent</h4>
               <ul>
-                <li>Derive the closed-form solution of the logistic differential equation from dP/dt = rP(1 − P/K).</li>
+                <li>Derive the closed-form solution of the logistic differential equation from dP/dt = rP(1 - P/K).</li>
                 <li>Prove that the harmonic series diverges and include the reasoning steps.</li>
-                <li>From Maxwell’s equations, derive the wave equation for E in vacuum and state the assumptions.</li>
+                <li>From Maxwell's equations, derive the wave equation for E in vacuum and state the assumptions.</li>
               </ul>
             </div>
             <div>
-              <h4>💻 CodeAgent</h4>
+              <h4>CodeAgent</h4>
               <ul>
                 <li>Write a short Python script that reads every CSV in a folder and prints row counts per file (no third-party libs).</li>
                 <li>Simulate a simple random walk with 1,000,000 steps and report the mean and variance; print runtime too.</li>
@@ -480,7 +481,7 @@ OUTPUT:
               </ul>
             </div>
             <div>
-              <h4>🖥️ ShellAgent</h4>
+              <h4>ShellAgent</h4>
               <ul>
                 <li>Find all .py files changed in the last 24 hours under src/ and show the five largest.</li>
                 <li>Search recursively under logs/ for the phrase 'rate limit exceeded' with 2 lines of context and count hits by hour.</li>
@@ -488,7 +489,7 @@ OUTPUT:
               </ul>
             </div>
             <div>
-              <h4>🗄️ SQLAgent</h4>
+              <h4>SQLAgent</h4>
               <ul>
                 <li>Create a SQLite table daily_metrics (project_id INT, day DATE, requests INT), and add an index on (project_id, day).</li>
                 <li>Write a SQL query that lists the top 10 projects by total file size from the files table.</li>
@@ -496,23 +497,23 @@ OUTPUT:
               </ul>
             </div>
             <div>
-              <h4>📋 StrategyAgent</h4>
+              <h4>StrategyAgent</h4>
               <ul>
-                <li>Draft a 30‑day rollout plan to migrate our monolith to microservices: milestones, owners, risks, rollback.</li>
+                <li>Draft a 30-day rollout plan to migrate our monolith to microservices: milestones, owners, risks, rollback.</li>
                 <li>Create an incident response playbook for our API (pager rotations, comms templates, decision tree).</li>
                 <li>Design a partner onboarding plan for a new SDK: channels, KPIs, weekly milestones, assets needed.</li>
               </ul>
             </div>
             <div>
-              <h4>💾 DataAgent</h4>
+              <h4>DataAgent</h4>
               <ul>
-                <li>Given users/sessions/purchases, propose indexes and write queries to compute weekly signup→first purchase conversion.</li>
+                <li>Given users/sessions/purchases, propose indexes and write queries to compute weekly signup->first purchase conversion.</li>
                 <li>Detect and list orphaned purchases (user_id not in users), then propose a cleanup strategy.</li>
                 <li>Design a reporting table for daily LLM token usage cost per project, including schema and refresh cadence.</li>
               </ul>
             </div>
             <div>
-              <h4>📝 NotesAgent</h4>
+              <h4>NotesAgent</h4>
               <ul>
                 <li>Turn these raw meeting bullets into structured notes with headings and tags; avoid duplicating existing notes.</li>
                 <li>Merge these three short summaries into one actionable note with next steps and owners.</li>
@@ -520,9 +521,9 @@ OUTPUT:
               </ul>
             </div>
             <div>
-              <h4>📁 FileAgent</h4>
+              <h4>FileAgent</h4>
               <ul>
-                <li>Download https://example.org/data/benchmarks.pdf into this project and extract title, page count, and a 2‑sentence abstract.</li>
+                <li>Download https://example.org/data/benchmarks.pdf into this project and extract title, page count, and a 2-sentence abstract.</li>
                 <li>Analyze this image at /Users/me/Downloads/plot.png and detect the primary language of any text on it.</li>
                 <li>Fetch robots.txt from https://example.com, save it to the project, and report the Disallow rules.</li>
               </ul>
