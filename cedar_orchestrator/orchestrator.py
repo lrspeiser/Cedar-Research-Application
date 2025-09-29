@@ -520,6 +520,9 @@ class ThinkerOrchestrator:
     async def orchestrate(self, message: str, websocket, iteration: int = 0, previous_results: List[AgentResult] = None, project_id: int = None, branch_id: int = None, db_session = None, conversation_history: Optional[str] = None):
         """Full orchestration process controlled by Chief Agent decisions with optional notes persistence"""
         orchestration_start = time.time()
+        # Ensure optional context vars exist to avoid NameError
+        file_id = None
+        dataset_id = None
         logger.info("="*80)
         logger.info(f"[ORCHESTRATOR] Starting orchestration for message: {message} (iteration: {iteration})")
         logger.info("="*80)
