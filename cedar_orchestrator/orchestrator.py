@@ -121,7 +121,81 @@ You MUST respond in this EXACT JSON format:
   "selected_agent": "Single agent name OR 'combined' for multiple agents",
   "reasoning": "Why these agents will give us a CONFIDENT answer: 'For MOND theory, I need Research Agent for papers AND Notes Agent for documentation'",
   "confidence_strategy": "How many agents and why: 'Using 3 agents for cross-validation' or 'Single agent sufficient for simple calc'"
-}}"""
+}}
+
+Examples (Routing Guidance):
+- ResearchAgent (explanations with citations)
+  • User: "Explain MOND at a high level and contrast it with the dark-matter paradigm; include 2–3 citations."
+    Agents to use: [ResearchAgent]
+  • User: "What are the main differences between L1 and L2 regularization in ML? Cite authoritative sources."
+    Agents to use: [ResearchAgent]
+  • User: "Summarize the latest (past 12 months) changes to Apple’s App Store policy and link to the official page."
+    Agents to use: [ResearchAgent]
+
+- MathAgent (derivations/proofs)
+  • User: "Derive the closed-form solution of the logistic differential equation from dP/dt = rP(1 − P/K)."
+    Agents to use: [MathAgent]
+  • User: "Prove that the harmonic series diverges and include the reasoning steps."
+    Agents to use: [MathAgent]
+  • User: "From Maxwell’s equations, derive the wave equation for E in vacuum and state the assumptions."
+    Agents to use: [MathAgent]
+
+- CodeAgent (generate/run code)
+  • User: "Write a short Python script that reads every CSV in a folder and prints row counts per file (no third-party libs)."
+    Agents to use: [CodeAgent]
+  • User: "Simulate a simple random walk with 1,000,000 steps and report the mean and variance; print runtime too."
+    Agents to use: [CodeAgent]
+  • User: "Parse this nginx access log sample to extract unique IPs and counts, then output a sorted CSV."
+    Agents to use: [CodeAgent]
+
+- ShellAgent (file search, grep, disk usage)
+  • User: "Find all .py files changed in the last 24 hours under src/ and show the five largest."
+    Agents to use: [ShellAgent]
+  • User: "Search recursively under logs/ for the phrase 'rate limit exceeded' with 2 lines of context and count hits by hour."
+    Agents to use: [ShellAgent]
+  • User: "Show disk usage for ~/CedarPyData and list subfolders larger than 500MB."
+    Agents to use: [ShellAgent]
+
+- SQLAgent (DDL/DML/queries)
+  • User: "Create a SQLite table daily_metrics (project_id INT, day DATE, requests INT), and add an index on (project_id, day)."
+    Agents to use: [SQLAgent]
+  • User: "Write a SQL query that lists the top 10 projects by total file size from the files table."
+    Agents to use: [SQLAgent]
+  • User: "Add a NOT NULL TEXT column ai_category to files with default 'uncategorized', and backfill existing nulls."
+    Agents to use: [SQLAgent]
+
+- StrategyAgent (plans & playbooks)
+  • User: "Draft a 30‑day rollout plan to migrate our monolith to microservices: milestones, owners, risks, rollback."
+    Agents to use: [StrategyAgent]
+  • User: "Create an incident response playbook for our API (pager rotations, comms templates, decision tree)."
+    Agents to use: [StrategyAgent]
+  • User: "Design a partner onboarding plan for a new SDK: channels, KPIs, weekly milestones, assets needed."
+    Agents to use: [StrategyAgent]
+
+- DataAgent (schema analysis, reporting)
+  • User: "Given users/sessions/purchases, propose indexes and write queries to compute weekly signup→first purchase conversion."
+    Agents to use: [DataAgent]
+  • User: "Detect and list orphaned purchases (user_id not in users), then propose a cleanup strategy."
+    Agents to use: [DataAgent]
+  • User: "Design a reporting table for daily LLM token usage cost per project, including schema and refresh cadence."
+    Agents to use: [DataAgent]
+
+- NotesAgent (create/merge notes)
+  • User: "Turn these raw meeting bullets into structured notes with headings and tags; avoid duplicating existing notes."
+    Agents to use: [NotesAgent]
+  • User: "Merge these three short summaries into one actionable note with next steps and owners."
+    Agents to use: [NotesAgent]
+  • User: "Keep a running note for this thread and add a timestamped key-points section after each answer."
+    Agents to use: [NotesAgent]
+
+- FileAgent (download/analyze files)
+  • User: "Download https://example.org/data/benchmarks.pdf into this project and extract title, page count, and a 2‑sentence abstract."
+    Agents to use: [FileAgent]
+  • User: "Analyze this image at /Users/me/Downloads/plot.png and detect the primary language of any text on it."
+    Agents to use: [FileAgent]
+  • User: "Fetch robots.txt from https://example.com, save it to the project, and report the Disallow rules."
+    Agents to use: [FileAgent]
+"""
 
             # Ask Chief Agent to review and decide
             # Build messages, including resource index if provided

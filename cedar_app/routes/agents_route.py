@@ -449,16 +449,97 @@ OUTPUT:
             agent_cards.append(card_html)
         
         # Build the page body
+        routing_examples = """
+        <div class='card' style='margin-bottom: 24px; background:#fff; border-color:#e5e7eb;'>
+          <h3>Routing Examples (Chief Agent)</h3>
+          <div class='small muted'>Realistic prompts and which agent(s) the Chief Agent should deploy.</div>
+          <div style='display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:12px; margin-top:12px'>
+            <div>
+              <h4>🔍 ResearchAgent</h4>
+              <ul>
+                <li>Explain MOND at a high level and contrast it with the dark-matter paradigm; include 2–3 citations.</li>
+                <li>What are the main differences between L1 and L2 regularization in ML? Cite authoritative sources.</li>
+                <li>Summarize the latest (past 12 months) changes to Apple’s App Store policy and link to the official page.</li>
+              </ul>
+            </div>
+            <div>
+              <h4>🧮 MathAgent</h4>
+              <ul>
+                <li>Derive the closed-form solution of the logistic differential equation from dP/dt = rP(1 − P/K).</li>
+                <li>Prove that the harmonic series diverges and include the reasoning steps.</li>
+                <li>From Maxwell’s equations, derive the wave equation for E in vacuum and state the assumptions.</li>
+              </ul>
+            </div>
+            <div>
+              <h4>💻 CodeAgent</h4>
+              <ul>
+                <li>Write a short Python script that reads every CSV in a folder and prints row counts per file (no third-party libs).</li>
+                <li>Simulate a simple random walk with 1,000,000 steps and report the mean and variance; print runtime too.</li>
+                <li>Parse this nginx access log sample to extract unique IPs and counts, then output a sorted CSV.</li>
+              </ul>
+            </div>
+            <div>
+              <h4>🖥️ ShellAgent</h4>
+              <ul>
+                <li>Find all .py files changed in the last 24 hours under src/ and show the five largest.</li>
+                <li>Search recursively under logs/ for the phrase 'rate limit exceeded' with 2 lines of context and count hits by hour.</li>
+                <li>Show disk usage for ~/CedarPyData and list subfolders larger than 500MB.</li>
+              </ul>
+            </div>
+            <div>
+              <h4>🗄️ SQLAgent</h4>
+              <ul>
+                <li>Create a SQLite table daily_metrics (project_id INT, day DATE, requests INT), and add an index on (project_id, day).</li>
+                <li>Write a SQL query that lists the top 10 projects by total file size from the files table.</li>
+                <li>Add a NOT NULL TEXT column ai_category to files with default 'uncategorized', and backfill existing nulls.</li>
+              </ul>
+            </div>
+            <div>
+              <h4>📋 StrategyAgent</h4>
+              <ul>
+                <li>Draft a 30‑day rollout plan to migrate our monolith to microservices: milestones, owners, risks, rollback.</li>
+                <li>Create an incident response playbook for our API (pager rotations, comms templates, decision tree).</li>
+                <li>Design a partner onboarding plan for a new SDK: channels, KPIs, weekly milestones, assets needed.</li>
+              </ul>
+            </div>
+            <div>
+              <h4>💾 DataAgent</h4>
+              <ul>
+                <li>Given users/sessions/purchases, propose indexes and write queries to compute weekly signup→first purchase conversion.</li>
+                <li>Detect and list orphaned purchases (user_id not in users), then propose a cleanup strategy.</li>
+                <li>Design a reporting table for daily LLM token usage cost per project, including schema and refresh cadence.</li>
+              </ul>
+            </div>
+            <div>
+              <h4>📝 NotesAgent</h4>
+              <ul>
+                <li>Turn these raw meeting bullets into structured notes with headings and tags; avoid duplicating existing notes.</li>
+                <li>Merge these three short summaries into one actionable note with next steps and owners.</li>
+                <li>Keep a running note for this thread and add a timestamped key-points section after each answer.</li>
+              </ul>
+            </div>
+            <div>
+              <h4>📁 FileAgent</h4>
+              <ul>
+                <li>Download https://example.org/data/benchmarks.pdf into this project and extract title, page count, and a 2‑sentence abstract.</li>
+                <li>Analyze this image at /Users/me/Downloads/plot.png and detect the primary language of any text on it.</li>
+                <li>Fetch robots.txt from https://example.com, save it to the project, and report the Disallow rules.</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+        """
+
         body = f"""
         <h1>AI Agents</h1>
-        <div class="muted" style="margin-bottom: 12px;">
+        <div class=\"muted\" style=\"margin-bottom: 12px;\">
             These specialized agents work together to process your requests in the Cedar chat system.
             Each agent has a specific role and uses a tailored prompt to provide the best possible response.
         </div>
         {context_card}
-        <div class="card" style="margin-bottom: 24px; background: #ecfdf5; border-color: #86efac;">
-            <h3 style="color: #16a34a;">Agent Capabilities Summary</h3>
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 12px; margin-top: 12px;">
+        <div class=\"card\" style=\"margin-bottom: 24px; background: #ecfdf5; border-color: #86efac;\">
+            <h3 style=\"color: #16a34a;\">Agent Capabilities Summary</h3>
+            <div style=\"display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 12px; margin-top: 12px;\">
                 <div><strong>💻 Coding Agent:</strong> Python code generation & execution</div>
                 <div><strong>🖥️ Shell Executor:</strong> System commands & package installation</div>
                 <div><strong>🗄️ SQL Agent:</strong> Database creation & management</div>
@@ -472,20 +553,20 @@ OUTPUT:
                 <div><strong>👁️ Image Analysis:</strong> Vision API analysis</div>
             </div>
         </div>
-        
-        <div style="max-width: 900px;">
+        {routing_examples}
+        <div style=\"max-width: 900px;\">
             {''.join(agent_cards)}
         </div>
         
-        <div class="card" style="margin-top: 24px; background: #f0f9ff; border-color: #bae6fd;">
-            <h3 style="color: #0369a1;">How Agents Work</h3>
+        <div class=\"card\" style=\"margin-top: 24px; background: #f0f9ff; border-color: #bae6fd;\">
+            <h3 style=\"color: #0369a1;\">How Agents Work</h3>
             <ol>
                 <li><strong>Orchestrator receives your message</strong> - The system analyzes your request and determines which agents to engage</li>
                 <li><strong>Specialized agents process in parallel</strong> - Multiple sub-agents (Coding Agent, Shell Executor, SQL Agent, etc.) work simultaneously</li>
                 <li><strong>Results are collected</strong> - Each agent provides its answer with confidence score and method used</li>
                 <li><strong>Chief Agent reviews all responses</strong> - The Chief Agent analyzes all sub-agent results for accuracy and completeness</li>
                 <li><strong>Decision is made</strong> - Chief Agent either:
-                    <ul style="margin-top: 4px;">
+                    <ul style=\"margin-top: 4px;\">
                         <li>Selects the best individual response</li>
                         <li>Combines multiple responses into a comprehensive answer</li>
                         <li>Requests additional processing with specific guidance</li>
@@ -493,7 +574,7 @@ OUTPUT:
                 </li>
                 <li><strong>Final answer is delivered</strong> - The approved response is formatted and presented to you</li>
             </ol>
-            <p class="small muted" style="margin-top: 12px;">
+            <p class=\"small muted\" style=\"margin-top: 12px;\">
                 Tip: Add <code>?project_id=1&branch_id=1&thread_id=2</code> to this URL to preview the live context payload.
             </p>
         </div>
