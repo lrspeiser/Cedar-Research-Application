@@ -364,12 +364,23 @@ Examples (Routing Guidance):
                     except Exception:
                         pass
             
+            # Log the full response object for debugging
+            logger.info(f"[ChiefAgent] Raw API response object: {response}")
+            logger.info(f"[ChiefAgent] Response choices count: {len(response.choices)}")
+            logger.info(f"[ChiefAgent] Response finish_reason: {response.choices[0].finish_reason if response.choices else 'NO_CHOICES'}")
+            
             chief_response = response.choices[0].message.content
+            # Handle None/empty response
+            if chief_response is None or chief_response == "":
+                logger.error(f"[ChiefAgent] EMPTY RESPONSE from API! finish_reason={response.choices[0].finish_reason}")
+                logger.error(f"[ChiefAgent] Full message object: {response.choices[0].message}")
+                chief_response = ""
+            
             # Log full response for debugging JSON issues
             if len(chief_response) <= 500:
-                logger.info(f"[ChiefAgent] Response: {chief_response}")
+                logger.info(f"[ChiefAgent] Response content: {chief_response}")
             else:
-                logger.info(f"[ChiefAgent] Response (truncated): {chief_response[:500]}...")
+                logger.info(f"[ChiefAgent] Response content (truncated): {chief_response[:500]}...")
             
             # Parse JSON response with LLM repair retries on failure
             def _validate_and_normalize(d: Dict[str, Any]) -> Dict[str, Any]:
