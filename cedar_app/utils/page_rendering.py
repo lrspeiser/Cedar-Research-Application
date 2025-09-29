@@ -2235,7 +2235,7 @@ def project_page_html(
       if (window.__codeCtx && window.__codeCtx.active){
         var t = document.getElementById('chatInput'); if (t){
           var txt = String(t.value||''); var lang = window.__codeCtx.language || 'text'; var full = window.__codeCtx.fullCode || '';
-          if (full){ var re = /```([a-zA-Z0-9_-]*)[\s\S]*?```/; if (re.test(txt)) { txt = txt.replace(re, '```' + lang + '\n' + full + '\n```'); } else { txt += '\n\n```' + lang + '\n' + full + '\n```\n'; } t.value = txt; }
+          if (full){ var re = /```([a-zA-Z0-9_-]*)[\s\S]*?```/; var rep = '```' + lang + '\\n' + full + '\\n```'; if (re.test(txt)) { txt = txt.replace(re, rep); } else { txt += '\\n\\n' + rep + '\\n'; } t.value = txt; }
         }
         window.__codeCtx.active = false;
       }

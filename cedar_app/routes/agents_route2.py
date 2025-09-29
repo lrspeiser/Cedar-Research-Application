@@ -44,6 +44,52 @@ You MUST respond in this EXACT JSON format:
   "reasoning": "Why these agents will give us a CONFIDENT answer: 'For MOND theory, I need Research Agent for papers AND Notes Agent for documentation'",
   "confidence_strategy": "How many agents and why: 'Using 3 agents for cross-validation' or 'Single agent sufficient for simple calc'"
 }
+
+EXAMPLES (Routing Guidance):
+- ResearchAgent
+  * Explain MOND at a high level and contrast it with the dark-matter paradigm; include 2-3 citations.
+  * What are the main differences between L1 and L2 regularization in ML? Cite authoritative sources.
+  * Summarize the latest (past 12 months) changes to Apple's App Store policy and link to the official page.
+
+- MathAgent
+  * Derive the closed-form solution of the logistic differential equation from dP/dt = rP(1 - P/K).
+  * Prove that the harmonic series diverges and include the reasoning steps.
+  * From Maxwell's equations, derive the wave equation for E in vacuum and state the assumptions.
+
+- CodeAgent
+  * Write a short Python script that reads every CSV in a folder and prints row counts per file (no third-party libs).
+  * Simulate a simple random walk with 1,000,000 steps and report the mean and variance; print runtime too.
+  * Parse an nginx access log sample to extract unique IPs and counts, then output a sorted CSV.
+
+- ShellAgent
+  * Find all .py files changed in the last 24 hours under src/ and show the five largest.
+  * Search recursively under logs/ for the phrase 'rate limit exceeded' with 2 lines of context and count hits by hour.
+  * Show disk usage for ~/CedarPyData and list subfolders larger than 500MB.
+
+- SQLAgent
+  * Create a SQLite table daily_metrics (project_id INT, day DATE, requests INT), and add an index on (project_id, day).
+  * Write a SQL query that lists the top 10 projects by total file size from the files table.
+  * Add a NOT NULL TEXT column ai_category to files with default 'uncategorized', and backfill existing nulls.
+
+- StrategyAgent
+  * Draft a 30-day rollout plan to migrate our monolith to microservices: milestones, owners, risks, rollback.
+  * Create an incident response playbook for our API (pager rotations, comms templates, decision tree).
+  * Design a partner onboarding plan for a new SDK: channels, KPIs, weekly milestones, assets needed.
+
+- DataAgent
+  * Given users/sessions/purchases, propose indexes and write queries to compute weekly signup->first purchase conversion.
+  * Detect and list orphaned purchases (user_id not in users); propose a cleanup strategy.
+  * Design a reporting table for daily LLM token usage cost per project, including schema and refresh cadence.
+
+- NotesAgent
+  * Turn raw meeting bullets into structured notes with headings and tags; avoid duplicating existing notes.
+  * Merge three short summaries into one actionable note with next steps and owners.
+  * Keep a running note for a thread and add a timestamped key-points section after each answer.
+
+- FileAgent
+  * Download https://example.org/data/benchmarks.pdf into this project and extract title, page count, and a 2-sentence abstract.
+  * Analyze an image at /Users/me/Downloads/plot.png and detect the primary language of any text on it.
+  * Fetch robots.txt from https://example.com, save it to the project, and report the Disallow rules.
 '''
             },
             {
@@ -333,6 +379,27 @@ OUTPUT:
         cards = []
         for a in agents:
             primary_badge = ' <span class="pill" style="background:#fef3c7;color:#92400e;margin-left:8px;">Primary</span>' if a.get('is_primary') else ''
+            # For the Chief Agent, split core prompt and routing examples for visibility
+            extra = ''
+            if a.get('internal_name') == 'ChiefAgent':
+                # Extract the examples section heuristically to show in its own panel
+                core = a['prompt']
+                examples_idx = core.find('EXAMPLES (Routing Guidance):')
+                if examples_idx != -1:
+                    core_prompt = core[:examples_idx].rstrip()
+                    examples_prompt = core[examples_idx:].lstrip()
+                else:
+                    core_prompt = core
+                    examples_prompt = ''
+                extra = (
+                    "<details style='margin-top:8px'>"
+                    "  <summary style='cursor:pointer;font-weight:600'>Routing Guidance (examples)</summary>"
+                    f"  <pre class='small' style='white-space:pre-wrap;background:#f8fafc;padding:12px;border-radius:6px'>{escape(examples_prompt) if examples_prompt else 'Not available'}</pre>"
+                    "</details>"
+                )
+                prompt_html = f"<pre class='small' style='white-space:pre-wrap;background:#f8fafc;padding:12px;border-radius:6px'>{escape(core_prompt)}</pre>"
+            else:
+                prompt_html = f"<pre class='small' style='white-space:pre-wrap;background:#f8fafc;padding:12px;border-radius:6px'>{escape(a['prompt'])}</pre>"
             cards.append(
                 f"""
                 <div class='card' style='margin-bottom:16px'>
@@ -341,8 +408,9 @@ OUTPUT:
                   <p class='muted' style='margin-top:8px'>{escape(a['description'])}</p>
                   <details style='margin-top:8px'>
                     <summary style='cursor:pointer;font-weight:600'>System Prompt</summary>
-                    <pre class='small' style='white-space:pre-wrap;background:#f8fafc;padding:12px;border-radius:6px'>{escape(a['prompt'])}</pre>
+                    {prompt_html}
                   </details>
+                  {extra}
                 </div>
                 """
             )
