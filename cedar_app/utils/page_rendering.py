@@ -2172,9 +2172,13 @@ def project_page_html(
         initial_msg_text = f"Uploaded {display_label}"
     else:
         initial_msg_text = "Uploaded file"
-    script_js = script_js.replace("__INITIAL_UPLOAD_USER_MESSAGE__", json.dumps(initial_msg_text))
+    # IMPORTANT: Escape '</script' to avoid prematurely terminating the inline script tag
+    _safe_initial_msg = initial_msg_text.replace("</script", "<\\/script")
+    script_js = script_js.replace("__INITIAL_UPLOAD_USER_MESSAGE__", json.dumps(_safe_initial_msg))
     # Inject file details JSON for client-side details panel
-    script_js = script_js.replace("__FILE_DETAILS_JSON__", json.dumps(file_details_json_text or ""))
+    # This string is later JSON.parse'd on the client; keep it a JSON string, but escape '</script'
+    _safe_file_details = (file_details_json_text or "").replace("</script", "<\\/script")
+    script_js = script_js.replace("__FILE_DETAILS_JSON__", json.dumps(_safe_file_details))
     
     # Add script to handle refresh_notes parameter and switch to Notes tab
     refresh_notes_script = """
