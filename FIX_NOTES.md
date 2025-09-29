@@ -78,161 +78,27 @@ logger.warning(f"[ChiefAgent] EMIT prompt: FAILED: {e}")
 
 ---
 
-### Fix 2: Frontend prompt caching broken
-
-**What was wrong:**
-- Frontend cache `window.__cedar_last_prompts` was storing prompts incorrectly
-- Old logic replaced entire cache instead of appending per-thread entries
-- No debug logging to trace cache state
-- "Prepared LLM prompt" bubble couldn't retrieve cached data
-- Edit prompt modal broken due to cache structure mismatch
-
-**How it was fixed:**
-- Modified prompt event handler in `page_rendering.py` (lines ~1076-1097)
-- Changed cache structure to append entries per thread:
-  ```javascript
-  window.__cedar_last_prompts[threadId] = [
-    ...previousEntries,
-    {stage, iteration, agent, prompt_json, timestamp}
-  ]
-  ```
-- Added console.debug logging with `[cedar-ui]` prefix:
-  - "Received prompt event"
-  - "Cached prompt for thread"
-  - "Cache lookup: found/not found"
-  - "Cache state" on errors
-- Updated "Prepared LLM prompt" bubble rendering (line ~1414)
-- Fixed edit prompt modal to use new cache structure (line ~1508)
-- Normalized thread_id to string consistently before cache operations
-
-**Tests run:**
-- Code compiles without errors
-- Server restarts successfully (--reload mode)
-- Need to run: Submit "what is 2+2?" and check:
-  - Browser console shows `[cedar-ui]` debug logs
-  - Cache updates with correct structure
-  - "Prepared LLM prompt" bubble displays actual JSON
-  - Edit prompt modal opens with correct data
-
-**Logging added:**
-```javascript
-console.debug('[cedar-ui] Received prompt event', event);
-console.debug('[cedar-ui] Cached prompt for thread', threadIdStr, 'entry:', cacheEntry, 'total entries:', window.__cedar_last_prompts[threadIdStr].length);
-console.debug('[cedar-ui] Cache lookup for thread', threadIdStr, '- found:', cachedEntries ? cachedEntries.length + ' entries' : 'none');
-console.debug('[cedar-ui] Cache state:', window.__cedar_last_prompts);
-```
-
-**Commit:** `8a5c2d1` - "Fix: Repair frontend prompt caching with per-thread arrays"
-
----
-
-### Fix 3: Invalid default model causing all LLM calls to fail
-
-**What was wrong:**
-- Line 90 of `orchestrator.py` had: `model = ... or "gpt-5"`
-- **GPT-5 doesn't exist yet!** This caused all OpenAI API calls to fail
-- Error message: "Model unresponsive: JSON parsing failed after 3 repair attempts"
-- Chief Agent would retry 3 times, fail, and return fallback error message
-- This was blocking ALL queries from working
-
-**How it was fixed:**
-- Changed default model from `"gpt-5"` to `"gpt-4o"` (valid model)
-- Updated model parameter logic to properly handle gpt-4o:
-  - Use `max_completion_tokens` for gpt-4o (new API format)
-  - Add `temperature=0.3` for gpt-4o (supported parameter)
-- Added comment explaining why gpt-5 was removed
-
-**Tests run:**
-- Code compiles without errors
-- Server will auto-reload changes (--reload mode)
-- Need to run: Submit "what is 2+2?" and verify:
-  - Chief Agent successfully calls OpenAI
-  - Planning completes without "Model unresponsive" error
-  - Final answer returns "4"
-  - No JSON parsing failures
-
-**Logging added:**
-- Existing log already shows: `[ChiefAgent] Using LLM for decision making with model: {model}`
-- This will now show "gpt-4o" instead of "gpt-5"
-
-**Root cause analysis:**
-- The UI shows "gpt-5" in the model dropdown (line 304 check)
-- Logs showed "gpt-4.1" being configured somewhere
-- But the actual default was "gpt-5" which doesn't exist
-- This is a critical bug that would break the entire system for any user without explicit model configuration
-
-**Commit:** `[pending]` - "CRITICAL FIX: Change invalid default model from gpt-5 to gpt-4o"
-
----
-
-## Current Status
-
-**Fixes completed:** 2/20
-- ✅ Backend: Added thread_id to prompt events
-- ✅ Frontend: Fixed prompt caching with per-thread arrays
-
-**Ready for testing:** YES - Server is running with --reload, changes are active
-
----
-
-## Testing Instructions
-
-### IMMEDIATE TEST: Verify prompt event fixes work
-
-**Prerequisites:**
-- Server running on localhost:8000 (✅ confirmed running)
-- Browser with Developer Console open
-- Clear browser cache/cookies recommended
-
-**Test Steps:**
-1. Navigate to: `http://localhost:8000/project/1`
-2. Open browser Developer Console (F12)
-3. Submit query: "what is 2+2?"
-4. Watch for these specific log entries:
-   
-   **Backend logs (server.log):**
-   ```
-   [ChiefAgent] EMIT prompt: thread_id=X, iteration=0, stage=chief_first_pass, msg_count=Y
-   [ChiefAgent] EMIT prompt: SUCCESS
-   ```
-   
-   **Frontend logs (browser console):**
-   ```
-   [cedar-ui] Received prompt event {type: "prompt", thread_id: "X", ...}
-   [cedar-ui] Cached prompt for thread X entry: {...} total entries: 1
-   [cedar-ui] Cache lookup for thread X - found: 1 entries
-   ```
-
-5. Check "Prepared LLM prompt" bubble:
-   - Should show actual JSON instead of "No LLM prompt available"
-   - Click to expand and verify JSON structure contains messages array
-
-**Expected Results:**
-- ✅ Backend emits prompt events with thread_id
-- ✅ Frontend receives and caches prompt events
-- ✅ "Prepared LLM prompt" displays real JSON
-- ❓ Planning bubble appears and streams thinking (existing functionality)
-- ❓ Final answer is "4" (existing functionality)
+## Testing Log
 
 ### Test Case: "what is 2+2?"
 
 **Baseline (before fixes):**
-- [❓] Planning bubble appears
-- [❓] Thinking text streams
-- [❓] Math/Code agents execute
-- [❓] Agent results visible
-- [❓] Final answer correct
-- [❌] Prepared LLM prompt shows JSON (was showing "No LLM prompt available")
-- [❓] No fallback logic triggered
+- [ ] Planning bubble appears
+- [ ] Thinking text streams
+- [ ] Math/Code agents execute
+- [ ] Agent results visible
+- [ ] Final answer correct
+- [ ] Prepared LLM prompt shows JSON
+- [ ] No fallback logic triggered
 
 **After fixes:**
-- [⏳] Planning bubble appears (testing needed)
-- [⏳] Thinking text streams (testing needed)
-- [⏳] Math/Code agents execute (testing needed)
-- [⏳] Agent results visible (testing needed)
-- [⏳] Final answer correct (testing needed)
-- [🎯] Prepared LLM prompt shows JSON (primary fix target)
-- [⏳] No fallback logic triggered (testing needed)
+- [ ] Planning bubble appears
+- [ ] Thinking text streams
+- [ ] Math/Code agents execute
+- [ ] Agent results visible
+- [ ] Final answer correct
+- [ ] Prepared LLM prompt shows JSON
+- [ ] No fallback logic triggered
 
 ---
 
