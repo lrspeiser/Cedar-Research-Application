@@ -2207,19 +2207,21 @@ def project_page_html(
           </div>
           <div class="tab-panels" style="flex:1; min-height:0">
             <div id="main-chat" class="panel" style="height:100%">
-                <h3>Chat <span id="chat-number-display" style="display:none">- <span id="chat-number"></span></span></h3>
+                <h3>Chat <span id="chat-number-display" style="display:none">- <span id="chat-number"></span></span>
+                  <a href="#" class="small" style="margin-left:12px" onclick="startNewChat(PROJECT_ID, BRANCH_ID); return false;">Start New Chat</a>
+                </h3>
                 <style>
                 /* Chat area grows to fill viewport; input stays at bottom regardless of window size */
-                  #main-chat {{ display:flex; flex-direction:column; flex:1; min-height:0; height:100%; }}
-                  #main-chat .chat-log {{ flex:1; display:flex; flex-direction:column; gap:8px; overflow-y:auto; padding-bottom:80px; }}
-                  #main-chat .chat-input {{ position: sticky; bottom: 0; margin-top:auto; padding-top:6px; background:#fff; border-top:1px solid var(--border); }}
-                  .msg {{ display:flex; flex-direction:column; max-width:80%; }}
-                  .msg.user {{ align-self:flex-end; }}
-                  .msg.assistant {{ align-self:flex-start; }}
-                  .msg.system {{ align-self:flex-start; }}
-                  .msg .meta {{ display:flex; gap:8px; align-items:center; margin-bottom:4px; }}
-                  .bubble {{ border:1px solid var(--border); border-radius:18px; padding:12px 14px; font-size:14px; line-height:1.45; box-shadow: 0 1px 1px rgba(0,0,0,0.04); }}
-                  .bubble.user {{ background:#d9fdd3; border-color:#b2e59a; }}
+                  #main-chat { display:flex; flex-direction:column; flex:1; min-height:0; height:100%; }
+                  #main-chat .chat-log { flex:1; display:flex; flex-direction:column; gap:8px; overflow-y:auto; padding-bottom:80px; }
+                  #main-chat .chat-input { position: sticky; bottom: 0; margin-top:auto; padding-top:6px; background:#fff; border-top:1px solid var(--border); }
+                  .msg { display:flex; flex-direction:column; max-width:80%; }
+                  .msg.user { align-self:flex-end; }
+                  .msg.assistant { align-self:flex-start; }
+                  .msg.system { align-self:flex-start; }
+                  .msg .meta { display:flex; gap:8px; align-items:center; margin-bottom:4px; }
+                  .bubble { border:1px solid var(--border); border-radius:18px; padding:12px 14px; font-size:14px; line-height:1.45; box-shadow: 0 1px 1px rgba(0,0,0,0.04); }
+                  .bubble.user { background:#d9fdd3; border-color:#b2e59a; }
                   .bubble.assistant {{ background:#ffffff; border-color:#e6e6e6; }}
                   .bubble.system {{ background:#e7f3ff; border-color:#cfe8ff; }}
                 </style>
