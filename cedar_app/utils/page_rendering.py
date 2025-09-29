@@ -328,7 +328,11 @@ def project_page_html(
             image_items.append(
                 "".join([
                     "<div class='img-card' style='width:160px; display:inline-block; margin:6px; vertical-align:top'>",
-                    f"  <a href='{href}' class='thread-create' data-file-id='{f.id}' data-display-name='{escape(f.display_name or '')}'>",
+                    f"  <a href='{href}' class='thread-create' data-is-image='1' data-file-id='{f.id}' data-display-name='{escape(f.display_name or '')}' "
+                    f"     data-image-url='{url}' data-file-type='{escape(f.file_type or '')}' data-mime-type='{escape(f.mime_type or '')}' "
+                    f"     data-ai-title='{escape(getattr(f, 'ai_title', None) or '')}' data-ai-category='{escape(getattr(f, 'ai_category', None) or '')}' "
+                    f"     data-ai-desc-b64='{(base64.b64encode(((getattr(f, 'ai_description', None) or '')[:10000]).encode('utf-8')).decode('ascii') if getattr(f, 'ai_description', None) else '')}' "
+                    f"     data-size='{getattr(f, 'size_bytes', None) or 0}' data-created-at='{(getattr(f, 'created_at', None).isoformat() if getattr(f, 'created_at', None) else '')}'>",
                     f"    <div style='width:160px; height:100px; background:#f3f4f6; display:flex; align-items:center; justify-content:center; overflow:hidden; border:1px solid var(--border); border-radius:6px'>",
                     (f"      <img src='{url}' alt='{title}' style='max-width:100%; max-height:100%'>" if url else "      <div class='muted small'>(no preview)</div>"),
                     "    </div>",
@@ -1931,13 +1935,15 @@ def project_page_html(
         }
       }
 
-      // Intercept clicks on file/db links to create a new tab without navigation
+      // Intercept clicks on file/db links. For images, open a numbered Chat with context; otherwise use thread flow.
       document.addEventListener('click', function(ev){
         var a = ev.target && ev.target.closest ? ev.target.closest('a.thread-create') : null;
         if (!a) return;
         try { ev.preventDefault(); } catch(_){ }
+        var isImage = false; try { isImage = !!a.dataset.isImage; } catch(_){ isImage = false; }
         var fid = a.getAttribute('data-file-id') || null;
         var dsid = a.getAttribute('data-dataset-id') || null;
+        // If not present in attributes, try extracting from href
         if (!fid || !dsid) {
           try {
             var urlObj = new URL(a.getAttribute('href'), window.location.href);
@@ -1945,6 +1951,82 @@ def project_page_html(
             if (!dsid) dsid = urlObj.searchParams.get('dataset_id');
           } catch(_){ }
         }
+        if (isImage) {
+          // New behavior for Images tab: open a numbered chat with image context
+          (function(){
+            try {
+              // Switch to Chat tab
+              try { var chatTab = document.querySelector('.tabs .tab[data-target="main-chat"]'); if (chatTab) chatTab.click(); } catch(_){ }
+              // Start a new numbered chat
+              try { if (window.startNewChat) window.startNewChat(PROJECT_ID, BRANCH_ID); } catch(_){ }
+              // Update chat form with file context
+              try {
+                var f = document.getElementById('chatForm');
+                if (f) {
+                  f.setAttribute('data-thread-id', '');
+                  f.setAttribute('data-file-id', fid||'');
+                  try { f.setAttribute('data-file-name', (a.getAttribute('data-display-name')||'')); } catch(_){ }
+                  f.setAttribute('data-dataset-id', dsid||'');
+                  var hidT = f.querySelector("input[name='thread_id']"); if (hidT) { hidT.remove(); }
+                  var hidF = f.querySelector("input[name='file_id']"); if (fid) { if (hidF) hidF.value = fid; else { var j=document.createElement('input'); j.type='hidden'; j.name='file_id'; j.value=fid; f.appendChild(j);} } else if (hidF) { hidF.remove(); }
+                  var hidD = f.querySelector("input[name='dataset_id']"); if (dsid) { if (hidD) hidD.value = dsid; else { var k=document.createElement('input'); k.type='hidden'; k.name='dataset_id'; k.value=dsid; f.appendChild(k);} } else if (hidD) { hidD.remove(); }
+                }
+              } catch(_){ }
+              // Render Image Context panel with preview and metadata
+              try {
+                var imgUrl = a.getAttribute('data-image-url') || '';
+                var displayName = a.getAttribute('data-display-name') || '';
+                var fileType = a.getAttribute('data-file-type') || '';
+                var mimeType = a.getAttribute('data-mime-type') || '';
+                var aiTitle = a.getAttribute('data-ai-title') || '';
+                var aiCategory = a.getAttribute('data-ai-category') || '';
+                var aiDesc = (function(){ try { var b=a.getAttribute('data-ai-desc-b64')||''; return b ? (new TextDecoder('utf-8')).decode(Uint8Array.from(atob(b), c=>c.charCodeAt(0))) : ''; } catch(_){ return ''; } })();
+                var size = a.getAttribute('data-size') || '';
+                var createdAt = a.getAttribute('data-created-at') || '';
+                // Create/replace panel
+                var chatPanel = document.getElementById('main-chat');
+                var msgs = document.getElementById('msgs');
+                if (chatPanel && msgs) {
+                  var panel = document.getElementById('image-context-panel');
+                  if (!panel){ panel = document.createElement('div'); panel.id='image-context-panel'; panel.className='card'; panel.style.marginBottom='12px'; panel.style.padding='12px'; panel.style.background='#f8fafc'; panel.style.borderRadius='8px'; msgs.parentNode.insertBefore(panel, msgs); }
+                  panel.innerHTML = '';
+                  var h=document.createElement('h3'); h.textContent='Image Context'; panel.appendChild(h);
+                  if (imgUrl) { var img=document.createElement('img'); img.src=imgUrl; img.alt=displayName||aiTitle||'image'; img.style.maxWidth='100%'; img.style.maxHeight='320px'; img.style.display='block'; img.style.border='1px solid var(--border)'; img.style.borderRadius='6px'; panel.appendChild(img); }
+                  var tbl=document.createElement('table'); tbl.className='table'; var tbody=document.createElement('tbody');
+                  function row(k,v){ var tr=document.createElement('tr'); var th=document.createElement('th'); th.textContent=k; var td=document.createElement('td'); td.textContent=v||''; tr.appendChild(th); tr.appendChild(td); tbody.appendChild(tr);} 
+                  row('Title', aiTitle||displayName||''); row('Category', aiCategory||''); row('file_id', String(fid||'')); row('image_url', imgUrl||''); row('MIME', mimeType||''); row('Type', fileType||''); row('Size', String(size||'')); row('Created', createdAt||'');
+                  tbl.appendChild(tbody); panel.appendChild(tbl);
+                  if (aiDesc) { var pre=document.createElement('pre'); pre.className='small'; pre.style.whiteSpace='pre-wrap'; pre.style.background='#f1f5f9'; pre.style.padding='8px'; pre.style.borderRadius='6px'; pre.style.maxHeight='200px'; pre.style.overflow='auto'; pre.textContent=aiDesc; panel.appendChild(pre); }
+                }
+              } catch(_){ }
+              // Prefill chat input with template including image details
+              try {
+                var t = document.getElementById('chatInput');
+                if (t) {
+                  var template = 'Image Context\n' +
+                                 'title: ' + (a.getAttribute('data-ai-title')||a.getAttribute('data-display-name')||'') + '\n' +
+                                 'file_id: ' + String(fid||'') + '\n' +
+                                 'image_url: ' + (a.getAttribute('data-image-url')||'') + '\n' +
+                                 'mime_type: ' + (a.getAttribute('data-mime-type')||'') + '\n' +
+                                 'file_type: ' + (a.getAttribute('data-file-type')||'') + '\n' +
+                                 'size_bytes: ' + (a.getAttribute('data-size')||'') + '\n' +
+                                 'created_at: ' + (a.getAttribute('data-created-at')||'') + '\n' +
+                                 'ai_category: ' + (a.getAttribute('data-ai-category')||'') + '\n' +
+                                 'ai_description: ' + (function(){ try { var b=a.getAttribute('data-ai-desc-b64')||''; return b ? (new TextDecoder('utf-8')).decode(Uint8Array.from(atob(b), c=>c.charCodeAt(0))) : ''; } catch(_){ return ''; } })() + '\n\n' +
+                                 '---\n\n' +
+                                 'Prompt:\n';
+                  t.value = template; try { t.focus(); } catch(_){ }
+                }
+              } catch(_){ }
+              // Clear messages panel for fresh chat
+              try { var msgs2 = document.getElementById('msgs'); if (msgs2) { msgs2.innerHTML = "<div class='muted small'>(No messages yet)</div>"; } } catch(_){ }
+              // Update URL without thread id (numbered chats)
+              try { var url = `/project/${PROJECT_ID}?branch_id=${BRANCH_ID}` + (fid?`&file_id=${encodeURIComponent(fid)}`:''); if (history && history.pushState) { history.pushState({}, '', url); } } catch(_){ }
+            } catch(e) { try { console.debug('[Image→Chat] error', e); } catch(_){} }
+          })();
+          return;
+        }
+        // Default behavior (non-image): create a thread and load file context
         (async function(){
           var tid = await ensureThreadId(null, fid, dsid);
           if (!tid) return;
@@ -1962,18 +2044,11 @@ def project_page_html(
               var hidD = f.querySelector("input[name='dataset_id']"); if (dsid) { if (hidD) hidD.value = dsid; else { var k=document.createElement('input'); k.type='hidden'; k.name='dataset_id'; k.value=dsid; f.appendChild(k);} } else if (hidD) { hidD.remove(); }
             }
           } catch(_){ }
-          
           // Load and display file content if file ID is present
-          if (fid) {
-            window.displayFileContent(fid);
-          }
-          
+          if (fid) { window.displayFileContent(fid); }
           // Clear messages panel to indicate a fresh thread
-          try {
-            var msgs = document.getElementById('msgs');
-            if (msgs) { msgs.innerHTML = "<div class='muted small'>(No messages yet)</div>"; }
-          } catch(_){ }
-          // Update URL
+          try { var msgs = document.getElementById('msgs'); if (msgs) { msgs.innerHTML = "<div class='muted small'>(No messages yet)</div>"; } } catch(_){ }
+          // Update URL with thread id
           try {
             var url = `/project/${PROJECT_ID}?branch_id=${BRANCH_ID}&thread_id=${encodeURIComponent(tid)}` + (fid?`&file_id=${encodeURIComponent(fid)}`:'') + (dsid?`&dataset_id=${encodeURIComponent(dsid)}`:'');
             if (history && history.pushState) { history.pushState({}, '', url); }
