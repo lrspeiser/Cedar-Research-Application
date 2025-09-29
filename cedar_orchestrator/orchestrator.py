@@ -536,25 +536,8 @@ class ThinkerOrchestrator:
         
         agent_details = "\n".join(agent_explanations)
         
-        # Send processing action that UI expects - this sets up streamText variable
-        await websocket.send_json({
-            "type": "action",
-            "function": "processing",
-            "text": f"""🤔 **Analyzing Request** (Iteration {iteration + 1}/{self.MAX_ITERATIONS})
-
-📊 **Problem Assessment:**
-I've analyzed your request as a {thinking['identified_type'].replace('_', ' ')}.
-{thinking['analysis']}.
-
-🎯 **Solution Approach:**
-{thinking['selection_reasoning']}.
-
-🤖 **Agent Assignments:**
-{agent_details}
-
-⏳ Now coordinating these agents to solve your request..."""
-        })
-        await asyncio.sleep(0.5)  # Allow UI to set up streaming
+        # Processing bubble removed: show only the Chief Agent response to the user prompt
+        # (Previously emitted an 'action: processing' message here.)
         
         # No need for redundant streaming update
         
