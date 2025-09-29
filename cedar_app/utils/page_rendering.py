@@ -714,6 +714,8 @@ def project_page_html(
   var BRANCH_ID = __BID__;
   var UPLOAD_AUTOCHAT = __UPLOAD_AUTOCHAT__;
   var SSE_ACTIVE = false;
+  // File details JSON injected by server for upload auto-chat (stringified JSON)
+  var FILE_DETAILS_JSON = __FILE_DETAILS_JSON__;
   async function ensureThreadId(tid, fid, dsid) {
     if (tid) return tid;
     try {
@@ -1760,6 +1762,24 @@ def project_page_html(
             window.__uploadAutoChatStarted = true;
             var initialUserMsg = __INITIAL_UPLOAD_USER_MESSAGE__;
             console.log('[auto-chat] starting WS with initial message and context');
+            // Render a compact "Uploaded <filename>" assistant bubble with details toggle containing metadata
+            try {
+              var detailsTxt = String(FILE_DETAILS_JSON||'');
+              var fileName = '(file)';
+              try { var _parsed = JSON.parse(detailsTxt||''); if (_parsed && _parsed.name) { fileName = String(_parsed.name); } } catch(_){ }
+              var detIdUp = 'det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
+              var wrapUp = document.createElement('div'); wrapUp.className = 'msg assistant';
+              var metaUp = document.createElement('div'); metaUp.className = 'meta small'; metaUp.innerHTML = "<span class='pill'>Chief Agent</span> <span class='title' style='font-weight:600'>File Uploaded</span>";
+              var bubUp = document.createElement('div'); bubUp.className = 'bubble assistant'; bubUp.setAttribute('data-details-id', detIdUp);
+              var contUp = document.createElement('div'); contUp.className='content'; contUp.style.whiteSpace='pre-wrap'; contUp.textContent = 'Uploaded ' + fileName;
+              bubUp.appendChild(contUp);
+              var detailsUp = document.createElement('div'); detailsUp.id = detIdUp; detailsUp.style.display='none';
+              var preUp = document.createElement('pre'); preUp.className='small'; preUp.style.whiteSpace='pre-wrap'; preUp.style.background='#f8fafc'; preUp.style.padding='8px'; preUp.style.borderRadius='6px';
+              preUp.textContent = detailsTxt || '(no details)';
+              detailsUp.appendChild(preUp);
+              wrapUp.appendChild(metaUp); wrapUp.appendChild(bubUp); wrapUp.appendChild(detailsUp);
+              var msgsEl0 = document.getElementById('msgs'); if (msgsEl0) msgsEl0.appendChild(wrapUp);
+            } catch(_){ }
             // Pass thread_id and file_id so the server can emit a processing bubble immediately
             startWS(initialUserMsg, tid0, fid0, dsid0);
           } else {
@@ -1991,6 +2011,10 @@ def project_page_html(
                     first_lines = first_lines[:2000]
             else:
                 first_lines = ''
+            # Determine if image; omit first_lines for images
+            _ft = (selected_file.file_type or '').lower()
+            _struct = (selected_file.structure or '').lower()
+            _is_image = (_struct == 'images') or (_ft in {'jpg','jpeg','png','gif','webp','bmp','tiff'})
             details = {
                 "project_id": project.id,
                 "branch_id": current.id,
@@ -2003,17 +2027,25 @@ def project_page_html(
                 "size_bytes": selected_file.size_bytes,
                 "storage_path": selected_file.storage_path,
                 "sha256": meta.get('sha256'),
-                "first_lines": first_lines,
             }
+            if first_lines and not _is_image:
+                details["first_lines"] = first_lines
             file_details_json_text = json.dumps(details, ensure_ascii=False)
     except Exception:
         file_details_json_text = None
-    # Build the full initial user message as a JS string literal
+    # Build the full initial user message as a JS string literal (compact)
     if file_details_json_text is not None:
-        initial_msg_text = "User uploaded a file with the following details:\n" + file_details_json_text
+        try:
+            _fname = (json.loads(file_details_json_text).get('name') or '').strip()
+        except Exception:
+            _fname = ''
+        display_label = _fname or 'file'
+        initial_msg_text = f"Uploaded {display_label}"
     else:
-        initial_msg_text = "User uploaded a file with the following details:\n(details unavailable)"
+        initial_msg_text = "Uploaded file"
     script_js = script_js.replace("__INITIAL_UPLOAD_USER_MESSAGE__", json.dumps(initial_msg_text))
+    # Inject file details JSON for client-side details panel
+    script_js = script_js.replace("__FILE_DETAILS_JSON__", json.dumps(file_details_json_text or ""))
     
     # Add script to handle refresh_notes parameter and switch to Notes tab
     refresh_notes_script = """
