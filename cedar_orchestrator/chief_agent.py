@@ -106,11 +106,11 @@ class ChiefAgent:
             
             # Call LLM
             logger.info(f"[ChiefAgent] Calling LLM with {len(messages)} messages")
+            # Note: gpt-5 only supports temperature=1 (default), don't set it
             response = await self.llm_client.chat.completions.create(
                 model=model,
                 messages=messages,
-                max_completion_tokens=50000,
-                temperature=0.7
+                max_completion_tokens=50000
             )
             
             raw_content = response.choices[0].message.content
