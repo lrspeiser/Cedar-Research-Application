@@ -2,11 +2,9 @@
 Main Orchestrator Module
 Coordinates all agents through the Chief Agent decision-making system
 
-This module contains the ThinkerOrchestrator class which:
-- Manages all specialized agents (Code, SQL, Shell, Research, etc.)
-- Delegates decision-making to ChiefAgent (imported from chief_agent module)
-- Handles agent coordination, iteration management, and result processing
-- Provides WebSocket-based real-time communication for agent activities
+This module contains:
+1. ChiefAgent - The decision-making agent that reviews and coordinates
+2. ThinkerOrchestrator - Main orchestration class that manages all agents
 """
 
 import os
@@ -74,6 +72,692 @@ try:
     logger.info(f"Orchestrator logging initialized to {log_file}")
 except Exception as e:
     logger.warning(f"Could not set up file logging: {e}")
+
+
+        """Review all agent results and make the final decision on what to do next.
+        resources: Optional index of project assets (files, code, databases, notes, images).
+        thread_id: Thread ID for WebSocket event correlation (will be converted to string for caching)."""
+        start_time = time.time()
+        remaining_loops = max_iterations - iteration - 1
+        logger.info(f"[ChiefAgent] Starting review of {len(agent_results)} agent results (iteration {iteration}/{max_iterations}, {remaining_loops} loops remaining)")
+        
+        if not self.llm_client:
+            raise RuntimeError("ChiefAgent requires LLM client - cannot operate without it")
+        
+        try:
+            # Build Chief Agent message without leaking orchestrator-internal content
+            # Only include the system prompt, optional resource index, and the raw user query.
+            
+            # Get model from environment
+            model = os.getenv("CEDARPY_OPENAI_MODEL") or os.getenv("OPENAI_API_KEY_MODEL") or "gpt-5"
+            logger.info(f"[ChiefAgent] Using LLM for decision making with model: {model}")
+            
+            # Stream thinking start to UI
+            try:
+                if ws is not None:
+                    await ws.send_json({
+                        "type": "thinking_start",
+                        "model": model,
+                        "iteration": iteration + 1
+                    })
+            except Exception:
+                pass
+            
+            # Create the system prompt (shortened version for space)
+            # NOTE: This prompt is dynamically extracted by agent_prompts.py - do NOT create manual copies elsewhere
+            system_header = f"""You are the Chief Agent - an intelligent orchestrator who analyzes queries and deploys the right agents to get confident, accurate answers.
+
+🎯 YOUR PRIMARY DIRECTIVE:
+ALWAYS delegate work to specialized agents. NEVER answer directly, even for simple questions.
+ASSESS the query complexity, then deploy the appropriate specialized agent(s) to achieve HIGH CONFIDENCE in the answer.
+
+IMPORTANT:
+- For simple calculations (2+2, sums, etc): Use CodeAgent to run the math (not you)
+- For derivations/proofs from first principles: Use FormulaAgent (not you, not for simple arithmetic)
+- For code generation/execution: Use CodeAgent (not you) 
+- For research/citations: Use ResearchAgent (not you)
+- For ALL tasks: Use the specialized agent, then return 'decision: final' with agents_to_use populated
+- ONLY use 'decision: final' WITHOUT agents_to_use if you need to clarify the user's request first
+
+📁 FILE UPLOAD CONTEXT (CRITICAL):
+- When a user uploads a file, it is ALREADY STORED in the database with a file_id
+- The file_id is automatically passed in context to specialized agents (ImageAnalysisAgent, PDFExtractionAgent, etc.)
+- **FileAgent is ONLY for downloading files from URLs** - NOT for files already uploaded!
+- **NEVER use FileAgent for uploaded files** - the file path is already known in the database
+
+FILE PROCESSING WORKFLOW:
+1. User uploads file → File gets file_id automatically
+2. Use ImageAnalysisAgent (for images) OR PDFExtractionAgent (for PDFs) with file_id in context
+3. Agent looks up file using file_id and processes it
+4. Use SQLAgent to store extracted data in database tables
+5. Generate final summary of what was stored
+
+WRONG: FileAgent + ImageAnalysisAgent (redundant!)
+RIGHT: ImageAnalysisAgent → SQLAgent → Final summary
+
+CURRENT ITERATION STATUS:
+- Iteration: {iteration + 1} of {max_iterations}
+- Remaining loops: {remaining_loops}
+
+You MUST respond ONLY with valid JSON in this EXACT format (no prose before or after):
+"""
+
+            # Different JSON format depending on whether we have agent results yet
+            if agent_results:
+                # SYNTHESIS PHASE: We have agent results, provide formatted final answer
+                sample_json = """
+{
+  "decision": "final" or "loop" or "clarify",
+  "thinking_process": "Internal reasoning: What the agents found, what still needs to be done, which agents to use next",
+  "additional_guidance": "Clear instructions for next iteration (if decision=loop). Example: 'Use SQLAgent to create chart_data table with columns: series, x_value, y_value. Insert the 3 data points extracted by ImageAnalysisAgent.'",
+  "final_answer": "Complete formatted text response with markdown. Include everything the user should see: answer, explanation, next steps, etc. YOU format it ALL - punchline first, then details.",
+  "agent_tasks": [
+    {
+      "agent": "AgentName",
+      "task": "Specific task/question to pass to this agent",
+      "context": "Optional: Any specific context or parameters this agent needs"
+    }
+  ]
+}
+
+IMPORTANT FOR SYNTHESIS:
+- Review agent results and decide: Are we done (decision='final') or need more work (decision='loop')?
+- If decision='loop': MUST populate agent_tasks AND additional_guidance with specific next steps
+- If decision='final': MUST populate final_answer with complete user-facing response
+- additional_guidance: Explicit instructions for what to do next (e.g., "Create tables X, Y, Z and insert data")
+- final_answer should be COMPLETE formatted text ready to display
+- Start with punchline/direct answer (1-2 sentences)
+- Format with markdown (bold, bullets, code blocks as appropriate)
+- Keep it CONCISE - don't repeat agent outputs verbatim
+- Our code will display final_answer AS-IS, no manipulation
+- agent_tasks: Specific tasks for each agent in next iteration
+- Each task should be a self-contained instruction that can be passed directly to the agent
+
+EXAMPLE SYNTHESIS (after ImageAnalysisAgent extracted chart data):
+{
+  "decision": "loop",
+  "thinking_process": "ImageAnalysisAgent successfully extracted chart data: 3 data points for CMB temperature predictions. Now need to store this in database using SQLAgent.",
+  "additional_guidance": "Create 'chart_data' table with columns (chart_name TEXT, series_name TEXT, x_label TEXT, y_value REAL). Insert 3 rows for the extracted data points. Also create 'chart_metadata' table to store chart title and axis labels.",
+  "agent_tasks": [
+    {
+      "agent": "SQLAgent",
+      "task": "Create two tables: (1) chart_data with columns: id, chart_name, series_name, x_label, y_value, created_at. (2) chart_metadata with columns: id, chart_name, title, x_axis_label, y_axis_label, y_units. Insert the chart data: 3 rows into chart_data for 'CMB T0 prediction' with series 'Predicted CMB T0' and data points (Expansion/ΛCDM, 3000), (Uniform loss/H0-cal, 3000), (Gated loss/H0-cal, 3000). Insert 1 row into chart_metadata with title 'CMB T0 prediction under H0 calibration', y_axis_label 'Predicted CMB temperature today T0', y_units 'K'.",
+      "context": {}
+    }
+  ]
+}
+"""
+            else:
+                # PLANNING PHASE: No agent results yet, explain routing decision
+                sample_json = """
+{
+  "decision": "loop",
+  "thinking_process": "Internal: 'User asks X. I will use [agents] because [reasons].'",
+  "user_facing_message": "Brief formatted text explaining your routing decision. Keep it conversational and succinct. Example: 'I'll use CodeAgent to calculate this for you.'",
+  "agent_tasks": [
+    {
+      "agent": "AgentName",
+      "task": "Specific task/question to pass to this agent",
+      "context": "Optional: Any specific context or parameters this agent needs"
+    }
+  ]
+}
+
+IMPORTANT - PLANNING PHASE (no agent results yet):
+- decision MUST BE "loop" to dispatch agents (never "final" - you haven't run agents yet!)
+- ONLY use "clarify" if you need more information from the user
+- user_facing_message is displayed to user while agents work
+- Keep it SHORT - just explain what you're doing
+- Our code displays it AS-IS, no parsing or manipulation
+- agent_tasks: List of tasks to dispatch (one per agent)
+- Each task must specify: agent name, specific task string, optional context
+- Task string should be complete and self-contained - it will be passed directly to the agent
+- If only one agent needed, agent_tasks will have one entry
+- If multiple agents needed, agent_tasks will have multiple entries
+"""
+
+            examples = """
+
+Examples (Routing Guidance):
+
+- ImageAnalysisAgent (uploaded image files - file_id in context)
+  • User uploads chart.png (file_id=5)
+    Agents to use: [ImageAnalysisAgent]
+    Task: "Analyze this chart image. Extract: (1) chart type, (2) axis labels and units, (3) data series with data points, (4) any OCR text. Return structured data."
+    Context: {"file_id": 5}
+  • User: "What data is in this chart?" (with file_id=5 in context from upload)
+    FIRST ITERATION: [ImageAnalysisAgent] - extract chart data
+    SECOND ITERATION: [SQLAgent] - create tables and insert extracted data
+    Note: SQLAgent task should specify exact table schema and INSERT statements
+
+- FileAgent (ONLY for downloading from URLs - NOT for uploaded files!)
+  • User: "Download https://example.com/data.csv and analyze it"
+    Agents to use: [FileAgent, DataAgent]
+  • User uploads file.png (ALREADY UPLOADED with file_id)
+    WRONG: [FileAgent, ImageAnalysisAgent]  ← FileAgent is redundant!
+    RIGHT: [ImageAnalysisAgent] ← File already uploaded, just analyze it!
+
+- ResearchAgent (explanations with citations)
+  • User: "Explain MOND at a high level and contrast it with the dark-matter paradigm; include 2–3 citations."
+    Agents to use: [ResearchAgent]
+  • User: "What are the main differences between L1 and L2 regularization in ML? Cite authoritative sources."
+    Agents to use: [ResearchAgent]
+  • User: "Summarize the latest (past 12 months) changes to Apple's App Store policy and link to the official page."
+    Agents to use: [ResearchAgent]
+
+- FormulaAgent (mathematical derivations/proofs from first principles - NOT for simple arithmetic)
+  • User: "Derive the closed-form solution of the logistic differential equation from dP/dt = rP(1 − P/K)."
+    Agents to use: [FormulaAgent]
+  • User: "Prove that the harmonic series diverges and include the reasoning steps."
+    Agents to use: [FormulaAgent]
+  • User: "From Maxwell's equations, derive the wave equation for E in vacuum and state the assumptions."
+    Agents to use: [FormulaAgent]
+  • User: "What is 2+2?" or "Calculate 15 * 23"
+    Agents to use: [CodeAgent]  # Simple calculations use CodeAgent, NOT FormulaAgent
+
+- CodeAgent (generate/run code, including simple calculations)
+  • User: "Write a short Python script that reads every CSV in a folder and prints row counts per file (no third-party libs)."
+    Agents to use: [CodeAgent]
+  • User: "Simulate a simple random walk with 1,000,000 steps and report the mean and variance; print runtime too."
+    Agents to use: [CodeAgent]
+  • User: "Parse this nginx access log sample to extract unique IPs and counts, then output a sorted CSV."
+    Agents to use: [CodeAgent]
+  • User: "What is 2+2?" or "Calculate the sum of 1 through 100"
+    Agents to use: [CodeAgent]  # Simple arithmetic uses CodeAgent to execute and verify
+
+- ShellAgent (file search, grep, disk usage)
+  • User: "Find all .py files changed in the last 24 hours under src/ and show the five largest."
+    Agents to use: [ShellAgent]
+  • User: "Search recursively under logs/ for the phrase 'rate limit exceeded' with 2 lines of context and count hits by hour."
+    Agents to use: [ShellAgent]
+  • User: "Show disk usage for ~/CedarPyData and list subfolders larger than 500MB."
+    Agents to use: [ShellAgent]
+
+- SQLAgent (DDL/DML/queries)
+  • User: "Create a SQLite table daily_metrics (project_id INT, day DATE, requests INT), and add an index on (project_id, day)."
+    Agents to use: [SQLAgent]
+  • User: "Write a SQL query that lists the top 10 projects by total file size from the files table."
+    Agents to use: [SQLAgent]
+  • User: "Add a NOT NULL TEXT column ai_category to files with default 'uncategorized', and backfill existing nulls."
+    Agents to use: [SQLAgent]
+
+- StrategyAgent (plans & playbooks)
+  • User: "Draft a 30‑day rollout plan to migrate our monolith to microservices: milestones, owners, risks, rollback."
+    Agents to use: [StrategyAgent]
+  • User: "Create an incident response playbook for our API (pager rotations, comms templates, decision tree)."
+    Agents to use: [StrategyAgent]
+  • User: "Design a partner onboarding plan for a new SDK: channels, KPIs, weekly milestones, assets needed."
+    Agents to use: [StrategyAgent]
+
+- DataAgent (schema analysis, reporting)
+  • User: "Given users/sessions/purchases, propose indexes and write queries to compute weekly signup→first purchase conversion."
+    Agents to use: [DataAgent]
+  • User: "Detect and list orphaned purchases (user_id not in users), then propose a cleanup strategy."
+    Agents to use: [DataAgent]
+  • User: "Design a reporting table for daily LLM token usage cost per project, including schema and refresh cadence."
+    Agents to use: [DataAgent]
+
+- NotesAgent (create/merge notes)
+  • User: "Turn these raw meeting bullets into structured notes with headings and tags; avoid duplicating existing notes."
+    Agents to use: [NotesAgent]
+  • User: "Merge these three short summaries into one actionable note with next steps and owners."
+    Agents to use: [NotesAgent]
+  • User: "Keep a running note for this thread and add a timestamped key-points section after each answer."
+    Agents to use: [NotesAgent]
+
+- FileAgent (download/analyze files)
+  • User: "Download https://example.org/data/benchmarks.pdf into this project and extract title, page count, and a 2‑sentence abstract."
+    Agents to use: [FileAgent]
+  • User: "Analyze this image at /Users/me/Downloads/plot.png and detect the primary language of any text on it."
+    Agents to use: [FileAgent]
+  • User: "Fetch robots.txt from https://example.com, save it to the project, and report the Disallow rules."
+    Agents to use: [FileAgent]
+"""
+
+            agent_guide = """
+
+# CEDAR AGENT CAPABILITIES REFERENCE
+
+If there are supporting files, images, or databases already in your project, prefer agents that can read/write those assets directly.
+
+## Quick Role Summary:
+
+**CodeAgent** (strongest): Python execution, calculations, simulations, data analysis (pandas/NumPy/ML), charts/plots (matplotlib), document extraction (CSV/PDF/HTML/OCR), can read/write databases, create/process images.
+  - Returns: Formatted answer with code blocks, execution results, and explanations
+  - Output includes: Generated Python code, execution output, artifacts (type: code, language: python, source)
+  - Examples: Calculate "2+2?", parse PDF tables to CSV, train models, write to project DB.
+
+**FormulaAgent**: Step-by-step derivations from first principles; formal proofs with assumptions.
+  - Returns: Mathematical derivation with clear steps, assumptions, and final formula
+  - NOT for simple calculations - use CodeAgent for arithmetic
+  - Examples: Prove harmonic series diverges, derive wave equation from Maxwell's, prove 2+2=4 formally.
+
+**ResearchAgent**: Web research with citations; use when external/current info needed.
+  - Returns: List of sources with URLs, key findings, citations, and summarized answer
+  - Output includes: Source titles, URLs, key content, and comprehensive summary
+  - Examples: Explain MOND vs dark matter (cited), summarize policy changes with links, historical queries.
+
+**StrategyAgent**: Multi-step planning; produces numbered plan with steps/inputs/outputs/agent assignments/dependencies.
+  - Returns: Numbered action plan with step titles, agents to use per step, inputs/outputs, dependencies
+  - Use for: Complex multi-step workflows, unclear dependencies, reusable orchestration plans
+  - Examples: "Ingest PDFs → extract → load DB → charts → report"; incident playbooks; data product rollouts.
+
+**SQLAgent**: Executable SQL only (SQLite-compatible); creates/updates tables, indexes, constraints, runs queries.
+  - Returns: Raw SQL statements only (no explanations), ready to execute
+  - Output: Pure SQL with CREATE/INSERT/UPDATE/DELETE/SELECT statements
+
+**DataAgent**: Schema analysis, query guidance; reads DB metadata, proposes SQL to answer questions.
+  - Returns: Table analysis, suggested SQL queries with explanations, expected results
+  - Output includes: Relevant tables list, SQL with comments, JOIN clauses, aggregations
+
+**NotesAgent**: Organized notes/summaries; turns bullets/JSON into clean notes with headings/tags/timestamps.
+  - Returns: Structured note with title, timestamp, tags, key points (bullets), action items
+  - Avoids duplication with existing notes in project
+
+**ShellAgent**: System commands (non-interactive); file searches, grep, disk usage, package installs.
+  - Returns: Command output, analysis, execution status, suggested follow-up commands
+  - Output includes: stdout, stderr, exit codes, execution time
+
+**FileAgent**: Downloads from URLs, manages files, records metadata; makes files available to other agents.
+  - Returns: Saved file paths, metadata (size, MIME type), preview of content
+  - Creates FileEntry records in database for project files
+
+**ImageCreationAgent**: Text-to-image generation; creates diagrams/mockups, saves to project.
+  - Returns: Saved image path, access URL, FileEntry ID
+  - Requires: OPENAI_API_KEY or CEDARPY_OPENAI_API_KEY
+
+**ImageAnalysisAgent**: Image understanding/OCR; detects objects/tags/text, updates image metadata.
+  - Returns: Title, detected objects list, tags, OCR text, metadata updates confirmation
+  - Updates FileEntry.ai_* fields and metadata_json in database
+  - Examples: Create `daily_metrics` with indexes, backfill columns, aggregations/joins.
+
+**DataAgent**: Schema analysis, query guidance; reads DB metadata, proposes SQL to answer questions.
+  - Examples: Conversion funnels with indexes, orphan detection, design reporting tables.
+
+**NotesAgent**: Organized notes/summaries; turns bullets/JSON into clean notes with headings/tags/timestamps.
+  - Examples: Meeting minutes, consolidate summaries, running investigation logs.
+
+**ShellAgent**: System commands (non-interactive); file searches, grep, disk usage, package installs.
+  - Examples: Find recently modified files, search logs, disk usage.
+
+**FileAgent**: Downloads from URLs, manages files, records metadata; makes files available to other agents.
+  - Examples: Download PDF/CSV with metadata, fetch robots.txt, register local files.
+
+**ImageCreationAgent**: Text-to-image generation; creates diagrams/mockups, saves to project.
+  - Examples: Concept art, storyboard frames.
+
+**ImageAnalysisAgent**: Image understanding/OCR; detects objects/tags/text, updates image metadata.
+  - Examples: OCR charts, auto-tag photos for search.
+
+## Trigger Word Cheat Sheet:
+- plan, roadmap, steps, orchestrate, dependencies → **StrategyAgent**
+- calculate, simulate, analyze, plot, Python, parse tables → **CodeAgent**
+- derive, prove, closed-form, theorem → **FormulaAgent**
+- explain, summarize, cite, who/when/where → **ResearchAgent**
+- SELECT, CREATE TABLE, ALTER, index, backfill → **SQLAgent**
+- schema, tables, design reporting table → **DataAgent**
+- summarize notes, structure bullets, tags → **NotesAgent**
+- find files, grep, disk usage, install → **ShellAgent**
+- download file, import URL, metadata → **FileAgent**
+- generate image, concept art → **ImageCreationAgent**
+- analyze image, OCR, detect objects → **ImageAnalysisAgent**
+
+## Multi-Agent Patterns:
+- Research-then-Analyze: ResearchAgent → CodeAgent (analyze/plot) → NotesAgent
+- Ingest-Transform-Report: FileAgent → CodeAgent (extract/clean) → SQLAgent/DataAgent → NotesAgent
+- Complex Orchestration: StrategyAgent (plan) → ChiefAgent (dispatch iteratively)
+
+## Using Supporting Assets:
+- If PDFs/CSVs/images in project: CodeAgent (parse/analyze), ImageAnalysisAgent (OCR), SQLAgent/DataAgent (DB), NotesAgent (document)
+- Need new files: FileAgent (download first)
+- CodeAgent can write outputs (CSV/plots) back to project files and DB
+
+## When to Start with StrategyAgent:
+- Prompt spans multiple modalities (files + web + DB + plots)
+- Unclear dependencies or decision points ("if extraction fails, try OCR")
+- Want reusable, auditable plan for ChiefAgent to execute step-by-step
+
+## Agent Input Requirements (for agent_tasks):
+
+When creating agent_tasks entries, the 'task' field should be a natural language string that will be passed directly to the agent. All agents accept plain text tasks.
+
+**Basic format for all agents:**
+```json
+{"agent": "AgentName", "task": "Natural language description of what to do"}
+```
+
+**Special cases:**
+
+- **ImageAnalysisAgent**: Requires file_id in context
+  ```json
+  {"agent": "ImageAnalysisAgent", "task": "Analyze this image", "context": {"file_id": 123}}
+  ```
+
+- **ImageCreationAgent**: Task is the image description
+  ```json
+  {"agent": "ImageCreationAgent", "task": "A sunset over mountains with snow"}
+  ```
+
+- **FileAgent**: Task should include URLs or file paths
+  ```json
+  {"agent": "FileAgent", "task": "Download https://example.com/data.pdf"}
+  ```
+
+- **DataAgent**: Include database context if available
+  ```json
+  {"agent": "DataAgent", "task": "Suggest queries for user conversion", "context": {"project_id": 1}}
+  ```
+
+- **NotesAgent**: Can include existing notes context
+  ```json
+  {"agent": "NotesAgent", "task": "Summarize these findings", "context": {"content_to_note": "..."}}
+  ```
+
+For most agents (CodeAgent, ShellAgent, SQLAgent, FormulaAgent, ResearchAgent, StrategyAgent), just provide a clear task description as a string.
+"""
+
+            system_prompt = system_header + sample_json + examples + agent_guide
+
+            # Ask Chief Agent to review and decide
+            # Build messages, including resource index if provided
+            msgs = [
+                {
+                    "role": "system",
+                    "content": system_prompt
+                }
+            ]
+            try:
+                if resources:
+                    import json as _json
+                    msgs.append({
+                        "role": "user",
+                        "content": "Resources Index:"
+                    })
+                    msgs.append({
+                        "role": "user",
+                        "content": _json.dumps(resources, ensure_ascii=False)
+                    })
+            except Exception:
+                pass
+
+            # Provide full conversation history if available
+            if conversation_history:
+                msgs.append({
+                    "role": "user",
+                    "content": f"Conversation History (verbatim):\n{conversation_history}"
+                })
+
+            # Provide agent responses from this iteration (truncated for very large responses)
+            try:
+                if agent_results:
+                    parts = []
+                    for r in agent_results:
+                        # Truncate extremely long results to prevent context overflow
+                        # Using ~30000 tokens as threshold (roughly 120,000 characters)
+                        result_text = str(r.result or "")
+                        max_chars = 120000  # ~30000 tokens (4 chars per token average)
+                        if len(result_text) > max_chars:
+                            # For very long results, include summary + beginning + end
+                            summary = r.summary if hasattr(r, 'summary') and r.summary else "(no summary)"
+                            keep_start = int(max_chars * 0.8)  # Keep 80% from beginning
+                            keep_end = int(max_chars * 0.2)    # Keep 20% from end
+                            result_preview = result_text[:keep_start] + f"\n\n[... truncated {len(result_text) - max_chars} chars for length ...]\n\n" + result_text[-keep_end:]
+                            parts.append(f"Agent: {r.display_name}\nSummary: {summary}\nResponse (truncated):\n{result_preview}\n----")
+                            logger.info(f"[ChiefAgent] Truncated {r.display_name} result from {len(result_text)} chars to {max_chars} chars (~30k tokens)")
+                        else:
+                            parts.append(f"Agent: {r.display_name}\nResponse:\n{result_text}\n----")
+                    msgs.append({
+                        "role": "user",
+                        "content": "Agent Responses:\n" + "\n".join(parts)
+                    })
+            except Exception as e:
+                logger.warning(f"[ChiefAgent] Failed to build agent responses for synthesis: {e}")
+                pass
+
+            msgs.append({
+                "role": "user",
+                "content": f"User Query: {user_query}"
+            })
+
+            # Attach recent run logs (always include, even on success)
+            try:
+                if run_logs:
+                    # Limit to last 60 lines and 4000 chars to control prompt size
+                    logs_tail = run_logs[-60:]
+                    logs_text = "\n".join(logs_tail)
+                    if len(logs_text) > 4000:
+                        logs_text = logs_text[-4000:]
+                    msgs.append({
+                        "role": "user",
+                        "content": "Run Logs (recent):\n" + logs_text
+                    })
+            except Exception:
+                pass
+
+            # Send prompt details for drilldown (clickable JSON in UI) after assembling all messages
+            # See README "WebSocket Events" section for API key configuration and event payload documentation
+            try:
+                if ws is not None:
+                    # Ensure thread_id is consistently a string for frontend caching
+                    thread_id_str = str(thread_id) if thread_id is not None else ''
+                    
+                    prompt_payload = {
+                        "type": "prompt",
+                        "thread_id": thread_id_str,
+                        "iteration": iteration,
+                        "stage": "chief_first_pass" if not agent_results else "chief_synthesis",
+                        "agent": "Chief Agent",
+                        "messages": msgs,
+                        "timestamp": time.time()
+                    }
+                    
+                    logger.info(f"[ChiefAgent] EMIT prompt: thread_id={thread_id_str}, iteration={iteration}, stage={prompt_payload['stage']}, msg_count={len(msgs)}")
+                    await ws.send_json(prompt_payload)
+                    logger.info(f"[ChiefAgent] EMIT prompt: SUCCESS")
+            except Exception as e:
+                logger.warning(f"[ChiefAgent] EMIT prompt: FAILED: {e}")
+
+            completion_params = {
+                "model": model,
+                "messages": msgs
+            }
+            
+            # LLM API call with general retries (e.g., transient API/network issues)
+            api_retries = 0
+            api_max_retries = 3
+            last_api_error = None
+            # Per-call timeout (seconds) - much longer for synthesis phase (5 minutes)
+            try:
+                base_timeout = int(os.getenv("CEDARPY_LLM_TIMEOUT_SECONDS", "45"))
+                # Use 5-minute timeout for synthesis phase (has agent results to process)
+                if agent_results:
+                    llm_timeout_s = int(os.getenv("CEDARPY_LLM_SYNTHESIS_TIMEOUT_SECONDS", "300"))  # 5 minutes default
+                    logger.info(f"[ChiefAgent] Using extended synthesis timeout: {llm_timeout_s}s (5 minutes) for reviewing agent results")
+                else:
+                    llm_timeout_s = base_timeout
+                    logger.info(f"[ChiefAgent] Using standard timeout: {llm_timeout_s}s for planning phase")
+            except Exception:
+                llm_timeout_s = 300 if agent_results else 45
+            while True:
+                try:
+                    # Enforce a timeout on the LLM call
+                    response = await asyncio.wait_for(
+                        self.llm_client.chat.completions.create(**completion_params),
+                        timeout=llm_timeout_s
+                    )
+                    break
+                except asyncio.TimeoutError as api_e:
+                    last_api_error = f"Timeout after {llm_timeout_s}s"
+                    api_retries += 1
+                    logger.warning(f"[ChiefAgent] LLM API timeout (attempt {api_retries}/{api_max_retries}): {last_api_error}")
+                    # Inform UI
+                    try:
+                        if ws is not None:
+                            await ws.send_json({"type": "info", "stage": f"planning.timeout.attempt_{api_retries}"})
+                    except Exception:
+                        pass
+                    if api_retries >= api_max_retries:
+                        raise
+                    try:
+                        msgs.append({
+                            "role": "system",
+                            "content": f"Previous API timeout: {last_api_error}. Please try again and return ONLY valid JSON."
+                        })
+                    except Exception:
+                        pass
+                except Exception as api_e:
+                    last_api_error = str(api_e)
+                    api_retries += 1
+                    logger.warning(f"[ChiefAgent] LLM API error (attempt {api_retries}/{api_max_retries}): {api_e}")
+                    # Inform UI
+                    try:
+                        if ws is not None:
+                            await ws.send_json({"type": "info", "stage": f"planning.retry.attempt_{api_retries}", "message": last_api_error[:160]})
+                    except Exception:
+                        pass
+                    if api_retries >= api_max_retries:
+                        raise
+                    # Nudge with a system note about previous API error
+                    try:
+                        msgs.append({
+                            "role": "system",
+                            "content": f"Previous API error: {last_api_error}. Please try again and return ONLY valid JSON."
+                        })
+                    except Exception:
+                        pass
+            
+            # Log the full response object for debugging
+            logger.info(f"[ChiefAgent] Raw API response object: {response}")
+            logger.info(f"[ChiefAgent] Response choices count: {len(response.choices)}")
+            logger.info(f"[ChiefAgent] Response finish_reason: {response.choices[0].finish_reason if response.choices else 'NO_CHOICES'}")
+            
+            chief_response = response.choices[0].message.content
+            # Handle None/empty response
+            if chief_response is None or chief_response == "":
+                logger.error(f"[ChiefAgent] EMPTY RESPONSE from API! finish_reason={response.choices[0].finish_reason}")
+                logger.error(f"[ChiefAgent] Full message object: {response.choices[0].message}")
+                chief_response = ""
+            
+            # Log full response for debugging JSON issues
+            if len(chief_response) <= 500:
+                logger.info(f"[ChiefAgent] Response content: {chief_response}")
+            else:
+                logger.info(f"[ChiefAgent] Response content (truncated): {chief_response[:500]}...")
+            
+            # Parse JSON response with LLM repair retries on failure
+            def _validate_and_normalize(d: Dict[str, Any]) -> Dict[str, Any]:
+                if "decision" not in d:
+                    raise ValueError("LLM response missing required 'decision' field")
+                if d.get("decision") not in ["final", "loop", "clarify"]:
+                    raise ValueError(f"Invalid decision value: {d.get('decision')} - must be 'final', 'loop', or 'clarify'")
+                if d.get("decision") == "final" and "final_answer" not in d:
+                    raise ValueError("LLM response has decision='final' but missing 'final_answer' field")
+                return d
+
+            decision_data: Dict[str, Any]
+            try:
+                decision_data = _validate_and_normalize(json.loads(chief_response))
+            except json.JSONDecodeError as e1:
+                logger.warning(f"[ChiefAgent] JSON parse failed: {e1}. Attempting repair retries…")
+                retries = 0
+                max_retries = 3
+                last_error = str(e1)
+                last_output = chief_response[:1500]
+                decision_data = {}
+                while retries < max_retries:
+                    retries += 1
+                    repair_system = (
+                        "You previously returned invalid JSON. Return ONLY valid JSON matching the schema you were given. "
+                        "Do NOT include any prose or code fences."
+                    )
+                    repair_user = (
+                        f"Previous JSON parse error: {last_error}\n\n"
+                        f"Your last output (truncated):\n{last_output}\n\n"
+                        "Re-emit the same decision as valid JSON, including agents_to_use when appropriate."
+                    )
+                    repair_msgs = [
+                        {"role": "system", "content": system_prompt},  # original instruction
+                        {"role": "system", "content": repair_system},
+                        {"role": "user", "content": repair_user},
+                    ]
+                    # Re-attach context for determinism
+                    if conversation_history:
+                        repair_msgs.append({"role": "user", "content": f"Conversation History (verbatim):\n{conversation_history}"})
+                    if agent_results:
+                        try:
+                            parts = []
+                            for r in agent_results:
+                                parts.append(f"Agent: {r.display_name}\nResponse (verbatim):\n{r.result}\n----")
+                            repair_msgs.append({"role": "user", "content": "Agent Responses (verbatim):\n" + "\n".join(parts)})
+                        except Exception:
+                            pass
+                    repair_msgs.append({"role": "user", "content": f"User Query: {user_query}"})
+                    # Include logs again in repair attempts
+                    try:
+                        if run_logs:
+                            logs_tail = run_logs[-60:]
+                            logs_text = "\n".join(logs_tail)
+                            if len(logs_text) > 4000:
+                                logs_text = logs_text[-4000:]
+                            repair_msgs.append({
+                                "role": "user",
+                                "content": "Run Logs (recent):\n" + logs_text
+                            })
+                    except Exception:
+                        pass
+
+                    try:
+                        repair_resp = await self.llm_client.chat.completions.create(model=model, messages=repair_msgs, max_completion_tokens=50000)
+                        repaired = repair_resp.choices[0].message.content
+                        decision_data = _validate_and_normalize(json.loads(repaired))
+                        break
+                    except Exception as e2:
+                        last_error = str(e2)
+                        last_output = (repaired if 'repaired' in locals() else '')[:1500]
+                        logger.warning(f"[ChiefAgent] Repair attempt {retries} failed: {e2}")
+                        decision_data = {}
+
+                if not decision_data:
+                    # No fallback - raise error
+                    raise RuntimeError(
+                        f"Chief Agent failed to get valid JSON after {max_retries} repair attempts. "
+                        f"Last error: {last_error}. Last output: {last_output[:200]}"
+                    )
+
+            # Log the assessment fields
+            if "query_assessment" in decision_data:
+                logger.info(f"[ChiefAgent] Query Assessment: {decision_data['query_assessment'][:200]}...")
+            if "thinking_process" in decision_data:
+                logger.info(f"[ChiefAgent] Thinking: {decision_data['thinking_process'][:200]}...")
+            if "confidence_strategy" in decision_data:
+                logger.info(f"[ChiefAgent] Confidence Strategy: {decision_data['confidence_strategy'][:100]}...")
+            if "user_facing_message" in decision_data:
+                logger.info(f"[ChiefAgent] User Message: {decision_data['user_facing_message'][:200]}...")
+
+            logger.info(f"[ChiefAgent] Decision: {decision_data.get('decision')}, Selected: {decision_data.get('selected_agent')}")
+            logger.info(f"[ChiefAgent] Completed in {time.time() - start_time:.3f}s")
+            
+            # Emit conversational thinking to UI (stream into the thinking bubble)
+            try:
+                if ws is not None:
+                    user_msg = (decision_data.get('user_facing_message') or '').strip()
+                    if user_msg:
+                        await ws.send_json({
+                            "type": "thinking",
+                            "text": user_msg,
+                            "model": model,
+                            "elapsed_ms": int((time.time() - start_time) * 1000)
+                        })
+            except Exception:
+                pass
+            
+            return decision_data
+            
+        except Exception as e:
+            logger.error(f"[ChiefAgent] FATAL ERROR: {e}")
+            import traceback
+            traceback.print_exc()
+            raise RuntimeError(f"Chief Agent failed: {str(e)}") from e
 
 
 class ThinkerOrchestrator:
