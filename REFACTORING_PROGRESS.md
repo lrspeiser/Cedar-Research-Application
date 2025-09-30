@@ -38,23 +38,30 @@ Split files over 1000 lines into smaller, maintainable modules per project rules
 
 ---
 
-### 🔄 Step 2: Extract Main WebSocket Chat Script (NEXT - HIGH PRIORITY)
+### ✅ Step 2: Extract Main WebSocket Chat Script (COMPLETED)
 
-**Status:** NOT STARTED - Intentionally deferred
+**Status:** COMPLETED ✅
 
-**Details:**
-- The main chat WebSocket script is ~1,300 lines (lines 713-2064 in original)
-- This is the largest single piece of JavaScript in the file
-- Contains complex state management, SSE/WebSocket handling, message rendering
-- Requires very careful extraction to avoid breaking chat functionality
+**Commit:** 461ffda
 
-**Recommendation:**
-- Create this as a separate, focused task
-- Test thoroughly after extraction
-- Consider breaking into sub-functions if possible
-- May need to create `get_main_chat_script()` function with proper parameter injection
+**Changes Made:**
+- Extracted 1,351-line WebSocket chat script from `page_rendering.py`
+- Implemented `get_main_chat_script()` function in `javascript_bundles.py`
+- Updated imports and replaced inline script with function call
+- Removed lines 720-2070 from `page_rendering.py`
 
-**Estimated Impact:** Would reduce `page_rendering.py` by ~1,300 lines → ~955 lines (under 1000!)
+**Results:**
+- `page_rendering.py`: 2,255 → 905 lines ✅ **UNDER 1000!**
+- `javascript_bundles.py`: 179 → 1,530 lines
+- Total reduction: 1,350 lines (59.9% of original file)
+
+**Testing:**
+- ✅ Both files compile successfully with `python3 -m py_compile`
+- ⚠️  Manual UI testing recommended to verify WebSocket chat still works
+
+**Risk Level:** High (complex script) - Extraction successful but needs testing
+
+**Actual Impact:** Brought `page_rendering.py` from 2,255 to 905 lines - **GOAL ACHIEVED!**
 
 ---
 
@@ -113,29 +120,35 @@ agent_registry.py (~200)     - Agent registration utilities
 ## Current Status Summary
 
 ### Files Still Over 1000 Lines:
-1. ✅ **page_rendering.py** - Now 2,255 lines (down from 2,467)
-   - Reduced by 212 lines (8.6% progress)
-   - Still needs ~1,255 lines removed to reach goal
-   - Next step: Extract main chat script (~1,300 lines) → would bring to ~955 ✅
+1. ✅ **page_rendering.py** - **NOW 905 LINES! GOAL ACHIEVED!** 🎉
+   - Started at: 2,467 lines
+   - After Step 1: 2,255 lines (-212, small JS bundles)
+   - After Step 2: 905 lines (-1,350, main chat script)
+   - **Total reduction: 1,562 lines (63.3%)**
+   - ✅ **UNDER 1000 LINE TARGET!**
    
 2. ⏳ **main.py** - Still 1,927 lines
    - Not yet started
+   - Target: Split into 5 route modules
    
-3. ⏳ **orchestrator.py** - Still 1,460 lines
+3. ⏳ **orchestrator.py** - Still 1,460 lines  
    - Not yet started
+   - Target: Split into 3-4 class modules
 
 ### Completed:
 - ✅ Initial analysis and planning
 - ✅ Created comprehensive `REFACTORING_PLAN.md`
-- ✅ Phase 1 Step 1: Extracted small JS bundles
+- ✅ Phase 1 Step 1: Extracted small JS bundles (212 lines saved)
+- ✅ Phase 1 Step 2: Extracted main chat WebSocket script (1,350 lines saved)
+- ✅ **page_rendering.py now under 1000 lines (905)** 🎉
 - ✅ Set up backup system
 - ✅ Verified compilation
 
 ### Next Actions:
-1. **Immediate:** Manual UI test to verify JavaScript changes work correctly
-2. **High Priority:** Extract main chat WebSocket script (~1,300 lines)
-3. **Medium Priority:** Extract HTML component generators (~400-600 lines)
-4. After Phase 1 complete → Start Phase 2 (main.py splitting)
+1. **Immediate:** Manual UI/chat testing to verify WebSocket functionality works
+2. **Optional:** Extract HTML component generators if desired (could save another ~200-300 lines)
+3. **High Priority:** Start Phase 2 - Split main.py into route modules (1,927 lines)
+4. **Medium Priority:** Phase 3 - Split orchestrator.py (1,460 lines)
 
 ---
 
@@ -169,6 +182,6 @@ agent_registry.py (~200)     - Agent registration utilities
 
 ---
 
-**Last Updated:** 2025-09-29  
-**Phase:** 1.1 (Phase 1, Step 1 Complete)  
-**Overall Progress:** ~8% complete (1 of 3 major files partially addressed)
+**Last Updated:** 2025-09-30  
+**Phase:** 1.2 (Phase 1, Step 2 Complete - page_rendering.py DONE!)  
+**Overall Progress:** ~33% complete (1 of 3 major files COMPLETED ✅)
