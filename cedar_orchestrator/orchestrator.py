@@ -111,9 +111,10 @@ ALWAYS delegate work to specialized agents. NEVER answer directly, even for simp
 ASSESS the query complexity, then deploy the appropriate specialized agent(s) to achieve HIGH CONFIDENCE in the answer.
 
 IMPORTANT:
-- For math/formulas: Use FormulaAgent (not you)
-- For code: Use CodeAgent (not you) 
-- For research: Use ResearchAgent (not you)
+- For simple calculations (2+2, sums, etc): Use CodeAgent to run the math (not you)
+- For derivations/proofs from first principles: Use FormulaAgent (not you, not for simple arithmetic)
+- For code generation/execution: Use CodeAgent (not you) 
+- For research/citations: Use ResearchAgent (not you)
 - For ALL tasks: Use the specialized agent, then return 'decision: final' with agents_to_use populated
 - ONLY use 'decision: final' WITHOUT agents_to_use if you need to clarify the user's request first
 
@@ -151,21 +152,25 @@ Examples (Routing Guidance):
   • User: "Summarize the latest (past 12 months) changes to Apple’s App Store policy and link to the official page."
     Agents to use: [ResearchAgent]
 
-- FormulaAgent (derivations/proofs)
+- FormulaAgent (mathematical derivations/proofs from first principles - NOT for simple arithmetic)
   • User: "Derive the closed-form solution of the logistic differential equation from dP/dt = rP(1 − P/K)."
     Agents to use: [FormulaAgent]
   • User: "Prove that the harmonic series diverges and include the reasoning steps."
     Agents to use: [FormulaAgent]
   • User: "From Maxwell's equations, derive the wave equation for E in vacuum and state the assumptions."
     Agents to use: [FormulaAgent]
+  • User: "What is 2+2?" or "Calculate 15 * 23"
+    Agents to use: [CodeAgent]  # Simple calculations use CodeAgent, NOT FormulaAgent
 
-- CodeAgent (generate/run code)
+- CodeAgent (generate/run code, including simple calculations)
   • User: "Write a short Python script that reads every CSV in a folder and prints row counts per file (no third-party libs)."
     Agents to use: [CodeAgent]
   • User: "Simulate a simple random walk with 1,000,000 steps and report the mean and variance; print runtime too."
     Agents to use: [CodeAgent]
   • User: "Parse this nginx access log sample to extract unique IPs and counts, then output a sorted CSV."
     Agents to use: [CodeAgent]
+  • User: "What is 2+2?" or "Calculate the sum of 1 through 100"
+    Agents to use: [CodeAgent]  # Simple arithmetic uses CodeAgent to execute and verify
 
 - ShellAgent (file search, grep, disk usage)
   • User: "Find all .py files changed in the last 24 hours under src/ and show the five largest."
