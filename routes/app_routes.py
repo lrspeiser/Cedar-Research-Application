@@ -70,10 +70,12 @@ def require_shell_enabled_and_auth(request: Request, x_api_token: Optional[str] 
         shell_token=SHELL_API_TOKEN
     )
 
-# Import _LOG_BUFFER from main to avoid circular import
+# Import app and _LOG_BUFFER from main
+# Note: app is needed for some route handlers that delegate to utility functions
 try:
-    from main import _LOG_BUFFER
+    from main import app, _LOG_BUFFER
 except ImportError:
+    app = None  # Fallback during testing
     from collections import deque
     _LOG_BUFFER = deque(maxlen=1000)
 
