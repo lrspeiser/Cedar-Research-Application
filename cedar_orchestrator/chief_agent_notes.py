@@ -112,52 +112,29 @@ class ChiefAgentNoteTaker:
     def _build_comprehensive_notes(self, user_query: str, agent_results: List[Any], 
                                   chief_decision: Dict[str, Any], 
                                   notes_agent_content: Optional[str]) -> str:
-        """Build comprehensive notes from all agent responses"""
+        """Store chief agent output directly with minimal formatting"""
         
-        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        # Just store what the chief agent outputs to the user
+        # Extract the final_answer which is what goes to the user
+        final_answer = chief_decision.get('final_answer', '')
         
-        # Start with header
-        notes = f"## Query Analysis - {timestamp}\n\n"
-        notes += f"**User Query:** {user_query}\n\n"
+        if final_answer:
+            # Return the final answer directly - this is what the chief agent presents to the user
+            return final_answer.strip()
         
-        # Add Notes Agent content if available
-        if notes_agent_content:
-            notes += f"### Structured Notes\n{notes_agent_content}\n\n"
+        # Fallback: if no final_answer, check for thinking_process
+        thinking_process = chief_decision.get('thinking_process', '')
+        if thinking_process:
+            return thinking_process.strip()
         
-        # Add Chief Agent decision summary
-        notes += "### Chief Agent Analysis\n"
-        notes += f"**Decision:** {chief_decision.get('decision', 'unknown')}\n"
-        notes += f"**Selected Agent:** {chief_decision.get('selected_agent', 'unknown')}\n"
-        notes += f"**Reasoning:** {chief_decision.get('reasoning', 'No reasoning provided')}\n\n"
+        # Last resort: store the decision and reasoning
+        parts = []
+        if chief_decision.get('decision'):
+            parts.append(f"Decision: {chief_decision['decision']}")
+        if chief_decision.get('reasoning'):
+            parts.append(f"Reasoning: {chief_decision['reasoning']}")
         
-        # Add key findings from each agent
-        notes += "### Agent Findings\n"
-        for result in agent_results:
-            if not hasattr(result, 'agent_name'):
-                continue
-                
-            # Skip NotesAgent since we already included it above
-            if result.agent_name == "NotesAgent":
-                continue
-                
-            notes += f"\n#### {result.display_name}\n"
-            notes += f"- **Confidence:** {result.confidence:.2f}\n"
-            notes += f"- **Method:** {result.method}\n"
-            
-            # Extract key findings from the result
-            key_finding = self._extract_key_finding(result.result)
-            if key_finding:
-                notes += f"- **Key Finding:** {key_finding}\n"
-        
-        # Add final answer if available
-        if chief_decision.get('final_answer'):
-            notes += f"\n### Final Answer\n{chief_decision['final_answer'][:500]}\n"
-            
-        # Add any additional guidance for future reference
-        if chief_decision.get('additional_guidance'):
-            notes += f"\n### Future Guidance\n{chief_decision['additional_guidance']}\n"
-            
-        return notes
+        return "\n\n".join(parts) if parts else "No output available"
     
     def _extract_key_finding(self, result_text: str, max_length: int = 200) -> str:
         """Extract the key finding from an agent's result"""
@@ -182,37 +159,16 @@ class ChiefAgentNoteTaker:
         return ""
     
     def _generate_tags(self, user_query: str, chief_decision: Dict[str, Any]) -> List[str]:
-        """Generate relevant tags for the note"""
+        """Generate minimal tags for the note"""
         tags = []
         
-        # Add agent-based tags
+        # Add selected agent if available
         selected_agent = chief_decision.get('selected_agent', '')
-        if selected_agent and selected_agent != 'combined':
-            tags.append(f"agent:{selected_agent.lower().replace(' ', '_')}")
+        if selected_agent:
+            tags.append(selected_agent)
         
-        # Add query type tags
-        query_lower = user_query.lower()
-        if any(word in query_lower for word in ['calculate', 'compute', 'math']):
-            tags.append("math")
-        if any(word in query_lower for word in ['code', 'program', 'function']):
-            tags.append("code")
-        if any(word in query_lower for word in ['sql', 'database', 'query']):
-            tags.append("database")
-        if any(word in query_lower for word in ['research', 'find', 'search']):
-            tags.append("research")
-        if any(word in query_lower for word in ['plan', 'strategy', 'approach']):
-            tags.append("strategy")
-        if any(word in query_lower for word in ['explain', 'why', 'how']):
-            tags.append("explanation")
-            
-        # Add decision type
-        if chief_decision.get('decision') == 'loop':
-            tags.append("iterative")
-        else:
-            tags.append("direct")
-            
-        # Add timestamp-based tag
-        tags.append(f"date:{datetime.now().strftime('%Y-%m-%d')}")
+        # Add date tag
+        tags.append(datetime.now().strftime('%Y-%m-%d'))
         
         return tags
     
