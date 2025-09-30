@@ -413,12 +413,8 @@ try:
 except Exception as e:
     print(f"[startup] Could not mount main_routes: {type(e).__name__}: {e}")
 
-try:
-    from cedar_app.routes.project_routes import router as _project_routes
-    app.include_router(_project_routes, prefix="/project")
-    print("[startup] project_routes mounted at '/project'")
-except Exception as e:
-    print(f"[startup] Could not mount project_routes: {type(e).__name__}: {e}")
+# Removed: cedar_app.routes.project_routes (stub) - real project routes are in routes/app_routes.py
+# This stub was shadowing the full implementation
 
 try:
     from cedar_app.routes.log_routes import router as _log_routes
