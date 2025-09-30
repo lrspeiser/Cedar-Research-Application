@@ -79,7 +79,6 @@ def test_upload_autochat_shows_processing_filename(page: Page, path: str):
         tmp_path = Path.cwd() / fname
         tmp_path.write_text("hello,upload-autochat\n", encoding="utf-8")
         upload_input.set_input_files(str(tmp_path))
-        page.get_by_test_id("upload-submit").click()
 
         # After redirect, auto-chat should start and show the Processing <filename>… bubble
         expect(page).to_have_url(re.compile(r".*/project/\d+\?.*msg=File\+uploaded.*"), timeout=15000)

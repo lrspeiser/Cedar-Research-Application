@@ -98,8 +98,7 @@ Think through how to best handle this query."""
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                stream=True,
-                temperature=0.7
+                stream=True
             )
             
             full_response = ""

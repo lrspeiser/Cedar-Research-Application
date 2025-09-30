@@ -85,7 +85,8 @@ def test_upload_autochat_includes_details(page: Page):
         tmp_path = Path.cwd() / ".pw_upload_details.txt"
         tmp_path.write_text("first line\nsecond line\nthird line\n", encoding="utf-8")
         page.get_by_test_id("upload-input").set_input_files(str(tmp_path))
-        page.get_by_test_id("upload-submit").click()
+        # Auto-submit happens on file selection; wait for redirect
+        page.wait_for_url("**/project/*?**msg=File+uploaded**")
 
         # Verify the chat shows the processing bubble
         expect(page.locator("#msgs")).to_contain_text("Processing", timeout=10000)

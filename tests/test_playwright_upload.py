@@ -82,18 +82,7 @@ def test_project_upload_flow(page: Page, path: str):
         tmp_path = Path.cwd() / ".pw_tmp_upload.txt"
         tmp_path.write_text("hello,playwright\n", encoding="utf-8")
         upload_input.set_input_files(str(tmp_path))
-        # Verify the submit button is visible and enabled before clicking
-        submit_btn = page.get_by_test_id("upload-submit")
-        try:
-            from playwright.sync_api import expect
-            expect(submit_btn).to_be_visible()
-            expect(submit_btn).to_be_enabled()
-        except Exception:
-            # Fallback: attribute check if expect is unavailable
-            assert submit_btn.is_visible(), "Upload submit not visible"
-            assert submit_btn.is_enabled(), "Upload submit not enabled"
-        submit_btn.click()
-        # Should navigate back to project with msg=File+uploaded
+        # Auto-submit happens on file selection; wait for redirect
         page.wait_for_url("**/project/*?**msg=File+uploaded**")
         # Verify file appears in Files list
         # The Files card heading should be present (avoid strict mode violation)

@@ -317,6 +317,21 @@ def serve_project_upload_route(project_id: int, path: str):
                 }, 0);
               } catch(_) {}
             } catch(_) {}
+            // NEW: Auto-submit immediately on file selection and switch to Chat
+            try {
+              if (form && input && input.files && input.files.length > 0) {
+                // Switch to Chat so processing is visible right away
+                try { var chatTab = document.querySelector('.tabs .tab[data-target="main-chat"]'); if (chatTab) chatTab.click(); } catch(_){ }
+                setUploadingState();
+                if (typeof form.requestSubmit === 'function') {
+                  form.requestSubmit();
+                } else if (button) {
+                  try { button.click(); } catch(_){ form.submit(); }
+                } else {
+                  form.submit();
+                }
+              }
+            } catch(_) {}
           } catch(e) { console.error('[ui] file select error', e); }
         });
       }
