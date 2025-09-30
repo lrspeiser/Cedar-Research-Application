@@ -7,7 +7,7 @@ import asyncio
 import os
 import sys
 from pathlib import Path
-from cedar_orchestrator.execution_agents import ShellAgent, AgentResult
+from cedar_orchestrator.agents import ShellAgent, AgentResult
 from openai import AsyncOpenAI
 
 async def test_shell_agent():

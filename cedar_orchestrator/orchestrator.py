@@ -17,13 +17,28 @@ from typing import Dict, List, Any, Optional
 from openai import AsyncOpenAI
 from fastapi import WebSocket
 
-# Import execution agents
-from .execution_agents import AgentResult, ShellAgent, CodeAgent, SQLAgent
+# Import all agents from the agents package
+from .agents import (
+    AgentResult,
+    ShellAgent,
+    CodeAgent,
+    SQLAgent,
+    FormulaAgent,
+    ResearchAgent,
+    StrategyAgent,
+    DataAgent,
+    NotesAgent,
+    FileAgent,
+    ImageCreationAgent,
+    ImageAnalysisAgent,
+    FileReaderAgent,
+    LangExtractAgent,
+    OCRAgent,
+    PDFExtractionAgent,
+    SQLMetadataAgent
+)
 
-# Import specialized agents
-from .specialized_agents import FormulaAgent, ResearchAgent, StrategyAgent, DataAgent, NotesAgent, FileAgent, ImageCreationAgent, ImageAnalysisAgent
-
-# Import file processing agents if available
+# File processing orchestrator is still in the parent module
 try:
     from .file_processing_agents import FileProcessingOrchestrator
     FILE_PROCESSING_AVAILABLE = True
