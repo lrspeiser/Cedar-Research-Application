@@ -124,6 +124,22 @@ IMPORTANT:
 - For ALL tasks: Use the specialized agent, then return 'decision: final' with agents_to_use populated
 - ONLY use 'decision: final' WITHOUT agents_to_use if you need to clarify the user's request first
 
+📁 FILE UPLOAD CONTEXT (CRITICAL):
+- When a user uploads a file, it is ALREADY STORED in the database with a file_id
+- The file_id is automatically passed in context to specialized agents (ImageAnalysisAgent, PDFExtractionAgent, etc.)
+- **FileAgent is ONLY for downloading files from URLs** - NOT for files already uploaded!
+- **NEVER use FileAgent for uploaded files** - the file path is already known in the database
+
+FILE PROCESSING WORKFLOW:
+1. User uploads file → File gets file_id automatically
+2. Use ImageAnalysisAgent (for images) OR PDFExtractionAgent (for PDFs) with file_id in context
+3. Agent looks up file using file_id and processes it
+4. Use SQLAgent to store extracted data in database tables
+5. Generate final summary of what was stored
+
+WRONG: FileAgent + ImageAnalysisAgent (redundant!)
+RIGHT: ImageAnalysisAgent → SQLAgent → Final summary
+
 CURRENT ITERATION STATUS:
 - Iteration: {iteration + 1} of {max_iterations}
 - Remaining loops: {remaining_loops}
@@ -137,6 +153,8 @@ You MUST respond ONLY with valid JSON in this EXACT format (no prose before or a
                 sample_json = """
 {
   "decision": "final" or "loop" or "clarify",
+  "thinking_process": "Internal reasoning: What the agents found, what still needs to be done, which agents to use next",
+  "additional_guidance": "Clear instructions for next iteration (if decision=loop). Example: 'Use SQLAgent to create chart_data table with columns: series, x_value, y_value. Insert the 3 data points extracted by ImageAnalysisAgent.'",
   "final_answer": "Complete formatted text response with markdown. Include everything the user should see: answer, explanation, next steps, etc. YOU format it ALL - punchline first, then details.",
   "agent_tasks": [
     {
@@ -148,15 +166,31 @@ You MUST respond ONLY with valid JSON in this EXACT format (no prose before or a
 }
 
 IMPORTANT FOR SYNTHESIS:
+- Review agent results and decide: Are we done (decision='final') or need more work (decision='loop')?
+- If decision='loop': MUST populate agent_tasks AND additional_guidance with specific next steps
+- If decision='final': MUST populate final_answer with complete user-facing response
+- additional_guidance: Explicit instructions for what to do next (e.g., "Create tables X, Y, Z and insert data")
 - final_answer should be COMPLETE formatted text ready to display
 - Start with punchline/direct answer (1-2 sentences)
-- Add brief explanation if needed
-- Add any warnings/caveats if relevant
 - Format with markdown (bold, bullets, code blocks as appropriate)
 - Keep it CONCISE - don't repeat agent outputs verbatim
 - Our code will display final_answer AS-IS, no manipulation
-- If decision is 'loop', populate agent_tasks with specific tasks for each agent
+- agent_tasks: Specific tasks for each agent in next iteration
 - Each task should be a self-contained instruction that can be passed directly to the agent
+
+EXAMPLE SYNTHESIS (after ImageAnalysisAgent extracted chart data):
+{
+  "decision": "loop",
+  "thinking_process": "ImageAnalysisAgent successfully extracted chart data: 3 data points for CMB temperature predictions. Now need to store this in database using SQLAgent.",
+  "additional_guidance": "Create 'chart_data' table with columns (chart_name TEXT, series_name TEXT, x_label TEXT, y_value REAL). Insert 3 rows for the extracted data points. Also create 'chart_metadata' table to store chart title and axis labels.",
+  "agent_tasks": [
+    {
+      "agent": "SQLAgent",
+      "task": "Create two tables: (1) chart_data with columns: id, chart_name, series_name, x_label, y_value, created_at. (2) chart_metadata with columns: id, chart_name, title, x_axis_label, y_axis_label, y_units. Insert the chart data: 3 rows into chart_data for 'CMB T0 prediction' with series 'Predicted CMB T0' and data points (Expansion/ΛCDM, 3000), (Uniform loss/H0-cal, 3000), (Gated loss/H0-cal, 3000). Insert 1 row into chart_metadata with title 'CMB T0 prediction under H0 calibration', y_axis_label 'Predicted CMB temperature today T0', y_units 'K'.",
+      "context": {}
+    }
+  ]
+}
 """
             else:
                 # PLANNING PHASE: No agent results yet, explain routing decision
@@ -190,12 +224,30 @@ IMPORTANT - PLANNING PHASE (no agent results yet):
             examples = """
 
 Examples (Routing Guidance):
+
+- ImageAnalysisAgent (uploaded image files - file_id in context)
+  • User uploads chart.png (file_id=5)
+    Agents to use: [ImageAnalysisAgent]
+    Task: "Analyze this chart image. Extract: (1) chart type, (2) axis labels and units, (3) data series with data points, (4) any OCR text. Return structured data."
+    Context: {"file_id": 5}
+  • User: "What data is in this chart?" (with file_id=5 in context from upload)
+    FIRST ITERATION: [ImageAnalysisAgent] - extract chart data
+    SECOND ITERATION: [SQLAgent] - create tables and insert extracted data
+    Note: SQLAgent task should specify exact table schema and INSERT statements
+
+- FileAgent (ONLY for downloading from URLs - NOT for uploaded files!)
+  • User: "Download https://example.com/data.csv and analyze it"
+    Agents to use: [FileAgent, DataAgent]
+  • User uploads file.png (ALREADY UPLOADED with file_id)
+    WRONG: [FileAgent, ImageAnalysisAgent]  ← FileAgent is redundant!
+    RIGHT: [ImageAnalysisAgent] ← File already uploaded, just analyze it!
+
 - ResearchAgent (explanations with citations)
   • User: "Explain MOND at a high level and contrast it with the dark-matter paradigm; include 2–3 citations."
     Agents to use: [ResearchAgent]
   • User: "What are the main differences between L1 and L2 regularization in ML? Cite authoritative sources."
     Agents to use: [ResearchAgent]
-  • User: "Summarize the latest (past 12 months) changes to Apple’s App Store policy and link to the official page."
+  • User: "Summarize the latest (past 12 months) changes to Apple's App Store policy and link to the official page."
     Agents to use: [ResearchAgent]
 
 - FormulaAgent (mathematical derivations/proofs from first principles - NOT for simple arithmetic)
