@@ -1028,276 +1028,276 @@ class ThinkerOrchestrator:
         
         if iteration == 0:
             # Parse agent_tasks from planning_decision
-        agent_tasks_list = []
-        try:
-            if isinstance(planning_decision.get('agent_tasks'), list):
-                agent_tasks_list = planning_decision.get('agent_tasks', [])
-        except Exception as e:
-            logger.warning(f"[ORCHESTRATOR] Failed to parse agent_tasks: {e}")
             agent_tasks_list = []
-        
-        # Extract unique agent names from tasks
-        agents_to_use = []
-        agent_task_map = {}  # Map agent name to task string
-        for task_entry in agent_tasks_list:
             try:
-                agent_name = str(task_entry.get('agent', '')).strip()
-                task_str = str(task_entry.get('task', '')).strip()
-                context = task_entry.get('context', {})
-                if agent_name and task_str:
-                    if agent_name not in agents_to_use:
-                        agents_to_use.append(agent_name)
-                    # Store task and context for this agent
-                    agent_task_map[agent_name] = {
-                        'task': task_str,
-                        'context': context
-                    }
+                if isinstance(planning_decision.get('agent_tasks'), list):
+                    agent_tasks_list = planning_decision.get('agent_tasks', [])
             except Exception as e:
-                logger.warning(f"[ORCHESTRATOR] Failed to parse task entry: {e}")
+                logger.warning(f"[ORCHESTRATOR] Failed to parse agent_tasks: {e}")
+                agent_tasks_list = []
         
-        logger.info(f"[ORCHESTRATOR] Agents selected by Chief Agent: {agents_to_use}")
-        logger.info(f"[ORCHESTRATOR] Agent tasks: {agent_task_map}")
-        try:
-            run_logs.append("Planning: agents=" + ",".join(agents_to_use))
-        except Exception:
-            pass
-
-        # Phase 2: Parallel agent processing based on Chief Agent selection
-        logger.info("[ORCHESTRATOR] PHASE 2: Parallel Agent Processing (from Chief selection)")
-        agents = []
-        # Helper to add agent if requested
-        def _add(agent_name: str, agent_obj):
-            nonlocal agents
-            if agent_name in agents_to_use:
-                agents.append(agent_obj)
-                logger.info(f"[ORCHESTRATOR] Added {agent_name} to processing queue")
+            # Extract unique agent names from tasks
+            agents_to_use = []
+            agent_task_map = {}  # Map agent name to task string
+            for task_entry in agent_tasks_list:
                 try:
-                    run_logs.append(f"Queue: {agent_name}")
-                except Exception:
-                    pass
-        _add("CodeAgent", self.code_agent)
-        _add("SQLAgent", self.sql_agent)
-        _add("ShellAgent", self.shell_agent)
-        _add("FormulaAgent", self.formula_agent)
-        _add("ResearchAgent", self.research_agent)
-        _add("StrategyAgent", self.strategy_agent)
-        _add("DataAgent", self.data_agent)
-        _add("NotesAgent", self.notes_agent)
-        _add("ImageCreationAgent", self.image_creation_agent)
-        _add("ImageAnalysisAgent", self.image_analysis_agent)
-        if "FileAgent" in agents_to_use:
-            if db_session and project_id and branch_id:
-                self.file_agent.project_id = project_id
-                self.file_agent.branch_id = branch_id
-                self.file_agent.db_session = db_session
-            agents.append(self.file_agent)
-            logger.info("[ORCHESTRATOR] Added FileAgent to processing queue")
-
-        # Process all agents in parallel
-        logger.info(f"[ORCHESTRATOR] Starting parallel processing with {len(agents)} agents")
-        parallel_start = time.time()
-        
-        # Track whether any agent error occurred
-        had_errors = False
-        
-        # Don't send stream updates that would overwrite the Chief Agent analysis
-        # The detailed analysis message is complete and should stand on its own
-        
-        # Create agent tasks - use specific task strings from agent_task_map
-        agent_tasks = []
-        for agent in agents:
-            agent_class_name = agent.__class__.__name__
-            
-            # Get the specific task for this agent, fallback to user message
-            task_info = agent_task_map.get(agent_class_name, {'task': message, 'context': {}})
-            task_str = task_info.get('task', message)
-            task_context = task_info.get('context', {})
-            
-            logger.info(f"[ORCHESTRATOR] Dispatching to {agent_class_name} with task: {task_str[:100]}...")
-            
-            if isinstance(agent, ShellAgent):
-                conversation_context = f"User Query: {message}\nIteration: {iteration + 1}\nSpecific Task: {task_str}"
-                agent_tasks.append(agent.process(task_str, conversation_context=conversation_context))
-            elif agent is self.image_creation_agent:
-                agent_tasks.append(agent.process(task_str, project_id=project_id, branch_id=branch_id, db_session=db_session))
-            elif agent is self.image_analysis_agent:
-                # ImageAnalysisAgent may need file_id from context
-                file_id_for_analysis = task_context.get('file_id', file_id)
-                agent_tasks.append(agent.process(task_str, project_id=project_id, branch_id=branch_id, db_session=db_session, file_id=file_id_for_analysis))
-            elif agent is self.data_agent:
-                # DataAgent may use project_id from context
-                project_id_for_data = task_context.get('project_id', project_id)
-                agent_tasks.append(agent.process(task_str, project_id=project_id_for_data))
-            elif agent is self.notes_agent:
-                # NotesAgent may have content_to_note in context
-                content_to_note = task_context.get('content_to_note', '')
-                existing_notes = task_context.get('existing_notes', [])
-                agent_tasks.append(agent.process(task_str, content_to_note=content_to_note, existing_notes=existing_notes))
-            else:
-                # Default: just pass the task string
-                agent_tasks.append(agent.process(task_str))
-        
-        results = await asyncio.gather(*agent_tasks, return_exceptions=True)
-        logger.info(f"[ORCHESTRATOR] Parallel processing completed in {time.time() - parallel_start:.3f}s")
-        try:
-            run_logs.append(f"Phase: agents.done dt={time.time() - parallel_start:.3f}s count={len(agents)}")
-        except Exception:
-            pass
-        
-            # Send agent results
-            logger.info("[ORCHESTRATOR] Processing agent results")
-            valid_results = []
-            for i, result in enumerate(results):
-            if isinstance(result, AgentResult):
-                logger.info(f"[ORCHESTRATOR] Result {i+1}: {result.agent_name} - Confidence: {result.confidence:.2f}, Method: {result.method}")
-                logger.info(f"[ORCHESTRATOR] Result {i+1} UI label: {result.display_name}")
-                logger.info(f"[ORCHESTRATOR] Result {i+1} content: {result.result[:200]}...")
-                
-                # Persist code artifacts even if not selected by Chief Agent
-                try:
-                    if db_session and project_id and branch_id and getattr(result, 'artifacts', None):
-                        art = result.artifacts or {}
-                        if str(art.get('type', '')).lower() == 'code' and str(art.get('source', '')).strip():
-                            from main_models import SavedCode
-                            name = (str(art.get('name') or '') or 'Generated Code')[:255]
-                            desc = str(art.get('description') or '')
-                            lang = str(art.get('language') or 'python')[:50]
-                            src = str(art.get('source') or '')
-                            sc = SavedCode(
-                                project_id=int(project_id),
-                                branch_id=int(branch_id),
-                                name=name,
-                                description=desc,
-                                language=lang,
-                                code=src,
-                                agent_name=(result.display_name or result.agent_name)[:100]
-                            )
-                            db_session.add(sc)
-                            db_session.commit()
-                            logger.info(f"[ORCHESTRATOR] Saved code snippet id={getattr(sc, 'id', None)} lang={lang} name={name[:40]}")
+                    agent_name = str(task_entry.get('agent', '')).strip()
+                    task_str = str(task_entry.get('task', '')).strip()
+                    context = task_entry.get('context', {})
+                    if agent_name and task_str:
+                        if agent_name not in agents_to_use:
+                            agents_to_use.append(agent_name)
+                        # Store task and context for this agent
+                        agent_task_map[agent_name] = {
+                            'task': task_str,
+                            'context': context
+                        }
                 except Exception as e:
-                    logger.warning(f"[ORCHESTRATOR] Failed to persist code artifact: {type(e).__name__}: {e}")
+                    logger.warning(f"[ORCHESTRATOR] Failed to parse task entry: {e}")
+            
+            logger.info(f"[ORCHESTRATOR] Agents selected by Chief Agent: {agents_to_use}")
+            logger.info(f"[ORCHESTRATOR] Agent tasks: {agent_task_map}")
+            try:
+                run_logs.append("Planning: agents=" + ",".join(agents_to_use))
+            except Exception:
+                pass
+
+            # Phase 2: Parallel agent processing based on Chief Agent selection
+            logger.info("[ORCHESTRATOR] PHASE 2: Parallel Agent Processing (from Chief selection)")
+            agents = []
+            # Helper to add agent if requested
+            def _add(agent_name: str, agent_obj):
+                nonlocal agents
+                if agent_name in agents_to_use:
+                    agents.append(agent_obj)
+                    logger.info(f"[ORCHESTRATOR] Added {agent_name} to processing queue")
+                    try:
+                        run_logs.append(f"Queue: {agent_name}")
+                    except Exception:
+                        pass
+            _add("CodeAgent", self.code_agent)
+            _add("SQLAgent", self.sql_agent)
+            _add("ShellAgent", self.shell_agent)
+            _add("FormulaAgent", self.formula_agent)
+            _add("ResearchAgent", self.research_agent)
+            _add("StrategyAgent", self.strategy_agent)
+            _add("DataAgent", self.data_agent)
+            _add("NotesAgent", self.notes_agent)
+            _add("ImageCreationAgent", self.image_creation_agent)
+            _add("ImageAnalysisAgent", self.image_analysis_agent)
+            if "FileAgent" in agents_to_use:
+                if db_session and project_id and branch_id:
+                    self.file_agent.project_id = project_id
+                    self.file_agent.branch_id = branch_id
+                    self.file_agent.db_session = db_session
+                agents.append(self.file_agent)
+                logger.info("[ORCHESTRATOR] Added FileAgent to processing queue")
+
+            # Process all agents in parallel
+            logger.info(f"[ORCHESTRATOR] Starting parallel processing with {len(agents)} agents")
+            parallel_start = time.time()
+            
+            # Track whether any agent error occurred
+            had_errors = False
+            
+            # Don't send stream updates that would overwrite the Chief Agent analysis
+            # The detailed analysis message is complete and should stand on its own
+            
+            # Create agent tasks - use specific task strings from agent_task_map
+            agent_tasks = []
+            for agent in agents:
+                agent_class_name = agent.__class__.__name__
                 
-                # Send agent completion status with display name
-                status_text = result.result  # Already formatted by the agent
+                # Get the specific task for this agent, fallback to user message
+                task_info = agent_task_map.get(agent_class_name, {'task': message, 'context': {}})
+                task_str = task_info.get('task', message)
+                task_context = task_info.get('context', {})
                 
-                await websocket.send_json({
-                    "type": "agent_result",
-                    "agent_name": result.display_name,  # Use display name for UI
-                    "text": status_text,
-                    "summary": result.summary,  # Include summary for user visibility
-                    "metadata": {
-                        "agent": result.agent_name,
-                        "confidence": result.confidence,
-                        "method": result.method,
-                        "needs_rerun": result.needs_rerun,
-                        "summary": result.summary  # Also include in metadata
-                    }
-                })
-                try:
-                    short = (result.summary or (result.result or '').split('\n',1)[0] or '').strip()
-                    if len(short) > 160: short = short[:160]
-                    run_logs.append(f"AgentOK: {result.display_name} conf={result.confidence:.2f} sum={short}")
-                except Exception:
-                    pass
-                valid_results.append(result)
-                await asyncio.sleep(0.2)
-            elif isinstance(result, Exception):
-                logger.error(f"[ORCHESTRATOR] Agent {i+1} failed with exception: {result}")
-                had_errors = True
+                logger.info(f"[ORCHESTRATOR] Dispatching to {agent_class_name} with task: {task_str[:100]}...")
                 
-                # Determine which agent failed based on index
-                agent_name = "Unknown Agent"
-                display_name = "Unknown Agent"
-                if i < len(agents):
-                    agent = agents[i]
-                    agent_name = agent.__class__.__name__
-                    # Map agent to display name
-                    agent_display_names = {
-                        "CodeAgent": "Coding Agent",
-                        "ShellAgent": "Desktop Agent",
-                        "SQLAgent": "SQL Agent",
-                        "FormulaAgent": "Formula Agent",
-                        "ResearchAgent": "Research Agent",
-                        "StrategyAgent": "Strategy Agent",
-                        "DataAgent": "Data Agent",
-                        "NotesAgent": "Notes Agent",
-                        "FileAgent": "File Manager",
-                        "ImageCreationAgent": "Image Creation",
-                        "ImageAnalysisAgent": "Image Analysis"
-                    }
-                    display_name = agent_display_names.get(agent_name, agent_name)
-                
-                # Create error report with detailed information
-                error_type = type(result).__name__
-                error_msg = str(result)
-                
-                # Check for common error patterns and provide specific guidance
-                error_details = f"""Exception Type: {error_type}
+                if isinstance(agent, ShellAgent):
+                    conversation_context = f"User Query: {message}\nIteration: {iteration + 1}\nSpecific Task: {task_str}"
+                    agent_tasks.append(agent.process(task_str, conversation_context=conversation_context))
+                elif agent is self.image_creation_agent:
+                    agent_tasks.append(agent.process(task_str, project_id=project_id, branch_id=branch_id, db_session=db_session))
+                elif agent is self.image_analysis_agent:
+                    # ImageAnalysisAgent may need file_id from context
+                    file_id_for_analysis = task_context.get('file_id', file_id)
+                    agent_tasks.append(agent.process(task_str, project_id=project_id, branch_id=branch_id, db_session=db_session, file_id=file_id_for_analysis))
+                elif agent is self.data_agent:
+                    # DataAgent may use project_id from context
+                    project_id_for_data = task_context.get('project_id', project_id)
+                    agent_tasks.append(agent.process(task_str, project_id=project_id_for_data))
+                elif agent is self.notes_agent:
+                    # NotesAgent may have content_to_note in context
+                    content_to_note = task_context.get('content_to_note', '')
+                    existing_notes = task_context.get('existing_notes', [])
+                    agent_tasks.append(agent.process(task_str, content_to_note=content_to_note, existing_notes=existing_notes))
+                else:
+                    # Default: just pass the task string
+                    agent_tasks.append(agent.process(task_str))
+            
+            results = await asyncio.gather(*agent_tasks, return_exceptions=True)
+            logger.info(f"[ORCHESTRATOR] Parallel processing completed in {time.time() - parallel_start:.3f}s")
+            try:
+                run_logs.append(f"Phase: agents.done dt={time.time() - parallel_start:.3f}s count={len(agents)}")
+            except Exception:
+                pass
+            
+                # Send agent results
+                logger.info("[ORCHESTRATOR] Processing agent results")
+                valid_results = []
+                for i, result in enumerate(results):
+                    if isinstance(result, AgentResult):
+                        logger.info(f"[ORCHESTRATOR] Result {i+1}: {result.agent_name} - Confidence: {result.confidence:.2f}, Method: {result.method}")
+                        logger.info(f"[ORCHESTRATOR] Result {i+1} UI label: {result.display_name}")
+                        logger.info(f"[ORCHESTRATOR] Result {i+1} content: {result.result[:200]}...")
+                        
+                        # Persist code artifacts even if not selected by Chief Agent
+                        try:
+                            if db_session and project_id and branch_id and getattr(result, 'artifacts', None):
+                                art = result.artifacts or {}
+                                if str(art.get('type', '')).lower() == 'code' and str(art.get('source', '')).strip():
+                                    from main_models import SavedCode
+                                    name = (str(art.get('name') or '') or 'Generated Code')[:255]
+                                    desc = str(art.get('description') or '')
+                                    lang = str(art.get('language') or 'python')[:50]
+                                    src = str(art.get('source') or '')
+                                    sc = SavedCode(
+                                        project_id=int(project_id),
+                                        branch_id=int(branch_id),
+                                        name=name,
+                                        description=desc,
+                                        language=lang,
+                                        code=src,
+                                        agent_name=(result.display_name or result.agent_name)[:100]
+                                    )
+                                    db_session.add(sc)
+                                    db_session.commit()
+                                    logger.info(f"[ORCHESTRATOR] Saved code snippet id={getattr(sc, 'id', None)} lang={lang} name={name[:40]}")
+                        except Exception as e:
+                            logger.warning(f"[ORCHESTRATOR] Failed to persist code artifact: {type(e).__name__}: {e}")
+                        
+                        # Send agent completion status with display name
+                        status_text = result.result  # Already formatted by the agent
+                        
+                        await websocket.send_json({
+                            "type": "agent_result",
+                            "agent_name": result.display_name,  # Use display name for UI
+                            "text": status_text,
+                            "summary": result.summary,  # Include summary for user visibility
+                            "metadata": {
+                                "agent": result.agent_name,
+                                "confidence": result.confidence,
+                                "method": result.method,
+                                "needs_rerun": result.needs_rerun,
+                                "summary": result.summary  # Also include in metadata
+                            }
+                        })
+                        try:
+                            short = (result.summary or (result.result or '').split('\n',1)[0] or '').strip()
+                            if len(short) > 160: short = short[:160]
+                            run_logs.append(f"AgentOK: {result.display_name} conf={result.confidence:.2f} sum={short}")
+                        except Exception:
+                            pass
+                        valid_results.append(result)
+                        await asyncio.sleep(0.2)
+                    elif isinstance(result, Exception):
+                        logger.error(f"[ORCHESTRATOR] Agent {i+1} failed with exception: {result}")
+                        had_errors = True
+                        
+                        # Determine which agent failed based on index
+                        agent_name = "Unknown Agent"
+                        display_name = "Unknown Agent"
+                        if i < len(agents):
+                            agent = agents[i]
+                            agent_name = agent.__class__.__name__
+                            # Map agent to display name
+                            agent_display_names = {
+                                "CodeAgent": "Coding Agent",
+                                "ShellAgent": "Desktop Agent",
+                                "SQLAgent": "SQL Agent",
+                                "FormulaAgent": "Formula Agent",
+                                "ResearchAgent": "Research Agent",
+                                "StrategyAgent": "Strategy Agent",
+                                "DataAgent": "Data Agent",
+                                "NotesAgent": "Notes Agent",
+                                "FileAgent": "File Manager",
+                                "ImageCreationAgent": "Image Creation",
+                                "ImageAnalysisAgent": "Image Analysis"
+                            }
+                            display_name = agent_display_names.get(agent_name, agent_name)
+                        
+                        # Create error report with detailed information
+                        error_type = type(result).__name__
+                        error_msg = str(result)
+                        
+                        # Check for common error patterns and provide specific guidance
+                        error_details = f"""Exception Type: {error_type}
 Error Message: {error_msg}
 Agent: {agent_name}
 Task: {message[:200]}{'...' if len(message) > 200 else ''}"""
-                
-                suggested_fix = "Review the error details and check:"
-                if "OPENAI_API_KEY" in error_msg or "api_key" in error_msg.lower():
-                    suggested_fix += "\n- Ensure OPENAI_API_KEY is set in environment"
-                    suggested_fix += "\n- Check the API key is valid and has proper permissions"
-                elif "connection" in error_msg.lower() or "network" in error_msg.lower():
-                    suggested_fix += "\n- Check network connectivity"
-                    suggested_fix += "\n- Verify firewall settings allow API access"
-                elif "timeout" in error_msg.lower():
-                    suggested_fix += "\n- The operation took too long to complete"
-                    suggested_fix += "\n- Try a simpler query or break it into smaller parts"
-                elif "module" in error_msg.lower() or "import" in error_msg.lower():
-                    suggested_fix += "\n- Required Python modules may not be installed"
-                    suggested_fix += "\n- Check if all dependencies are properly installed"
-                else:
-                    suggested_fix += "\n- Check the agent's configuration"
-                    suggested_fix += "\n- Review the error message for specific issues"
-                
-                # Create an AgentResult for the exception
-                error_result = AgentResult(
-                    agent_name=agent_name,
-                    display_name=display_name,
-                    result=f"""**Agent Failure Report:**\n\n{display_name} encountered an unexpected error and could not complete the task.\n\n**Error Details:**\n```\n{error_details}\n```\n\n**Suggested Fix:**\n{suggested_fix}\n\n**What the Chief Agent should know:**\nThis agent crashed during execution. The error has been logged and detailed information is provided above for troubleshooting.""",
-                    confidence=0.0,
-                    method="Agent Exception",
-                    explanation=f"Agent crashed: {error_type}",
-                    summary=f"{display_name} failed with {error_type}: {error_msg[:100]}{'...' if len(error_msg) > 100 else ''}"
-                )
-                
-                # Send the error as an agent result
-                await websocket.send_json({
-                    "type": "agent_result",
-                    "agent_name": display_name,
-                    "text": error_result.result,
-                    "summary": error_result.summary,
-                    "metadata": {
-                        "agent": agent_name,
-                        "confidence": 0.0,
-                        "method": "Agent Exception",
-                        "error": True,
-                        "error_type": error_type,
-                        "summary": error_result.summary
-                    }
-                })
-                try:
-                    run_logs.append(f"AgentERR: {display_name} type={error_type} msg={error_msg[:160]}")
-                except Exception:
-                    pass
-                valid_results.append(error_result)
-                await asyncio.sleep(0.2)
-        else:
-            # Iteration 1+: Use previous_results instead of running agents again
-            logger.info(f"[ORCHESTRATOR] PHASE 2 SKIPPED: Using previous_results from iteration {iteration - 1}")
-            valid_results = previous_results or []
-            logger.info(f"[ORCHESTRATOR] Loaded {len(valid_results)} results from previous iteration")
-                
-        # Phase 3: Chief Agent Review and Decision
-        logger.info("[ORCHESTRATOR] PHASE 3: Chief Agent Review and Decision")
-        logger.info(f"[ORCHESTRATOR] Chief Agent reviewing {len(valid_results)} valid results")
-        
-        # Don't send stream updates - let agent results speak for themselves
+                        
+                        suggested_fix = "Review the error details and check:"
+                        if "OPENAI_API_KEY" in error_msg or "api_key" in error_msg.lower():
+                            suggested_fix += "\n- Ensure OPENAI_API_KEY is set in environment"
+                            suggested_fix += "\n- Check the API key is valid and has proper permissions"
+                        elif "connection" in error_msg.lower() or "network" in error_msg.lower():
+                            suggested_fix += "\n- Check network connectivity"
+                            suggested_fix += "\n- Verify firewall settings allow API access"
+                        elif "timeout" in error_msg.lower():
+                            suggested_fix += "\n- The operation took too long to complete"
+                            suggested_fix += "\n- Try a simpler query or break it into smaller parts"
+                    elif "module" in error_msg.lower() or "import" in error_msg.lower():
+                        suggested_fix += "\n- Required Python modules may not be installed"
+                        suggested_fix += "\n- Check if all dependencies are properly installed"
+                    else:
+                        suggested_fix += "\n- Check the agent's configuration"
+                        suggested_fix += "\n- Review the error message for specific issues"
+                    
+                    # Create an AgentResult for the exception
+                    error_result = AgentResult(
+                        agent_name=agent_name,
+                        display_name=display_name,
+                        result=f"""**Agent Failure Report:**\n\n{display_name} encountered an unexpected error and could not complete the task.\n\n**Error Details:**\n```\n{error_details}\n```\n\n**Suggested Fix:**\n{suggested_fix}\n\n**What the Chief Agent should know:**\nThis agent crashed during execution. The error has been logged and detailed information is provided above for troubleshooting.""",
+                        confidence=0.0,
+                        method="Agent Exception",
+                        explanation=f"Agent crashed: {error_type}",
+                        summary=f"{display_name} failed with {error_type}: {error_msg[:100]}{'...' if len(error_msg) > 100 else ''}"
+                    )
+                    
+                    # Send the error as an agent result
+                    await websocket.send_json({
+                        "type": "agent_result",
+                        "agent_name": display_name,
+                        "text": error_result.result,
+                        "summary": error_result.summary,
+                        "metadata": {
+                            "agent": agent_name,
+                            "confidence": 0.0,
+                            "method": "Agent Exception",
+                            "error": True,
+                            "error_type": error_type,
+                            "summary": error_result.summary
+                        }
+                    })
+                    try:
+                        run_logs.append(f"AgentERR: {display_name} type={error_type} msg={error_msg[:160]}")
+                    except Exception:
+                        pass
+                    valid_results.append(error_result)
+                    await asyncio.sleep(0.2)
+            else:
+                # Iteration 1+: Use previous_results instead of running agents again
+                logger.info(f"[ORCHESTRATOR] PHASE 2 SKIPPED: Using previous_results from iteration {iteration - 1}")
+                valid_results = previous_results or []
+                logger.info(f"[ORCHESTRATOR] Loaded {len(valid_results)} results from previous iteration")
+                    
+            # Phase 3: Chief Agent Review and Decision
+            logger.info("[ORCHESTRATOR] PHASE 3: Chief Agent Review and Decision")
+            logger.info(f"[ORCHESTRATOR] Chief Agent reviewing {len(valid_results)} valid results")
+            
+            # Don't send stream updates - let agent results speak for themselves
         
         # Do not pass previous iterations context to Chief Agent; keep input minimal
         previous_context = ""
