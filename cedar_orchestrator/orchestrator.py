@@ -440,19 +440,23 @@ For most agents (CodeAgent, ShellAgent, SQLAgent, FormulaAgent, ResearchAgent, S
                     "content": f"Conversation History (verbatim):\n{conversation_history}"
                 })
 
-            # Provide agent responses from this iteration (truncated for large responses)
+            # Provide agent responses from this iteration (truncated for very large responses)
             try:
                 if agent_results:
                     parts = []
                     for r in agent_results:
-                        # Truncate very long results to prevent context overflow
+                        # Truncate extremely long results to prevent context overflow
+                        # Using ~30000 tokens as threshold (roughly 120,000 characters)
                         result_text = str(r.result or "")
-                        if len(result_text) > 3000:
-                            # For long results, include summary + beginning + end
+                        max_chars = 120000  # ~30000 tokens (4 chars per token average)
+                        if len(result_text) > max_chars:
+                            # For very long results, include summary + beginning + end
                             summary = r.summary if hasattr(r, 'summary') and r.summary else "(no summary)"
-                            result_preview = result_text[:1500] + "\n\n[... truncated for length ...]\n\n" + result_text[-500:]
+                            keep_start = int(max_chars * 0.8)  # Keep 80% from beginning
+                            keep_end = int(max_chars * 0.2)    # Keep 20% from end
+                            result_preview = result_text[:keep_start] + f"\n\n[... truncated {len(result_text) - max_chars} chars for length ...]\n\n" + result_text[-keep_end:]
                             parts.append(f"Agent: {r.display_name}\nSummary: {summary}\nResponse (truncated):\n{result_preview}\n----")
-                            logger.info(f"[ChiefAgent] Truncated {r.display_name} result from {len(result_text)} to 2000 chars")
+                            logger.info(f"[ChiefAgent] Truncated {r.display_name} result from {len(result_text)} chars to {max_chars} chars (~30k tokens)")
                         else:
                             parts.append(f"Agent: {r.display_name}\nResponse:\n{result_text}\n----")
                     msgs.append({
@@ -515,17 +519,18 @@ For most agents (CodeAgent, ShellAgent, SQLAgent, FormulaAgent, ResearchAgent, S
             api_retries = 0
             api_max_retries = 3
             last_api_error = None
-            # Per-call timeout (seconds) - longer for synthesis phase
+            # Per-call timeout (seconds) - much longer for synthesis phase (5 minutes)
             try:
                 base_timeout = int(os.getenv("CEDARPY_LLM_TIMEOUT_SECONDS", "45"))
-                # Use longer timeout for synthesis phase (has agent results to process)
+                # Use 5-minute timeout for synthesis phase (has agent results to process)
                 if agent_results:
-                    llm_timeout_s = int(os.getenv("CEDARPY_LLM_SYNTHESIS_TIMEOUT_SECONDS", str(base_timeout * 2)))
-                    logger.info(f"[ChiefAgent] Using extended synthesis timeout: {llm_timeout_s}s (base: {base_timeout}s)")
+                    llm_timeout_s = int(os.getenv("CEDARPY_LLM_SYNTHESIS_TIMEOUT_SECONDS", "300"))  # 5 minutes default
+                    logger.info(f"[ChiefAgent] Using extended synthesis timeout: {llm_timeout_s}s (5 minutes) for reviewing agent results")
                 else:
                     llm_timeout_s = base_timeout
+                    logger.info(f"[ChiefAgent] Using standard timeout: {llm_timeout_s}s for planning phase")
             except Exception:
-                llm_timeout_s = 90 if agent_results else 45
+                llm_timeout_s = 300 if agent_results else 45
             while True:
                 try:
                     # Enforce a timeout on the LLM call
