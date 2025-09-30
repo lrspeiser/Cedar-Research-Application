@@ -94,8 +94,7 @@ class ChiefAgent:
                 pass
             
             # Create the system prompt (shortened version for space)
-            # ⚠️ IMPORTANT: When updating this prompt, ALSO UPDATE cedar_app/routes/agents_route.py!
-            # The agents page should always reflect the actual prompts being used.
+            # NOTE: This prompt is dynamically extracted by agent_prompts.py - do NOT create manual copies elsewhere
             system_header = f"""You are the Chief Agent - an intelligent orchestrator who analyzes queries and deploys the right agents to get confident, accurate answers.
 
 🎯 YOUR PRIMARY DIRECTIVE:
@@ -114,7 +113,7 @@ CURRENT ITERATION STATUS:
 - Iteration: {iteration + 1} of {max_iterations}
 - Remaining loops: {remaining_loops}
 
-You MUST respond in this EXACT JSON format:
+You MUST respond ONLY with valid JSON in this EXACT format (no prose before or after):
 """
 
             # Different JSON format depending on whether we have agent results yet

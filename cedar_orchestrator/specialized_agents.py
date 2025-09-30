@@ -167,11 +167,19 @@ class ImageAnalysisAgent:
             url_data = f"data:{mime};base64,{b64}"
             
             model = os.getenv("CEDARPY_VISION_MODEL") or os.getenv("CEDARPY_OPENAI_MODEL") or "gpt-4o-mini"
-            sys_prompt = (
-                "You are a careful computer vision analyst. Analyze the image and respond with STRICT JSON: "
-                "{""title"": ""short title"", ""description"": ""1-2 sentences"", ""objects"": [""...""], ""text"": [""...""], ""tags"": [""...""]}. "
-                "No extra keys, no prose, just JSON."
-            )
+            sys_prompt = """You are a computer vision analyst.
+            
+            You MUST respond ONLY with valid JSON matching this EXACT schema:
+            {
+                "title": "short descriptive title",
+                "description": "1-2 sentence description",
+                "objects": ["object1", "object2"],
+                "text": ["text detected in image"],
+                "tags": ["tag1", "tag2"],
+                "summary": "brief summary for logging"
+            }
+            
+            No extra keys. No prose outside JSON. ONLY valid JSON."""
             user_text = (task or "Analyze this image").strip()
             messages = [
                 {"role": "system", "content": sys_prompt},
@@ -183,12 +191,16 @@ class ImageAnalysisAgent:
             logger.info(f"[ImageAnalysisAgent] Using model={model}")
             resp = await self.llm_client.chat.completions.create(model=model, messages=messages)
             content = (resp.choices[0].message.content or "").strip()
+            
+            # Parse JSON response - fail fast if invalid
             data = json.loads(content)
+            
             title = str(data.get("title") or "").strip()[:100]
             desc = str(data.get("description") or "").strip()[:350]
             tags = data.get("tags") if isinstance(data.get("tags"), list) else []
             objects = data.get("objects") if isinstance(data.get("objects"), list) else []
             text_in_image = data.get("text") if isinstance(data.get("text"), list) else []
+            summary = data.get("summary", "Analyzed image")
             
             # Update DB metadata
             rec.ai_title = title or rec.ai_title
@@ -228,7 +240,7 @@ class ImageAnalysisAgent:
                 confidence=0.85,
                 method="vision",
                 explanation=f"Updated DB metadata in ~{elapsed:.1f}s",
-                summary="Analyzed image and updated metadata"
+                summary=summary
             )
         except Exception as e:
             logger.error(f"[ImageAnalysisAgent] Failed: {e}")
@@ -863,7 +875,14 @@ class FileAgent:
                                     completion_params = {
                                         "model": model,
                                         "messages": [
-                                            {"role": "system", "content": "Generate a brief description for this file based on its content."},
+                                            {
+                                                "role": "system",
+                                                "content": """You are a file analyzer. You MUST respond ONLY with valid JSON:
+                                                {
+                                                    "description": "brief 1-2 sentence description of file content"
+                                                }
+                                                No extra text. ONLY JSON."""
+                                            },
                                             {"role": "user", "content": f"File: {filename}\nContent preview: {first_lines[:500]}"}
                                         ]
                                     }
@@ -873,7 +892,8 @@ class FileAgent:
                                         completion_params["max_tokens"] = 50000
                                     
                                     response = await self.llm_client.chat.completions.create(**completion_params)
-                                    ai_description = response.choices[0].message.content.strip()
+                                    content_json = json.loads(response.choices[0].message.content.strip())
+                                    ai_description = content_json.get("description", "").strip()
                                 except:
                                     pass
                             
