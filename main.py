@@ -497,23 +497,16 @@ except Exception as e:
 # Import SQL routes
 from cedar_app.routes import sql_routes
 
-# Register Agents route
+# Register Agents route (dynamically pulls actual prompts from agent implementations)
 _AGENTS_ROUTE_REGISTERED = False
 try:
-    from cedar_app.routes.agents_route2 import register_agents_route as _register_agents_route
+    from cedar_app.routes.agents_route import register_agents_route as _register_agents_route
     _register_agents_route(app)
     _AGENTS_ROUTE_REGISTERED = True
-    print("[startup] Agents route registered (v2)")
+    print("[startup] Agents route registered")
 except Exception as e:
-    print(f"[startup] agents_route2 failed: {e}")
-    try:
-        from cedar_app.routes.agents_route import register_agents_route as _register_agents_route
-        _register_agents_route(app)
-        _AGENTS_ROUTE_REGISTERED = True
-        print("[startup] Agents route registered (legacy)")
-    except Exception as e2:
-        _AGENTS_ROUTE_REGISTERED = False
-        print(f"[startup] Could not register agents route: {e2}")
+    _AGENTS_ROUTE_REGISTERED = False
+    print(f"[startup] Could not register agents route: {e}")
 
 # Register Chat API routes
 try:

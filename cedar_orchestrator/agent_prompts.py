@@ -111,7 +111,7 @@ If there are supporting files, images, or databases already in your project, pre
 
 
 def get_code_agent_prompt() -> str:
-    """Extract CodeAgent prompt from execution_agents.py"""
+    """Get CodeAgent prompt - EXACT copy from execution_agents.py"""
     return """You are a Python code generator.
 
 You MUST respond with VALID JSON in this EXACT format:
