@@ -280,8 +280,37 @@ async def handle_ws_chat(
                         # Chat numbers map to threads in this implementation
                         derived_thread_id = chat_number if chat_number else None
                         
+                        # If file_id is present but content is empty/minimal, provide helpful default prompt
+                        query_to_send = content
+                        if file_id and (not content or len(content.strip()) < 20):
+                            # Enhanced prompt that guides the LLM on how to handle different file types
+                            query_to_send = f"""I uploaded a file (file_id: {file_id}). Please analyze it appropriately:
+
+**For structured data files (CSV, JSON, Excel, SQL):**
+- Analyze the data structure and schema
+- Provide summary statistics (row counts, column types, ranges)
+- Identify any data quality issues or patterns
+- Suggest relevant queries or analyses
+- Offer to create visualizations
+
+**For unstructured files (PDFs, text documents, markdown):**
+- Extract and summarize key content
+- Identify main topics and themes
+- Pull out important facts, figures, or quotes
+- Suggest follow-up questions or analyses
+
+**For images (charts, plots, diagrams, photos):**
+- Describe what's shown in the image
+- Extract any data from charts/graphs
+- Perform OCR on any text present
+- Offer to recreate charts with extracted data
+- Suggest analyses based on visual content
+
+Please start by analyzing the file and providing insights."""
+                            logger.info(f"[WebSocket] File upload detected, using enhanced analysis prompt for file_id={file_id}")
+                        
                         await orchestrator.orchestrate(
-                            content,
+                            query_to_send,
                             ws_to_use,
                             iteration=0,
                             previous_results=None,
