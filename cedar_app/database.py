@@ -21,7 +21,8 @@ from cedar_app.config import (
 # Import models from main_models (we'll keep using that file for now)
 from main_models import (
     Base, Project, Branch, Thread, ThreadMessage, FileEntry, 
-    Dataset, Setting, Version, ChangelogEntry, SQLUndoLog, Note
+    Dataset, Setting, Version, ChangelogEntry, SQLUndoLog, Note,
+    Chat, ChatMessage
 )
 
 from main_helpers import ensure_main_branch
@@ -239,6 +240,34 @@ def _migrate_project_notes_table(engine_obj):
         # Best-effort; don't fail the whole initialization
 
 
+def _migrate_project_chat_tables(engine_obj):
+    """Ensure the chats and chat_messages tables exist in the project database.
+    Chat tables store persistent chat history with each message as a separate record.
+    """
+    try:
+        from sqlalchemy import inspect
+        from main_models import Chat, ChatMessage
+        
+        inspector = inspect(engine_obj)
+        existing_tables = inspector.get_table_names()
+        
+        # Create chats table if missing
+        if 'chats' not in existing_tables:
+            print(f"[chat-migration] Creating chats table")
+            Chat.__table__.create(engine_obj)
+            print(f"[chat-migration] Chats table created successfully")
+        
+        # Create chat_messages table if missing
+        if 'chat_messages' not in existing_tables:
+            print(f"[chat-migration] Creating chat_messages table")
+            ChatMessage.__table__.create(engine_obj)
+            print(f"[chat-migration] Chat messages table created successfully")
+            
+    except Exception as e:
+        print(f"[chat-migration] Failed to create chat tables: {e}")
+        # Best-effort; don't fail the whole initialization
+
+
 def _migrate_registry_metadata_json(engine_obj):
     """Add metadata_json and AI columns to registry files table."""
     try:
@@ -307,6 +336,7 @@ def ensure_project_initialized(project_id: int) -> None:
         _migrate_thread_messages_columns(eng)
         _migrate_project_langextract_tables(eng)
         _migrate_project_notes_table(eng)  # Add notes table migration
+        _migrate_project_chat_tables(eng)  # Add chat tables migration
         # Seed project row and Main branch if missing
         SessionLocal = sessionmaker(bind=eng, autoflush=False, autocommit=False, future=True)
         pdb = SessionLocal()
@@ -333,6 +363,7 @@ def ensure_project_initialized(project_id: int) -> None:
         _migrate_thread_messages_columns(eng)
         _migrate_project_langextract_tables(eng)
         _migrate_project_notes_table(eng)  # Add notes table migration
+        _migrate_project_chat_tables(eng)  # Add chat tables migration
     except Exception as e:
         print(f"[ensure-project-error] Failed to initialize project {project_id}: {type(e).__name__}: {e}")
         raise  # Re-raise to surface the error

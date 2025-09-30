@@ -223,3 +223,75 @@ class SavedCode(Base):
     __table_args__ = (
         Index("ix_saved_code_project_branch", "project_id", "branch_id", "created_at"),
     )
+
+
+class Chat(Base):
+    """Persistent chat sessions with SQL storage.
+    Each chat has a sequential number within its project/branch context.
+    All messages are stored in chat_messages table for efficient querying.
+    """
+    __tablename__ = "chats"
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    branch_id = Column(Integer, ForeignKey("branches.id"), nullable=False, index=True)
+    chat_number = Column(Integer, nullable=False)  # Sequential number within project/branch
+    thread_id = Column(Integer, ForeignKey("threads.id"), nullable=True)  # Optional link to thread
+    
+    # Chat metadata
+    title = Column(String(255), nullable=False)
+    status = Column(String(20), default='active')  # active, processing, complete, error
+    
+    # Timestamps
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    
+    # Additional metadata stored as JSON
+    metadata_json = Column(JSON)
+    
+    # Relationships
+    project = relationship("Project")
+    branch = relationship("Branch")
+    messages = relationship("ChatMessage", back_populates="chat", cascade="all, delete-orphan", order_by="ChatMessage.sequence_number")
+    
+    __table_args__ = (
+        UniqueConstraint("project_id", "branch_id", "chat_number", name="uq_chat_number"),
+        Index("ix_chats_project_branch", "project_id", "branch_id", "created_at"),
+        Index("ix_chats_status", "status"),
+    )
+
+
+class ChatMessage(Base):
+    """Individual messages within a chat.
+    Each message is stored as a separate record for efficient querying and analysis.
+    Messages are ordered by sequence_number for guaranteed ordering.
+    """
+    __tablename__ = "chat_messages"
+    id = Column(Integer, primary_key=True)
+    chat_id = Column(Integer, ForeignKey("chats.id"), nullable=False, index=True)
+    project_id = Column(Integer, nullable=False, index=True)  # Denormalized for faster queries
+    branch_id = Column(Integer, nullable=False, index=True)  # Denormalized for faster queries
+    
+    # Message content
+    sequence_number = Column(Integer, nullable=False)  # Order within chat (1, 2, 3, ...)
+    role = Column(String(20), nullable=False)  # 'user', 'assistant', 'system', 'agent'
+    content = Column(Text, nullable=False)
+    
+    # Optional structured data
+    metadata_json = Column(JSON)  # Agent results, prompts, structured data, etc.
+    
+    # Message metadata
+    agent_name = Column(String(100), nullable=True)  # Which agent generated this message
+    
+    # Timestamps
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    
+    # Relationships
+    chat = relationship("Chat", back_populates="messages")
+    
+    __table_args__ = (
+        UniqueConstraint("chat_id", "sequence_number", name="uq_chat_message_sequence"),
+        Index("ix_chat_messages_chat_seq", "chat_id", "sequence_number"),
+        Index("ix_chat_messages_project_branch", "project_id", "branch_id", "created_at"),
+        Index("ix_chat_messages_role", "role"),
+        Index("ix_chat_messages_agent", "agent_name"),
+    )
