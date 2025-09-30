@@ -125,20 +125,44 @@ CURRENT ITERATION STATUS:
 You MUST respond in this EXACT JSON format:
 """
 
-            sample_json = """
+            # Different JSON format depending on whether we have agent results yet
+            if agent_results:
+                # SYNTHESIS PHASE: We have agent results, provide formatted final answer
+                sample_json = """
 {
   "decision": "final" or "loop" or "clarify",
-  "query_assessment": "Assess complexity: Is this simple (basic facts/math), moderate (requires research/analysis), or complex (multi-step reasoning/multiple data sources)? State confidence target.",
-  "thinking_process": "SPECIFIC to THIS query: 'User asks about X. To get a confident answer, I need Y and Z. I will use [specific agents] because [specific reasons].'",
-  "user_facing_message": "Conversational analysis that shows your thinking with five parts: (1) Evaluate the user's request. (2) Consider what the user might really want. (3) Consider which agents can solve the question or evaluate the agents' results. (4) Assign work to those agents (briefly, in natural language). (5) Decide whether there is enough data to answer now or what to pass to agents next. Keep it succinct and helpful.",
-  "final_answer": "The comprehensive answer to the user's question (only if 'final')",
-  "additional_guidance": "SPECIFIC next action(s) for selected agents (only if 'loop')",
-  "clarification_question": "SPECIFIC question about ambiguity: 'When you say X, do you mean Y or Z?' (only if 'clarify')",
-  "selected_agent": "Single agent name OR 'combined' for multiple agents (backward compatibility)",
-  "agents_to_use": ["CodeAgent" | "FormulaAgent" | "ResearchAgent" | "StrategyAgent" | "SQLAgent" | "DataAgent" | "NotesAgent" | "ShellAgent" | "FileAgent" | "ImageCreationAgent" | "ImageAnalysisAgent"],
-  "reasoning": "Why these agents will give us a CONFIDENT answer: 'For MOND theory, I need Research Agent for papers AND Notes Agent for documentation'",
-  "confidence_strategy": "How many agents and why: 'Using 3 agents for cross-validation' or 'Single agent sufficient for simple calc'"
+  "final_answer": "Complete formatted text response with markdown. Include everything the user should see: answer, explanation, next steps, etc. YOU format it ALL - punchline first, then details.",
+  "selected_agent": "The agent whose answer you're using",
+  "reasoning": "One sentence on your decision-making process",
+  "additional_guidance": "ONLY if 'loop' - what to do next"
 }
+
+IMPORTANT FOR SYNTHESIS:
+- final_answer should be COMPLETE formatted text ready to display
+- Start with punchline/direct answer (1-2 sentences)
+- Add brief explanation if needed
+- Add any warnings/caveats if relevant
+- Format with markdown (bold, bullets, code blocks as appropriate)
+- Keep it CONCISE - don't repeat agent outputs verbatim
+- Our code will display final_answer AS-IS, no manipulation
+"""
+            else:
+                # PLANNING PHASE: No agent results yet, explain routing decision
+                sample_json = """
+{
+  "decision": "final" or "loop" or "clarify",
+  "thinking_process": "Internal: 'User asks X. I will use [agents] because [reasons].'",
+  "user_facing_message": "Brief formatted text explaining your routing decision. Keep it conversational and succinct. Example: 'I'll use CodeAgent to calculate this for you.'",
+  "selected_agent": "Single agent name OR 'combined'",
+  "agents_to_use": ["CodeAgent" | "FormulaAgent" | "ResearchAgent" | "StrategyAgent" | "SQLAgent" | "DataAgent" | "NotesAgent" | "ShellAgent" | "FileAgent" | "ImageCreationAgent" | "ImageAnalysisAgent"],
+  "reasoning": "Why these agents: one sentence",
+  "clarification_question": "ONLY if 'clarify' - formatted question text"
+}
+
+PLANNING PHASE RULES:
+- user_facing_message is displayed to user while agents work
+- Keep it SHORT - just explain what you're doing
+- Our code displays it AS-IS, no parsing or manipulation
 """
 
             examples = """
@@ -1436,90 +1460,20 @@ Please provide this information so I can better assist you."""
             # Start next iteration with Chief Agent's guidance
             return await self.orchestrate(enhanced_message, websocket, iteration + 1, valid_results, project_id, branch_id, db_session)
         
-        # Chief Agent has made final decision - prepare the response
+        # Chief Agent has made final decision - extract JSON fields only
         final_answer = chief_decision.get('final_answer', '')
-        user_facing_message = chief_decision.get('user_facing_message', '')
         selected_agent = chief_decision.get('selected_agent', 'The Chief Agent')
         reasoning = chief_decision.get('reasoning', '')
         
         logger.info(f"[ORCHESTRATOR] Chief Agent FINAL decision")
         logger.info(f"[ORCHESTRATOR] Selected approach: {selected_agent}")
-        logger.info(f"[ORCHESTRATOR] Reasoning: {reasoning}")
-        if user_facing_message:
-            logger.info(f"[ORCHESTRATOR] User-facing message: {user_facing_message[:200]}...")
+        logger.info(f"[ORCHESTRATOR] Final answer: {final_answer[:200]}...")
         
-        # Don't send stream update that would overwrite the bubble
-        # Just proceed directly to the final message
-        
-        # Calculate total time before using it
+        # Calculate total time
         total_time = time.time() - orchestration_start
         
-        # Use user_facing_message if available, otherwise use final_answer
-        result_text = user_facing_message if user_facing_message else final_answer
-        
-        # Check if the Chief Agent already provided a fully formatted response
-        # Look for the key structural elements that indicate it's already formatted
-        has_answer_section = '**Answer:**' in result_text or 'Answer:' in result_text
-        has_why_section = '**Why:**' in result_text or 'Why:' in result_text
-        has_agent_section = '**What Each Agent Found:**' in result_text or 'What Each Agent Found:' in result_text
-        has_next_steps = '**Suggested Next Steps:**' in result_text or 'Suggested Next Steps:' in result_text
-        
-        # If the Chief Agent already formatted the response completely, use it as-is
-        if has_answer_section and (has_why_section or has_agent_section or has_next_steps):
-            # The Chief Agent has already provided a fully formatted response
-            final_text = result_text
-            logger.info("[ORCHESTRATOR] Using Chief Agent's pre-formatted response")
-        else:
-            # The Chief Agent provided an unformatted response, so format it
-            logger.info("[ORCHESTRATOR] Formatting Chief Agent's raw response")
-            
-            # Parse out the structured sections if they exist
-            answer_match = re.search(r'Answer:\s*(.+?)(?=\n\n|\n(?:Why:|Potential Issues:|Suggested Next Steps:)|$)', result_text, re.DOTALL)
-            why_match = re.search(r'Why:\s*(.+?)(?=\n\n|\n(?:Potential Issues:|Suggested Next Steps:)|$)', result_text, re.DOTALL)
-            issues_match = re.search(r'Potential Issues:\s*(.+?)(?=\n\n|\nSuggested Next Steps:|$)', result_text, re.DOTALL)
-            next_steps_match = re.search(r'Suggested Next Steps:\s*(.+?)(?=\n\n|$)', result_text, re.DOTALL)
-            
-            # If Chief Agent provided a plain answer, use it directly
-            if not answer_match and not why_match:
-                answer = result_text
-                why = reasoning
-                issues = None
-                next_steps = None
-            else:
-                answer = answer_match.group(1).strip() if answer_match else result_text.split('\n')[0]
-                why = why_match.group(1).strip() if why_match else reasoning
-                issues = issues_match.group(1).strip() if issues_match else None
-                next_steps = next_steps_match.group(1).strip() if next_steps_match else None
-            
-            # Build final structured response
-            final_text = f"**Answer:** {answer}\n\n"
-            final_text += f"**Why:** {why}\n\n"
-            
-            # Add Agent Summaries section if we have results with summaries
-            agent_summaries = [r for r in valid_results if r.summary]
-            if agent_summaries:
-                final_text += "**What Each Agent Found:**\n"
-                for result in agent_summaries:
-                    final_text += f"• **{result.display_name}:** {result.summary}\n"
-                final_text += "\n"
-            
-            if issues and issues.lower() != 'none':
-                final_text += f"**Potential Issues:** {issues}\n\n"
-                
-            # Always include Suggested Next Steps
-            if next_steps:
-                final_text += f"**Suggested Next Steps:** {next_steps}\n\n"
-            else:
-                # Fallback if Chief Agent didn't provide next steps
-                final_text += "**Suggested Next Steps:** "
-                if "error" in result_text.lower() or "failed" in result_text.lower():
-                    final_text += "Review the error details and try a different approach or provide more specific information.\n\n"
-                elif "code" in result_text.lower() or "function" in result_text.lower():
-                    final_text += "Test the provided code, modify it for your specific use case, or ask for additional features.\n\n"
-                elif "file" in result_text.lower() or "download" in result_text.lower():
-                    final_text += "Check the downloaded files, analyze their contents, or process them further as needed.\n\n"
-                else:
-                    final_text += "Let me know if you need clarification, want to explore this topic further, or have related questions.\n\n"
+        # Use the LLM's formatted answer directly - no parsing, no manipulation
+        final_text = final_answer
         
         # Add metadata about processing
         if iteration > 0:

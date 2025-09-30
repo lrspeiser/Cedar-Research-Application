@@ -28,20 +28,26 @@ CURRENT ITERATION STATUS:
 You MUST respond in this EXACT JSON format:
 """
 
+    # Note: This is a simplified version for documentation. The actual prompt in orchestrator.py
+    # has two different JSON schemas depending on whether agent results are available.
     sample_json = """
 {
   "decision": "final" or "loop" or "clarify",
-  "query_assessment": "Assess complexity: Is this simple (basic facts/math), moderate (requires research/analysis), or complex (multi-step reasoning/multiple data sources)? State confidence target.",
-  "thinking_process": "SPECIFIC to THIS query: 'User asks about X. To get a confident answer, I need Y and Z. I will use [specific agents] because [specific reasons].'",
-  "user_facing_message": "Conversational analysis that shows your thinking with five parts: (1) Evaluate the user's request. (2) Consider what the user might really want. (3) Consider which agents can solve the question or evaluate the agents' results. (4) Assign work to those agents (briefly, in natural language). (5) Decide whether there is enough data to answer now or what to pass to agents next. Keep it succinct and helpful.",
-  "final_answer": "The comprehensive answer to the user's question (only if 'final')",
-  "additional_guidance": "SPECIFIC next action(s) for selected agents (only if 'loop')",
-  "clarification_question": "SPECIFIC question about ambiguity: 'When you say X, do you mean Y or Z?' (only if 'clarify')",
-  "selected_agent": "Single agent name OR 'combined' for multiple agents (backward compatibility)",
+  "thinking_process": "Internal: 'User asks X. I will use [agents] because [reasons].'",
+  "user_facing_message": "Brief formatted text explaining your routing decision (planning phase only)",
+  "final_answer": "Complete formatted text response with markdown (synthesis phase only)",
+  "selected_agent": "Single agent name OR 'combined'",
   "agents_to_use": ["CodeAgent" | "FormulaAgent" | "ResearchAgent" | "StrategyAgent" | "SQLAgent" | "DataAgent" | "NotesAgent" | "ShellAgent" | "FileAgent" | "ImageCreationAgent" | "ImageAnalysisAgent"],
-  "reasoning": "Why these agents will give us a CONFIDENT answer: 'For MOND theory, I need Research Agent for papers AND Notes Agent for documentation'",
-  "confidence_strategy": "How many agents and why: 'Using 3 agents for cross-validation' or 'Single agent sufficient for simple calc'"
+  "reasoning": "Why these agents: one sentence",
+  "additional_guidance": "ONLY if 'loop' - what to do next",
+  "clarification_question": "ONLY if 'clarify' - formatted question text"
 }
+
+IMPORTANT:
+- Our code displays user_facing_message and final_answer AS-IS (no parsing)
+- YOU format all text with markdown, structure, and formatting
+- Planning phase: provide user_facing_message
+- Synthesis phase: provide final_answer (punchline first, then brief explanation)
 """
 
     examples = """
