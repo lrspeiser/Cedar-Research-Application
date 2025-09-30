@@ -72,15 +72,7 @@ class ChiefAgent:
         logger.info(f"[ChiefAgent] Starting review of {len(agent_results)} agent results (iteration {iteration}/{max_iterations}, {remaining_loops} loops remaining)")
         
         if not self.llm_client:
-            # Fallback: use best available result
-            best_result = max(agent_results, key=lambda r: r.confidence) if agent_results else None
-            return {
-                "decision": "final",
-                "final_answer": best_result.result if best_result else "No results available",
-                "additional_guidance": None,
-                "selected_agent": best_result.display_name if best_result else "None",
-                "reasoning": "No LLM available - using best available result"
-            }
+            raise RuntimeError("ChiefAgent requires LLM client - cannot operate without it")
         
         try:
             # Build Chief Agent message without leaking orchestrator-internal content
@@ -519,14 +511,11 @@ If there are supporting files, images, or databases already in your project, pre
             # Parse JSON response with LLM repair retries on failure
             def _validate_and_normalize(d: Dict[str, Any]) -> Dict[str, Any]:
                 if "decision" not in d:
-                    d["decision"] = "final"
-                if "final_answer" not in d:
-                    best_result = max(agent_results, key=lambda r: r.confidence) if agent_results else None
-                    d["final_answer"] = best_result.result if best_result else "No results available"
-                # Normalize decision value
+                    raise ValueError("LLM response missing required 'decision' field")
                 if d.get("decision") not in ["final", "loop", "clarify"]:
-                    logger.warning(f"[ChiefAgent] Invalid decision value: {d.get('decision')}, defaulting to 'final'")
-                    d["decision"] = "final"
+                    raise ValueError(f"Invalid decision value: {d.get('decision')} - must be 'final', 'loop', or 'clarify'")
+                if d.get("decision") == "final" and "final_answer" not in d:
+                    raise ValueError("LLM response has decision='final' but missing 'final_answer' field")
                 return d
 
             decision_data: Dict[str, Any]
@@ -593,21 +582,11 @@ If there are supporting files, images, or databases already in your project, pre
                         decision_data = {}
 
                 if not decision_data:
-                    # Last-resort fallback with explicit error messaging
-                    best_result = max(agent_results, key=lambda r: r.confidence) if agent_results else None
-                    final_text = best_result.result if best_result else ""
-                    if not final_text:
-                        final_text = (
-                            "The Chief Agent could not obtain a valid response from the model after multiple attempts. "
-                            "Please try again or adjust the request."
-                        )
-                    decision_data = {
-                        "decision": "final",
-                        "final_answer": final_text,
-                        "additional_guidance": None,
-                        "selected_agent": best_result.display_name if best_result else "None",
-                        "reasoning": f"Model unresponsive: JSON parsing failed after {max_retries} repair attempts"
-                    }
+                    # No fallback - raise error
+                    raise RuntimeError(
+                        f"Chief Agent failed to get valid JSON after {max_retries} repair attempts. "
+                        f"Last error: {last_error}. Last output: {last_output[:200]}"
+                    )
 
             # Log the assessment fields
             if "query_assessment" in decision_data:
@@ -639,16 +618,10 @@ If there are supporting files, images, or databases already in your project, pre
             return decision_data
             
         except Exception as e:
-            logger.error(f"[ChiefAgent] Error: {e}")
-            # Fallback: use best available result
-            best_result = max(agent_results, key=lambda r: r.confidence) if agent_results else None
-            return {
-                "decision": "final",
-                "final_answer": best_result.result if best_result else "No results available",
-                "additional_guidance": None,
-                "selected_agent": best_result.display_name if best_result else "None",
-                "reasoning": f"Chief Agent error: {str(e)[:100]}"
-            }
+            logger.error(f"[ChiefAgent] FATAL ERROR: {e}")
+            import traceback
+            traceback.print_exc()
+            raise RuntimeError(f"Chief Agent failed: {str(e)}") from e
 
 
 class ThinkerOrchestrator:
