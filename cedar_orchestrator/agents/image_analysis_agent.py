@@ -192,7 +192,7 @@ Format your response with markdown headings and bullet points for clarity."""
                     method=f"GPT Vision ({vision_model})",
                     explanation=f"Analyzed image using {vision_model} with vision API",
                     summary=f"Analyzed {file_metadata.get('filename', 'image')} using GPT Vision",
-                    metadata=file_metadata
+                    artifacts={"file_metadata": file_metadata}  # Store metadata in artifacts instead
                 )
                 
             except Exception as e:
