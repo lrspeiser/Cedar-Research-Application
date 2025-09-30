@@ -304,184 +304,49 @@ async def handle_ws_chat(
                                 logger.warning(f"[WebSocket] Could not fetch file metadata: {e}")
                             
                             # Get database metadata for context
-                            db_metadata = ""
+                            db_tables = []
                             try:
                                 if db_session:
-                                    # Get list of existing tables
                                     from sqlalchemy import inspect
                                     inspector = inspect(db_session.bind)
-                                    table_names = inspector.get_table_names()
-                                    if table_names:
-                                        db_metadata = f"\n\n**Existing Database Tables:**\n" + "\n".join([f"- {t}" for t in table_names[:20]])
-                                        if len(table_names) > 20:
-                                            db_metadata += f"\n- ... and {len(table_names) - 20} more tables"
+                                    db_tables = inspector.get_table_names()
                             except Exception as e:
                                 logger.warning(f"[WebSocket] Could not fetch database metadata: {e}")
                             
-                            # Build file-type-specific prompt based on mime_type
+                            # Build minimal data-only prompt - let Chief Agent decide what to do
                             if file_rec:
+                                filename = file_rec.display_name or file_rec.name or f"file_{file_id}"
                                 mime = (file_rec.mime_type or "").lower()
                                 ext = (file_rec.file_type or "").lower()
-                                filename = file_rec.display_name or file_rec.name or f"file_{file_id}"
                                 size_kb = file_rec.size_bytes / 1024 if file_rec.size_bytes else 0
+                                storage_path = file_rec.storage_path or "(path unknown)"
                                 
-                                # File metadata header (used in all prompts)
-                                file_info = f"""**Uploaded File:**
+                                # DATA-ONLY prompt - no instructions, just facts
+                                query_to_send = f"""User uploaded a file:
+
+**File Details:**
 - Filename: {filename}
 - Type: {mime} (.{ext})
 - Size: {size_kb:.1f} KB
-- File ID: {file_id}"""
-                                
-                                if "image" in mime or ext in ["png", "jpg", "jpeg", "gif", "svg", "webp", "bmp"]:
-                                    # IMAGE-SPECIFIC PROMPT
-                                    query_to_send = f"""{file_info}
+- File ID: {file_id}
+- Storage Path: {storage_path}
 
-**Task:** Analyze image and store structured results in database
+**Database Context:**
+- Existing tables: {', '.join(db_tables[:30]) if db_tables else 'none'}
+{f'- ... and {len(db_tables) - 30} more' if len(db_tables) > 30 else ''}
 
-**Step 1 (This iteration):** Use ImageAnalysisAgent to:
-- Assess PURPOSE: What is this image communicating? Who is the audience? What context?
-- Draw CONCLUSIONS: What insights can be derived? Provide evidence and reasoning.
-- Extract technical data: image type, chart type (if applicable), axes, series, data points
-- Perform OCR on all visible text
-- Return structured JSON matching the schema in `IMAGE_ANALYSIS_SCHEMA.md`
-
-**Expected JSON structure from ImageAnalysisAgent:**
-```json
-{{
-  "file_id": {file_id},
-  "metadata": {{"image_type", "chart_type", "title", "width", "height", "color_palette", "has_annotations", "has_legend", "has_gridlines"}},
-  "purpose": {{"purpose_type", "primary_message", "audience", "context", "confidence"}},
-  "conclusions": [{{"conclusion_text", "evidence", "reasoning", "confidence", "conclusion_type", "order_index"}}],
-  "axes": [{{"axis_name", "label", "units", "scale_type", "min_value", "max_value", "tick_values", "gridlines"}}],
-  "series": [{{"series_name", "legend_label", "color", "marker_style", "line_style", "series_type", "order_index"}}],
-  "data_points": [{{"series_name", "x_value", "y_value", "z_value", "error_x", "error_y", "label", "order_index"}}],
-  "text_extractions": [{{"text_content", "text_type", "bbox_x0", "bbox_y0", "bbox_x1", "bbox_y1", "confidence", "order_index"}}]
-}}
-```
-
-**Step 2 (Next iteration):** Use SQLAgent to:
-- CREATE tables using schema from `IMAGE_ANALYSIS_SCHEMA.md`:
-  - `image_metadata` (file_id, image_type, chart_type, title, width, height, color_palette, has_annotations, has_legend, has_gridlines)
-  - `image_purpose` (file_id, purpose_type, primary_message, audience, context, confidence)
-  - `image_conclusions` (file_id, conclusion_text, evidence, reasoning, confidence, conclusion_type, order_index)
-  - `chart_axes` (file_id, axis_name, label, units, scale_type, min_value, max_value, tick_values, gridlines)
-  - `chart_series` (file_id, series_name, legend_label, color, marker_style, line_style, series_type, order_index)
-  - `chart_data_points` (file_id, series_id, x_value, y_value, z_value, error_x, error_y, label, order_index)
-  - `image_text` (file_id, text_content, text_type, bbox_x0, bbox_y0, bbox_x1, bbox_y1, confidence, order_index)
-- INSERT data from ImageAnalysisAgent's JSON into these tables
-- Use file_id={file_id} as foreign key in all tables
-- Return confirmation with row counts per table
-{db_metadata}
-
-**IMPORTANT:** 
-1. Start by analyzing the image with ImageAnalysisAgent
-2. ImageAnalysisAgent will return structured JSON with purpose, conclusions, and reasoning
-3. Pass that JSON to SQLAgent for storage in the database tables
-4. See `IMAGE_ANALYSIS_SCHEMA.md` for complete schema documentation"""
-                                    logger.info(f"[WebSocket] Using image-specific prompt for {filename}")
-                                
-                                elif "pdf" in mime or ext == "pdf":
-                                    # PDF-SPECIFIC PROMPT
-                                    query_to_send = f"""{file_info}
-
-**Task:** Extract PDF content and store in database
-
-**Step 1 (This iteration):** Use PDFExtractionAgent to:
-- Extract text from all pages
-- Extract tables (convert to structured data)
-- Extract embedded images
-- Get metadata (author, title, page count)
-
-**Step 2 (Next iteration):** Use SQLAgent to:
-- CREATE tables: pdf_pages, pdf_tables, pdf_metadata
-- INSERT extracted content with file_id={file_id}
-- Return summary of what was stored
-{db_metadata}
-
-**IMPORTANT:** Start by extracting PDF content with PDFExtractionAgent."""
-                                    logger.info(f"[WebSocket] Using PDF-specific prompt for {filename}")
-                                
-                                elif any(x in mime for x in ["csv", "json", "excel", "spreadsheet"]) or ext in ["csv", "json", "xlsx", "xls"]:
-                                    # STRUCTURED DATA-SPECIFIC PROMPT
-                                    query_to_send = f"""{file_info}
-
-**Task:** Parse structured data and load into database
-
-**Step 1 (This iteration):** Use CodeAgent to:
-- Read file from storage path
-- Infer schema (column names, types, constraints)
-- Detect issues (nulls, duplicates, outliers)
-- Generate summary statistics
-
-**Step 2 (Next iteration):** Use SQLAgent to:
-- CREATE TABLE with appropriate types
-- Add constraints (NOT NULL, UNIQUE, PRIMARY KEY)
-- INSERT all rows
-- Add indexes on key columns
-- Return table name and row count
-{db_metadata}
-
-**IMPORTANT:** Start by parsing the file with CodeAgent."""
-                                    logger.info(f"[WebSocket] Using structured-data prompt for {filename}")
-                                
-                                else:
-                                    # GENERIC FALLBACK PROMPT (for text, markdown, unknown types)
-                                    query_to_send = f"""{file_info}
-
-**Task:** Process file and integrate into database
-{db_metadata}
-
-**Action Required:**
-1. Analyze file content using appropriate agent
-2. Extract structured data where possible
-3. Store in database with file_id={file_id} as foreign key
-4. Provide confirmation of what was stored
-
-**IMPORTANT:** Start by determining the best approach for this file type."""
-                                    logger.info(f"[WebSocket] Using generic prompt for {filename} (mime={mime})")
+Please analyze and process this file."""
+                                logger.info(f"[WebSocket] File upload: {filename} ({mime}, {size_kb:.1f}KB, file_id={file_id})")
                             else:
                                 # Fallback if file metadata couldn't be fetched
-                                query_to_send = f"""I uploaded a file (file_id: {file_id}). Please process it and integrate into our database system:
+                                query_to_send = f"""User uploaded a file (file_id: {file_id}).
 
-**DATABASE SYSTEM:** SQLite with SQLAlchemy ORM
-**How to write to database:** Use SQLAgent to execute SQL CREATE TABLE and INSERT statements
-{db_metadata}
+**Database Context:**
+- Existing tables: {', '.join(db_tables[:30]) if db_tables else 'none'}
+{f'- ... and {len(db_tables) - 30} more' if len(db_tables) > 30 else ''}
 
-**ACTION REQUIRED BY FILE TYPE:**
-
-**For structured data files (CSV, JSON, Excel, SQL):**
-1. Analyze the data structure and identify columns/schema
-2. **Generate SQL code** to CREATE TABLE (or ALTER existing table)
-3. **Generate SQL code** to INSERT/UPDATE the data into the table
-4. Execute the SQL code using SQLAgent
-5. Provide summary of rows inserted and any data transformations applied
-6. Suggest which existing tables this could augment (if applicable)
-
-**For unstructured files (PDFs, text documents, markdown):**
-1. **Extract key findings** → Create/update a 'findings' or 'notes' table with structured data
-2. **Extract citations/references** → Create/update a 'citations' table (author, title, year, url, etc.)
-3. **Extract embedded images** → Save to image library and record in 'images' table
-4. **Extract tables** → Convert to structured data and insert into appropriate database tables
-5. Generate SQL code for all extractions and execute with SQLAgent
-6. Provide summary of what was extracted and where it was stored
-
-**For images (charts, plots, diagrams, photos):**
-1. Describe what's shown in the image
-2. **Extract data from charts/graphs** → Create table with the data points
-3. **Perform OCR** on any text present → Store in 'image_text' table
-4. **Save to image library** → Record metadata in 'images' table (file_id, description, extracted_data_table)
-5. If chart data extracted, offer to recreate the visualization
-6. Generate and execute SQL for all data storage
-
-**IMPORTANT:** 
-- Actually execute the SQL code (don't just suggest it)
-- Use existing table names from the database metadata when appropriate
-- Create new tables with descriptive names if no suitable table exists
-- Include the file_id as a foreign key in created tables for traceability
-- Provide clear confirmation of what was stored where
-
-Please start by analyzing the file and executing the appropriate data integration steps."""
-                            logger.info(f"[WebSocket] File upload detected, using database-focused analysis prompt for file_id={file_id}")
+Please analyze and process this file."""
+                            logger.info(f"[WebSocket] File upload detected for file_id={file_id}")
                         
                         await orchestrator.orchestrate(
                             query_to_send,
