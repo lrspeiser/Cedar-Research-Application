@@ -283,31 +283,63 @@ async def handle_ws_chat(
                         # If file_id is present but content is empty/minimal, provide helpful default prompt
                         query_to_send = content
                         if file_id and (not content or len(content.strip()) < 20):
-                            # Enhanced prompt that guides the LLM on how to handle different file types
-                            query_to_send = f"""I uploaded a file (file_id: {file_id}). Please analyze it appropriately:
+                            # Get database metadata for context
+                            db_metadata = ""
+                            try:
+                                if db_session:
+                                    # Get list of existing tables
+                                    from sqlalchemy import inspect
+                                    inspector = inspect(db_session.bind)
+                                    table_names = inspector.get_table_names()
+                                    if table_names:
+                                        db_metadata = f"\n\n**Existing Database Tables:**\n" + "\n".join([f"- {t}" for t in table_names[:20]])
+                                        if len(table_names) > 20:
+                                            db_metadata += f"\n- ... and {len(table_names) - 20} more tables"
+                            except Exception as e:
+                                logger.warning(f"[WebSocket] Could not fetch database metadata: {e}")
+                            
+                            # Enhanced action-oriented prompt
+                            query_to_send = f"""I uploaded a file (file_id: {file_id}). Please process it and integrate into our database system:
+
+**DATABASE SYSTEM:** SQLite with SQLAlchemy ORM
+**How to write to database:** Use SQLAgent to execute SQL CREATE TABLE and INSERT statements
+{db_metadata}
+
+**ACTION REQUIRED BY FILE TYPE:**
 
 **For structured data files (CSV, JSON, Excel, SQL):**
-- Analyze the data structure and schema
-- Provide summary statistics (row counts, column types, ranges)
-- Identify any data quality issues or patterns
-- Suggest relevant queries or analyses
-- Offer to create visualizations
+1. Analyze the data structure and identify columns/schema
+2. **Generate SQL code** to CREATE TABLE (or ALTER existing table)
+3. **Generate SQL code** to INSERT/UPDATE the data into the table
+4. Execute the SQL code using SQLAgent
+5. Provide summary of rows inserted and any data transformations applied
+6. Suggest which existing tables this could augment (if applicable)
 
 **For unstructured files (PDFs, text documents, markdown):**
-- Extract and summarize key content
-- Identify main topics and themes
-- Pull out important facts, figures, or quotes
-- Suggest follow-up questions or analyses
+1. **Extract key findings** → Create/update a 'findings' or 'notes' table with structured data
+2. **Extract citations/references** → Create/update a 'citations' table (author, title, year, url, etc.)
+3. **Extract embedded images** → Save to image library and record in 'images' table
+4. **Extract tables** → Convert to structured data and insert into appropriate database tables
+5. Generate SQL code for all extractions and execute with SQLAgent
+6. Provide summary of what was extracted and where it was stored
 
 **For images (charts, plots, diagrams, photos):**
-- Describe what's shown in the image
-- Extract any data from charts/graphs
-- Perform OCR on any text present
-- Offer to recreate charts with extracted data
-- Suggest analyses based on visual content
+1. Describe what's shown in the image
+2. **Extract data from charts/graphs** → Create table with the data points
+3. **Perform OCR** on any text present → Store in 'image_text' table
+4. **Save to image library** → Record metadata in 'images' table (file_id, description, extracted_data_table)
+5. If chart data extracted, offer to recreate the visualization
+6. Generate and execute SQL for all data storage
 
-Please start by analyzing the file and providing insights."""
-                            logger.info(f"[WebSocket] File upload detected, using enhanced analysis prompt for file_id={file_id}")
+**IMPORTANT:** 
+- Actually execute the SQL code (don't just suggest it)
+- Use existing table names from the database metadata when appropriate
+- Create new tables with descriptive names if no suitable table exists
+- Include the file_id as a foreign key in created tables for traceability
+- Provide clear confirmation of what was stored where
+
+Please start by analyzing the file and executing the appropriate data integration steps."""
+                            logger.info(f"[WebSocket] File upload detected, using database-focused analysis prompt for file_id={file_id}")
                         
                         await orchestrator.orchestrate(
                             query_to_send,
