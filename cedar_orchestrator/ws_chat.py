@@ -352,6 +352,36 @@ Please start by analyzing the file and executing the appropriate data integratio
                             db_session=db_session,
                             conversation_history=conversation_history
                         )
+                    except Exception as orch_err:
+                        # Orchestration failed - mark chat as error
+                        logger.error(f"[WebSocket] Orchestration failed: {orch_err}")
+                        logger.error(traceback.format_exc())
+                        
+                        # Update chat status to error
+                        if project_id and chat_number:
+                            try:
+                                chat_manager.set_chat_status(project_id, branch_id, chat_number, "error")
+                                chat_manager.add_message(
+                                    project_id, branch_id, chat_number,
+                                    role="System",
+                                    content=f"Error during orchestration: {str(orch_err)}",
+                                    metadata={'type': 'system_error'}
+                                )
+                            except Exception as status_err:
+                                logger.error(f"[WebSocket] Failed to update error status: {status_err}")
+                        
+                        # Send error to client
+                        try:
+                            await websocket.send_json({
+                                "type": "error",
+                                "error": f"Orchestration failed: {str(orch_err)}",
+                                "content": f"Orchestration failed: {str(orch_err)}",
+                                "details": str(orch_err),
+                                "stack": traceback.format_exc() if logger.isEnabledFor(logging.DEBUG) else None
+                            })
+                        except:
+                            pass
+                        raise
                     finally:
                         # Clean up database session
                         if db_session:
@@ -416,6 +446,25 @@ Please start by analyzing the file and executing the appropriate data integratio
                 
     except Exception as e:
         logger.error(f"WebSocket connection error: {e}")
+        logger.error(traceback.format_exc())
+        
+        # If we have an active chat in processing status, mark it as error on disconnect
+        if current_chat_number and project_id:
+            try:
+                from cedar_app.utils.chat_persistence import get_chat_manager
+                chat_manager = get_chat_manager()
+                chat_data = chat_manager.get_chat(project_id, 1, current_chat_number)  # Default branch 1
+                if chat_data and chat_data.get('status') == 'processing':
+                    logger.warning(f"[WebSocket] Chat #{current_chat_number} left in processing state, marking as error")
+                    chat_manager.set_chat_status(project_id, 1, current_chat_number, "error")
+                    chat_manager.add_message(
+                        project_id, 1, current_chat_number,
+                        role="System",
+                        content="Connection lost during processing",
+                        metadata={'type': 'disconnect_error'}
+                    )
+            except Exception as cleanup_err:
+                logger.error(f"[WebSocket] Failed to clean up chat status: {cleanup_err}")
     finally:
         try:
             await websocket.close()
