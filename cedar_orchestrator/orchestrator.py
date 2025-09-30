@@ -29,6 +29,7 @@ from .chief_agent import ChiefAgent
 from .agent_dispatcher import AgentDispatcher
 from .agent_result_processor import AgentResultProcessor
 from .resource_indexer import ResourceIndexer
+from .notes_persistence import NotesPersistence
 
 # File processing orchestrator
 try:
@@ -196,6 +197,18 @@ class ThinkerOrchestrator:
         if chief_decision.get('decision') == 'clarify':
             await self._send_clarification(websocket, chief_decision)
             return
+        
+        # Save notes after every Chief Agent decision (doesn't show in UI bubbles)
+        await NotesPersistence.save_orchestration_notes(
+            agent_results=valid_results,
+            user_query=message,
+            chief_decision=chief_decision,
+            iteration=iteration,
+            project_id=project_id,
+            branch_id=branch_id,
+            db_session=db_session,
+            websocket=websocket
+        )
         
         # Handle iteration request
         allowed_loops = 3 if had_errors else self.MAX_ITERATIONS
