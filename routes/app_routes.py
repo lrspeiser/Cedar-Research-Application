@@ -8,16 +8,20 @@ included in the main app.
 Phase 2 of refactoring to keep main.py under 1000 lines as per project rules.
 """
 
-from fastapi import APIRouter, Request, UploadFile, File, Form, Depends, Header, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Request, UploadFile, File, Form, Depends, Header, HTTPException, WebSocket, WebSocketDisconnect, Body
 from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse, FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from typing import Optional, List, Dict, Any
+from datetime import datetime
+from pydantic import BaseModel
 import os
+import html as _html
 
 # Import all dependencies from main module context
 # These will be available when the router is included in the main app
-from main_models import Project, Branch, Thread, ThreadMessage, FileEntry, Dataset, Note
-from main_helpers import escape, ensure_main_branch, current_branch, branch_filter_ids, file_extension_to_type
+from main_models import Project, Branch, Thread, ThreadMessage, FileEntry, Dataset, Note, ChangelogEntry, Base, SQLUndoLog
+from main_helpers import escape, ensure_main_branch, current_branch, branch_filter_ids, file_extension_to_type, _ack_store, _register_ack
 from cedar_app.db_utils import (
     get_registry_db,
     get_project_db,
@@ -26,8 +30,95 @@ from cedar_app.db_utils import (
     ensure_project_initialized,
     _project_dirs,
 )
-from cedar_app.ui_utils import layout
+from cedar_app.ui_utils import layout, env_get as _env_get, env_set_many as _env_set_many, llm_reach_ok as _llm_reach_ok, llm_reach_reason as _llm_reach_reason
+from cedar_app.llm_utils import llm_client_config as _llm_client_config
 from cedar_app.utils.page_rendering import project_page_html, projects_list_html
+from cedar_app.api_routes import (
+    settings_page as _settings_page,
+    settings_save as _settings_save,
+    api_model_change as _api_model_change,
+    api_chat_ack as _api_chat_ack,
+    serve_project_upload as _serve_project_upload,
+)
+from cedar_app.config import DATA_DIR, LEGACY_UPLOAD_DIR, SHELL_API_ENABLED, SHELL_API_TOKEN, SHELL_DEFAULT_WORKDIR, LOGS_DIR
+from cedar_app.config import _default_legacy_dir
+from cedar_app.shell_utils import (
+    ShellRunRequest, ShellJobManager, ShellJob,
+    handle_shell_websocket, handle_health_websocket, 
+    is_local_request as _is_local_request,
+    require_shell_enabled_and_auth as _require_shell_enabled_and_auth_base
+)
+from cedar_app.routes.sql_routes import make_table_branch_aware_impl, undo_last_sql_impl
+from cedar_app.utils.client_logging import ClientLogEntry
+from cedar_app.utils.project_management import _hash_payload
+from cedar_app.db_utils import registry_engine, RegistrySessionLocal
+
+# Create shell job manager instance (same as in main.py)
+_shell_job_manager = ShellJobManager(logs_dir=LOGS_DIR, default_workdir=SHELL_DEFAULT_WORKDIR)
+
+# Shell wrapper functions
+def start_shell_job(script: str, shell_path: Optional[str] = None, trace_x: bool = False, workdir: Optional[str] = None) -> ShellJob:
+    """Start a shell job using the job manager."""
+    return _shell_job_manager.start_job(script=script, shell_path=shell_path, trace_x=trace_x, workdir=workdir)
+
+def require_shell_enabled_and_auth(request: Request, x_api_token: Optional[str] = None):
+    """Wrapper for shell auth check with our config."""
+    return _require_shell_enabled_and_auth_base(
+        request=request, 
+        x_api_token=x_api_token,
+        shell_enabled=SHELL_API_ENABLED,
+        shell_token=SHELL_API_TOKEN
+    )
+
+# Import _LOG_BUFFER from main to avoid circular import
+try:
+    from main import _LOG_BUFFER
+except ImportError:
+    from collections import deque
+    _LOG_BUFFER = deque(maxlen=1000)
+
+# Helper function (copied from main.py to avoid circular import)
+def get_or_create_project_registry(db: Session, title: str) -> Project:
+    """Idempotent create by title.
+    - SQLite: use INSERT .. ON CONFLICT DO NOTHING, then SELECT
+    - Fallback: SELECT first, else create
+    """
+    t = (title or "").strip()
+    if not t:
+        raise ValueError("empty title")
+    # Try SQLite upsert
+    try:
+        if registry_engine.dialect.name == "sqlite":
+            try:
+                from sqlalchemy.dialects.sqlite import insert as sqlite_insert  # type: ignore
+            except Exception:
+                sqlite_insert = None  # type: ignore
+            if sqlite_insert is not None:
+                stmt = sqlite_insert(Project).values(title=t)
+                stmt = stmt.on_conflict_do_nothing(index_elements=[Project.title])
+                db.execute(stmt)
+                db.commit()
+                existing = db.query(Project).filter(Project.title == t).first()
+                if existing:
+                    return existing
+    except Exception:
+        pass
+    # Generic fallback (race-safe enough for CI; on conflict we query after rollback)
+    existing = db.query(Project).filter(Project.title == t).first()
+    if existing:
+        return existing
+    p = Project(title=t)
+    db.add(p)
+    try:
+        db.commit()
+        db.refresh(p)
+        return p
+    except Exception:
+        db.rollback()
+        existing = db.query(Project).filter(Project.title == t).first()
+        if existing:
+            return existing
+        raise
 
 # Create router
 router = APIRouter()
@@ -92,24 +183,7 @@ def api_model_change(payload: Dict[str, Any]):
         env_set_many_fn=_env_set_many
     )
 
-# Serve uploaded files for convenience
-# Serve uploaded files (legacy path no longer used). We mount a dynamic per-project files app below.
-# See PROJECT_SEPARATION_README.md
-# Keep legacy mount to avoid 404s for older links; it will contain only migrated symlinks if created.
-# Be resilient: only mount if the directory exists; if using the default path, create it lazily.
-try:
-    if os.path.isdir(LEGACY_UPLOAD_DIR):
-        app.mount("/uploads-legacy", StaticFiles(directory=LEGACY_UPLOAD_DIR), name="uploads_legacy")
-        print(f"[cedarpy] Mounted /uploads-legacy from {LEGACY_UPLOAD_DIR}")
-    else:
-        if LEGACY_UPLOAD_DIR == _default_legacy_dir:
-            os.makedirs(LEGACY_UPLOAD_DIR, exist_ok=True)
-            app.mount("/uploads-legacy", StaticFiles(directory=LEGACY_UPLOAD_DIR), name="uploads_legacy")
-            print(f"[cedarpy] Created and mounted /uploads-legacy at {LEGACY_UPLOAD_DIR}")
-        else:
-            print(f"[cedarpy] Skipping /uploads-legacy mount; directory does not exist: {LEGACY_UPLOAD_DIR}")
-except Exception as e:
-    print(f"[cedarpy] Skipping /uploads-legacy mount due to error: {e}")
+# NOTE: Legacy upload mounting moved back to main.py where app is accessible
 
 
 

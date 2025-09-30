@@ -405,6 +405,60 @@ _install_unified_logging()
 
 app = FastAPI(title="Cedar")
 
+# Include route modules extracted under cedar_app/routes
+try:
+    from cedar_app.routes.main_routes import router as _main_routes
+    app.include_router(_main_routes)
+    print("[startup] main_routes mounted: '/' and '/projects'")
+except Exception as e:
+    print(f"[startup] Could not mount main_routes: {type(e).__name__}: {e}")
+
+try:
+    from cedar_app.routes.project_routes import router as _project_routes
+    app.include_router(_project_routes, prefix="/project")
+    print("[startup] project_routes mounted at '/project'")
+except Exception as e:
+    print(f"[startup] Could not mount project_routes: {type(e).__name__}: {e}")
+
+try:
+    from cedar_app.routes.log_routes import router as _log_routes
+    app.include_router(_log_routes, prefix="/log")
+    print("[startup] log_routes mounted at '/log'")
+except Exception as e:
+    print(f"[startup] Could not mount log_routes: {type(e).__name__}: {e}")
+
+try:
+    from cedar_app.routes.shell_routes import router as _shell_routes
+    app.include_router(_shell_routes, prefix="/shell")
+    print("[startup] shell_routes mounted at '/shell'")
+except Exception as e:
+    print(f"[startup] Could not mount shell_routes: {type(e).__name__}: {e}")
+
+# Mount the main app_routes router (contains /api/client-log, /projects/create, /project/{id}, etc.)
+try:
+    from routes.app_routes import router as _app_routes
+    app.include_router(_app_routes)
+    print("[startup] app_routes mounted (includes /api/client-log, /projects/create, /project, /merge)")
+except Exception as e:
+    print(f"[startup] Could not mount app_routes: {type(e).__name__}: {e}")
+
+# Mount legacy uploads directory (static files)
+try:
+    from fastapi.staticfiles import StaticFiles
+    from cedar_app.config import LEGACY_UPLOAD_DIR, _default_legacy_dir
+    if os.path.isdir(LEGACY_UPLOAD_DIR):
+        app.mount("/uploads-legacy", StaticFiles(directory=LEGACY_UPLOAD_DIR), name="uploads_legacy")
+        print(f"[cedarpy] Mounted /uploads-legacy from {LEGACY_UPLOAD_DIR}")
+    else:
+        if LEGACY_UPLOAD_DIR == _default_legacy_dir:
+            os.makedirs(LEGACY_UPLOAD_DIR, exist_ok=True)
+            app.mount("/uploads-legacy", StaticFiles(directory=LEGACY_UPLOAD_DIR), name="uploads_legacy")
+            print(f"[cedarpy] Created and mounted /uploads-legacy at {LEGACY_UPLOAD_DIR}")
+        else:
+            print(f"[cedarpy] Skipping /uploads-legacy mount; directory does not exist: {LEGACY_UPLOAD_DIR}")
+except Exception as e:
+    print(f"[cedarpy] Skipping /uploads-legacy mount due to error: {e}")
+
 # Add error logging middleware
 @app.middleware("http")
 async def catch_exceptions_middleware(request: Request, call_next):
