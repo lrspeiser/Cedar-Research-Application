@@ -123,9 +123,13 @@ You MUST respond ONLY with valid JSON in this EXACT format (no prose before or a
 {
   "decision": "final" or "loop" or "clarify",
   "final_answer": "Complete formatted text response with markdown. Include everything the user should see: answer, explanation, next steps, etc. YOU format it ALL - punchline first, then details.",
-  "selected_agent": "The agent whose answer you're using",
-  "reasoning": "One sentence on your decision-making process",
-  "additional_guidance": "ONLY if 'loop' - what to do next"
+  "agent_tasks": [
+    {
+      "agent": "AgentName",
+      "task": "Specific task/question to pass to this agent",
+      "context": "Optional: Any specific context or parameters this agent needs"
+    }
+  ]
 }
 
 IMPORTANT FOR SYNTHESIS:
@@ -136,6 +140,8 @@ IMPORTANT FOR SYNTHESIS:
 - Format with markdown (bold, bullets, code blocks as appropriate)
 - Keep it CONCISE - don't repeat agent outputs verbatim
 - Our code will display final_answer AS-IS, no manipulation
+- If decision is 'loop', populate agent_tasks with specific tasks for each agent
+- Each task should be a self-contained instruction that can be passed directly to the agent
 """
             else:
                 # PLANNING PHASE: No agent results yet, explain routing decision
@@ -144,9 +150,13 @@ IMPORTANT FOR SYNTHESIS:
   "decision": "final" or "loop" or "clarify",
   "thinking_process": "Internal: 'User asks X. I will use [agents] because [reasons].'",
   "user_facing_message": "Brief formatted text explaining your routing decision. Keep it conversational and succinct. Example: 'I'll use CodeAgent to calculate this for you.'",
-  "selected_agent": "Single agent name OR 'combined'",
-  "agents_to_use": ["CodeAgent" | "FormulaAgent" | "ResearchAgent" | "StrategyAgent" | "SQLAgent" | "DataAgent" | "NotesAgent" | "ShellAgent" | "FileAgent" | "ImageCreationAgent" | "ImageAnalysisAgent"],
-  "reasoning": "Why these agents: one sentence",
+  "agent_tasks": [
+    {
+      "agent": "AgentName",
+      "task": "Specific task/question to pass to this agent",
+      "context": "Optional: Any specific context or parameters this agent needs"
+    }
+  ],
   "clarification_question": "ONLY if 'clarify' - formatted question text"
 }
 
@@ -154,6 +164,11 @@ PLANNING PHASE RULES:
 - user_facing_message is displayed to user while agents work
 - Keep it SHORT - just explain what you're doing
 - Our code displays it AS-IS, no parsing or manipulation
+- agent_tasks: List of tasks to dispatch (one per agent)
+- Each task must specify: agent name, specific task string, optional context
+- Task string should be complete and self-contained - it will be passed directly to the agent
+- If only one agent needed, agent_tasks will have one entry
+- If multiple agents needed, agent_tasks will have multiple entries
 """
 
             examples = """
