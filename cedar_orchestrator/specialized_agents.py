@@ -281,27 +281,79 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
                     {
                         "role": "system",
                         "content": """You are a mathematical expert who derives formulas from first principles.
-                        - Start from fundamental axioms and definitions
-                        - Show each step of the derivation clearly
-                        - Explain the reasoning behind each transformation
-                        - Use proper mathematical notation
-                        - Include any assumptions or constraints
-                        - Provide the final formula and its applications"""
+
+You MUST respond with VALID JSON in this EXACT format:
+{
+  "answer": "Complete formatted derivation with steps, explanations, and final formula. Use markdown with LaTeX for equations. This is displayed AS-IS.",
+  "final_formula": "The derived formula in LaTeX or plaintext",
+  "assumptions": ["assumption 1", "assumption 2"],
+  "summary": "Brief 1-sentence description for logging"
+}
+
+IMPORTANT:
+- 'answer' field: YOU format with markdown, show ALL steps clearly, displayed AS-IS
+- Start from fundamental axioms and definitions
+- Show each transformation step with explanation
+- Use proper mathematical notation (LaTeX in markdown)
+- 'final_formula' field: Just the result formula
+- 'assumptions' field: List any assumptions or constraints
+- No text outside the JSON object
+
+Example response:
+{
+  "answer": "**Derivation of Quadratic Formula**\n\nStarting from ax² + bx + c = 0...\n\n**Final Formula:** x = (-b ± √(b²-4ac))/(2a)",
+  "final_formula": "x = (-b ± √(b²-4ac))/(2a)",
+  "assumptions": ["a ≠ 0", "coefficients are real numbers"],
+  "summary": "Derived quadratic formula from first principles"
+}"""
                     },
                     {"role": "user", "content": f"Derive from first principles: {task}"}
                 ]
             }
 
             response = await self.llm_client.chat.completions.create(**completion_params)
-            derivation = response.choices[0].message.content
+            full_response = response.choices[0].message.content.strip()
+            
+            # Parse JSON response
+            try:
+                response_data = json.loads(full_response)
+            except json.JSONDecodeError as e:
+                logger.error(f"[FormulaAgent] Failed to parse JSON: {e}")
+                return AgentResult(
+                    agent_name="FormulaAgent",
+                    display_name="Formula Agent",
+                    result=f"**JSON Parse Error:**\n\nLLM returned invalid JSON.\n\n**Error:** {e}",
+                    confidence=0.1,
+                    method="JSON parse error",
+                    explanation="LLM did not return valid JSON",
+                    summary="Failed to parse response"
+                )
+            
+            # Extract fields
+            answer = response_data.get('answer', '').strip()
+            final_formula = response_data.get('final_formula', '').strip()
+            assumptions = response_data.get('assumptions', [])
+            summary = response_data.get('summary', '').strip()
+            
+            if not answer:
+                return AgentResult(
+                    agent_name="FormulaAgent",
+                    display_name="Formula Agent",
+                    result="**Missing Answer:**\n\nLLM response missing 'answer' field.",
+                    confidence=0.1,
+                    method="Missing answer",
+                    explanation="No derivation provided",
+                    summary="No answer generated"
+                )
+            
+            if not summary:
+                summary = f"Derived formula for: {task[:100]}"
             
             logger.info(f"[FormulaAgent] Completed derivation in {time.time() - start_time:.3f}s")
+            logger.info(f"[FormulaAgent] Final formula: {final_formula[:100]}")
             
-            formatted_output = f"""Answer: Mathematical Derivation from First Principles
-
-{derivation}
-
-Why: Derived the formula step-by-step from fundamental mathematical principles"""
+            # Display LLM's answer AS-IS
+            formatted_output = answer
             
             return AgentResult(
                 agent_name="FormulaAgent",
@@ -310,7 +362,7 @@ Why: Derived the formula step-by-step from fundamental mathematical principles""
                 confidence=0.85,
                 method="First principles derivation",
                 explanation="Mathematical derivation from axioms",
-                summary=f"Derived formula from first principles for: {task[:80]}{'...' if len(task) > 80 else ''}"
+                summary=summary
             )
             
         except Exception as e:
@@ -357,40 +409,80 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
             model = os.getenv("CEDARPY_OPENAI_MODEL") or os.getenv("OPENAI_API_KEY_MODEL") or "gpt-5"
             logger.info(f"[ResearchAgent] Using model: {model}")
             
-            # Note: This simulates web search results. In production, you'd integrate with actual search APIs
+            # Research using structured JSON schema
             completion_params = {
                 "model": model,
                 "messages": [
                     {
                         "role": "system",
                         "content": """You are a research assistant with web search capabilities.
-                        Based on the query, provide:
-                        1. A list of relevant websites and sources
-                        2. Key content and findings from each source
-                        3. A summary of the most important information
-                        4. Citations and references
+                        You must respond ONLY with valid JSON matching this schema:
+                        {
+                            "sources": [
+                                {
+                                    "title": "source title",
+                                    "url_or_reference": "URL or citation",
+                                    "key_findings": "main findings from this source",
+                                    "relevance": "why this source matters"
+                                }
+                            ],
+                            "synthesis": "comprehensive summary integrating all sources",
+                            "key_insights": ["insight 1", "insight 2"],
+                            "confidence_notes": "any limitations or caveats",
+                            "summary": "brief executive summary for logging"
+                        }
                         
-                        Format your response as:
-                        - Source 1: [URL/Title] - Key findings
-                        - Source 2: [URL/Title] - Key findings
-                        etc.
-                        
-                        Then provide a comprehensive summary."""
+                        Provide at least 3-5 relevant sources with concrete findings."""
                     },
                     {"role": "user", "content": f"Research this topic and find relevant sources: {task}"}
                 ]
             }
 
             response = await self.llm_client.chat.completions.create(**completion_params)
-            research_results = response.choices[0].message.content
+            raw_content = response.choices[0].message.content.strip()
+            
+            # Parse JSON response
+            try:
+                research_data = json.loads(raw_content)
+            except json.JSONDecodeError:
+                # Fallback if not valid JSON
+                logger.warning(f"[ResearchAgent] Response was not valid JSON, using raw text")
+                research_data = {"synthesis": raw_content, "sources": [], "summary": "Research completed (raw text)"}
             
             logger.info(f"[ResearchAgent] Completed research in {time.time() - start_time:.3f}s")
             
+            # Format sources
+            sources_text = ""
+            if research_data.get("sources"):
+                sources_text = "\n\n**Sources:**\n"
+                for idx, source in enumerate(research_data["sources"], 1):
+                    sources_text += f"{idx}. **{source.get('title', 'Unknown')}**\n"
+                    if source.get('url_or_reference'):
+                        sources_text += f"   - Reference: {source['url_or_reference']}\n"
+                    sources_text += f"   - Findings: {source.get('key_findings', 'N/A')}\n"
+                    if source.get('relevance'):
+                        sources_text += f"   - Relevance: {source['relevance']}\n"
+                    sources_text += "\n"
+            
+            # Format key insights
+            insights_text = ""
+            if research_data.get("key_insights"):
+                insights_text = "\n**Key Insights:**\n"
+                for insight in research_data["key_insights"]:
+                    insights_text += f"- {insight}\n"
+            
+            synthesis = research_data.get("synthesis", "No synthesis available")
+            confidence_notes = research_data.get("confidence_notes", "")
+            summary = research_data.get("summary", "Research completed")
+            
             formatted_output = f"""Answer: Web Research Results
 
-{research_results}
+{synthesis}
+{insights_text}
+{sources_text}
+{f'**Caveats:** {confidence_notes}' if confidence_notes else ''}
 
-Why: Conducted web research to find relevant sources and information"""
+Why: Conducted web research to find relevant sources and synthesize information"""
             
             return AgentResult(
                 agent_name="ResearchAgent",
@@ -398,7 +490,8 @@ Why: Conducted web research to find relevant sources and information"""
                 result=formatted_output,
                 confidence=0.75,
                 method="Web search and research",
-                explanation="Found and analyzed relevant web sources"
+                explanation="Found and analyzed relevant web sources",
+                summary=summary
             )
             
         except Exception as e:
@@ -598,30 +691,82 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
                 "messages": [
                     {
                         "role": "system",
-                        "content": """You are a data analysis expert. Based on the available database schema and the user's query:
-                        1. List relevant tables and their purposes
-                        2. Suggest SQL queries that would help answer the question
-                        3. Explain what each query would return
-                        4. Recommend data transformations or joins if needed
+                        "content": """You are a data analysis expert. Based on the available database schema and the user's query, provide analysis.
+                        You must respond ONLY with valid JSON matching this schema:
+                        {
+                            "relevant_tables": [
+                                {
+                                    "table_name": "table_name",
+                                    "purpose": "what this table contains",
+                                    "relevance": "why it matters for the query"
+                                }
+                            ],
+                            "suggested_queries": [
+                                {
+                                    "sql": "SELECT ... FROM ...",
+                                    "purpose": "what this query does",
+                                    "expected_result": "what the result tells us"
+                                }
+                            ],
+                            "analysis": "overall analysis of how to approach the data question",
+                            "transformations_needed": ["transformation 1", "transformation 2"],
+                            "summary": "brief summary for logging"
+                        }
                         
-                        Format SQL queries properly with:
-                        - Clear comments explaining the purpose
-                        - Proper JOIN clauses if needed
-                        - Appropriate WHERE conditions
-                        - GROUP BY and aggregations as necessary"""
+                        Provide at least 1-3 concrete SQL queries that can be executed."""
                     },
                     {"role": "user", "content": f"Database Schema:\n{db_metadata}\n\nUser Query: {task}\n\nSuggest relevant SQL queries."}
                 ]
             }
 
             response = await self.llm_client.chat.completions.create(**completion_params)
-            sql_suggestions = response.choices[0].message.content
+            raw_content = response.choices[0].message.content.strip()
+            
+            # Parse JSON response
+            try:
+                data_analysis = json.loads(raw_content)
+            except json.JSONDecodeError:
+                # Fallback if not valid JSON
+                logger.warning(f"[DataAgent] Response was not valid JSON, using raw text")
+                data_analysis = {"analysis": raw_content, "suggested_queries": [], "summary": "Data analysis completed (raw text)"}
             
             logger.info(f"[DataAgent] Completed data analysis in {time.time() - start_time:.3f}s")
             
+            # Format relevant tables
+            tables_text = ""
+            if data_analysis.get("relevant_tables"):
+                tables_text = "\n**Relevant Tables:**\n"
+                for table in data_analysis["relevant_tables"]:
+                    tables_text += f"- **{table.get('table_name', 'Unknown')}**: {table.get('purpose', 'N/A')}\n"
+                    if table.get('relevance'):
+                        tables_text += f"  _Relevance: {table['relevance']}_\n"
+            
+            # Format suggested queries
+            queries_text = ""
+            if data_analysis.get("suggested_queries"):
+                queries_text = "\n**Suggested SQL Queries:**\n"
+                for idx, query in enumerate(data_analysis["suggested_queries"], 1):
+                    queries_text += f"\n{idx}. {query.get('purpose', 'Query')}\n"
+                    queries_text += f"```sql\n{query.get('sql', 'N/A')}\n```\n"
+                    if query.get('expected_result'):
+                        queries_text += f"_Expected Result: {query['expected_result']}_\n"
+            
+            # Format transformations
+            transformations_text = ""
+            if data_analysis.get("transformations_needed"):
+                transformations_text = "\n**Recommended Transformations:**\n"
+                for transform in data_analysis["transformations_needed"]:
+                    transformations_text += f"- {transform}\n"
+            
+            analysis = data_analysis.get("analysis", "No analysis available")
+            summary = data_analysis.get("summary", "Data analysis completed")
+            
             formatted_output = f"""Answer: Database Analysis and SQL Suggestions
 
-{sql_suggestions}
+{analysis}
+{tables_text}
+{queries_text}
+{transformations_text}
 
 Why: Analyzed available databases and suggested relevant SQL queries"""
             
@@ -631,7 +776,8 @@ Why: Analyzed available databases and suggested relevant SQL queries"""
                 result=formatted_output,
                 confidence=0.70,
                 method="Database analysis and SQL generation",
-                explanation="Analyzed schema and suggested queries"
+                explanation="Analyzed schema and suggested queries",
+                summary=summary
             )
             
         except Exception as e:
@@ -918,33 +1064,85 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
                 "messages": [
                     {
                         "role": "system",
-                        "content": """You are a note-taking expert. Create concise, well-organized notes that:
-                        1. Capture key findings and insights
-                        2. Avoid duplicating existing notes
-                        3. Use bullet points and clear headings
-                        4. Include important formulas, code snippets, or data
-                        5. Add tags for easy searching later
-                        6. Reference sources when applicable
+                        "content": """You are a note-taking expert. Create concise, well-organized notes.
+                        You must respond ONLY with valid JSON matching this schema:
+                        {
+                            "title": "clear note title",
+                            "timestamp": "current date/time or 'auto'",
+                            "tags": ["tag1", "tag2", "tag3"],
+                            "category": "main category (e.g., research, code, meeting, etc.)",
+                            "key_points": [
+                                "key point 1",
+                                "key point 2"
+                            ],
+                            "details": "detailed notes in markdown format with headings, bullet points, code blocks, formulas",
+                            "action_items": ["action 1", "action 2"],
+                            "sources": ["source 1", "source 2"],
+                            "new_content_only": true,
+                            "summary": "brief summary for logging"
+                        }
                         
-                        Format notes with:
-                        - Clear titles
-                        - Date/timestamp
-                        - Categories/tags
-                        - Key points
-                        - Action items if any"""
+                        Ensure notes avoid duplicating existing content and focus on new insights."""
                     },
                     {"role": "user", "content": f"Existing Notes:\n{existing_notes_text}\n\nContent to create notes from:\n{content_to_note or task}\n\nCreate new notes without duplicating existing ones."}
                 ]
             }
 
             response = await self.llm_client.chat.completions.create(**completion_params)
-            notes = response.choices[0].message.content
+            raw_content = response.choices[0].message.content.strip()
+            
+            # Parse JSON response
+            try:
+                notes_data = json.loads(raw_content)
+            except json.JSONDecodeError:
+                # Fallback if not valid JSON
+                logger.warning(f"[NotesAgent] Response was not valid JSON, using raw text")
+                notes_data = {"details": raw_content, "title": "Notes", "summary": "Notes created (raw text)"}
             
             logger.info(f"[NotesAgent] Completed note creation in {time.time() - start_time:.3f}s")
             
+            # Format notes output
+            title = notes_data.get("title", "Notes")
+            timestamp = notes_data.get("timestamp", time.strftime('%Y-%m-%d %H:%M:%S'))
+            tags = notes_data.get("tags", [])
+            category = notes_data.get("category", "general")
+            key_points = notes_data.get("key_points", [])
+            details = notes_data.get("details", "No details available")
+            action_items = notes_data.get("action_items", [])
+            sources = notes_data.get("sources", [])
+            summary = notes_data.get("summary", "Notes created")
+            
+            # Build formatted output
+            notes_output = f"# {title}\n\n"
+            notes_output += f"**Date:** {timestamp}\n"
+            notes_output += f"**Category:** {category}\n"
+            if tags:
+                notes_output += f"**Tags:** {', '.join(tags)}\n"
+            notes_output += "\n---\n\n"
+            
+            if key_points:
+                notes_output += "## Key Points\n"
+                for point in key_points:
+                    notes_output += f"- {point}\n"
+                notes_output += "\n"
+            
+            notes_output += "## Details\n\n"
+            notes_output += f"{details}\n\n"
+            
+            if action_items:
+                notes_output += "## Action Items\n"
+                for item in action_items:
+                    notes_output += f"- [ ] {item}\n"
+                notes_output += "\n"
+            
+            if sources:
+                notes_output += "## Sources\n"
+                for source in sources:
+                    notes_output += f"- {source}\n"
+            
             formatted_output = f"""Answer: Notes Created
 
-{notes}
+{notes_output}
 
 Why: Created structured notes from the provided content, avoiding duplication with existing notes"""
             
@@ -954,7 +1152,8 @@ Why: Created structured notes from the provided content, avoiding duplication wi
                 result=formatted_output,
                 confidence=0.85,
                 method="Intelligent note creation",
-                explanation="Created organized notes from findings"
+                explanation="Created organized notes from findings",
+                summary=summary
             )
             
         except Exception as e:
