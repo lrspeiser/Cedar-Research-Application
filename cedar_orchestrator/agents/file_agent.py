@@ -33,6 +33,8 @@ from openai import AsyncOpenAI
 from .agent_result import AgentResult
 
 # Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 class FileAgent:
     """Agent that downloads files from the web or manages user-provided files"""
