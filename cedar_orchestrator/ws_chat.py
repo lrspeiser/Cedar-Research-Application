@@ -492,7 +492,9 @@ Please start by analyzing the file and executing the appropriate data integratio
                             branch_id=branch_id,
                             thread_id=derived_thread_id,  # pass for WebSocket event correlation
                             db_session=db_session,
-                            conversation_history=conversation_history
+                            conversation_history=conversation_history,
+                            file_id=file_id,  # Pass file_id for image/file processing agents
+                            dataset_id=dataset_id  # Pass dataset_id if present
                         )
                     except Exception as orch_err:
                         # Orchestration failed - mark chat as error

@@ -933,12 +933,15 @@ class ThinkerOrchestrator:
             
         return thinking_process
         
-    async def orchestrate(self, message: str, websocket, iteration: int = 0, previous_results: List[AgentResult] = None, project_id: int = None, branch_id: int = None, thread_id: int = None, db_session = None, conversation_history: Optional[str] = None):
-        """Full orchestration process controlled by Chief Agent decisions with optional notes persistence"""
+    async def orchestrate(self, message: str, websocket, iteration: int = 0, previous_results: List[AgentResult] = None, project_id: int = None, branch_id: int = None, thread_id: int = None, db_session = None, conversation_history: Optional[str] = None, file_id: int = None, dataset_id: int = None):
+        """Full orchestration process controlled by Chief Agent decisions with optional notes persistence
+        
+        Args:
+            file_id: File ID for file upload context (preserved across iterations)
+            dataset_id: Dataset ID for data processing context (preserved across iterations)
+        """
         orchestration_start = time.time()
-        # Ensure optional context vars exist to avoid NameError
-        file_id = None
-        dataset_id = None
+        # file_id and dataset_id are now parameters, not local vars
         # Structured run logs (always passed to the Chief Agent)
         run_logs: List[str] = []
         try:
@@ -946,7 +949,9 @@ class ThinkerOrchestrator:
         except Exception:
             pass
         logger.info("="*80)
-        logger.info(f"[ORCHESTRATOR] Starting orchestration for message: {message} (iteration: {iteration})")
+        logger.info(f"[ORCHESTRATOR] Starting orchestration (iteration: {iteration})")
+        logger.info(f"[ORCHESTRATOR] Context: project_id={project_id}, branch_id={branch_id}, file_id={file_id}, dataset_id={dataset_id}")
+        logger.info(f"[ORCHESTRATOR] Message: {message[:200]}...")
         logger.info("="*80)
         
         # Check iteration limit
@@ -1601,8 +1606,20 @@ Please provide this information so I can better assist you."""
             # Brief delay for UI
             await asyncio.sleep(0.3)
 
-            # Start next iteration with Chief Agent's guidance
-            return await self.orchestrate(enhanced_message, websocket, iteration + 1, valid_results, project_id, branch_id, db_session)
+            # Start next iteration with Chief Agent's guidance - preserve all context
+            return await self.orchestrate(
+                enhanced_message, 
+                websocket, 
+                iteration + 1, 
+                valid_results, 
+                project_id, 
+                branch_id, 
+                thread_id,  # Preserve thread_id across iterations
+                db_session, 
+                conversation_history,  # Preserve conversation history
+                file_id,  # CRITICAL: Preserve file_id for ImageAnalysisAgent in subsequent iterations
+                dataset_id  # Preserve dataset_id if present
+            )
         
         # Chief Agent has made final decision - extract JSON fields only
         final_answer = chief_decision.get('final_answer', '')
