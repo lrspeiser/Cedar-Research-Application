@@ -45,10 +45,14 @@ class ChiefAgent:
             logger.info(f"[ChiefAgent] Using LLM for decision making with model: {model}")
             
             # Stream thinking start to UI
+            # Differentiate between planning (no results) and synthesis (has results)
             try:
                 if ws is not None:
+                    event_type = "thinking_start" if not agent_results else "synthesis_start"
+                    phase = "Planning" if not agent_results else "Synthesis"
                     await ws.send_json({
-                        "type": "thinking_start",
+                        "type": event_type,
+                        "phase": phase,
                         "model": model,
                         "iteration": iteration + 1
                     })
@@ -115,6 +119,7 @@ class ChiefAgent:
             
             raw_content = response.choices[0].message.content
             logger.info(f"[ChiefAgent] Got response: {len(raw_content)} chars")
+            logger.info(f"[ChiefAgent] Raw JSON response:\n{raw_content}")
             
             # Try to parse JSON
             def _validate_and_normalize(data: dict) -> dict:
@@ -214,6 +219,8 @@ class ChiefAgent:
                 logger.info(f"[ChiefAgent] User Message: {decision_data['user_facing_message'][:200]}...")
 
             logger.info(f"[ChiefAgent] Decision: {decision_data.get('decision')}, Selected: {decision_data.get('selected_agent')}")
+            logger.info(f"[ChiefAgent] Agent Tasks: {decision_data.get('agent_tasks')}")
+            logger.info(f"[ChiefAgent] Agent Tasks Count: {len(decision_data.get('agent_tasks', []))}")
             logger.info(f"[ChiefAgent] Completed in {time.time() - start_time:.3f}s")
             
             # Emit conversational thinking to UI (stream into the thinking bubble)
