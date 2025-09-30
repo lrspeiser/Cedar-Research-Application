@@ -74,9 +74,63 @@ def extract_prompt_from_agent(file_path: str, class_name: str, method_name: str 
 
 
 def get_chief_agent_prompt() -> str:
-    """Extract Chief Agent prompt from orchestrator.py"""
+    """Extract Chief Agent prompt from orchestrator.py
+    ChiefAgent builds prompt from multiple parts: system_header + sample_json + examples + agent_guide
+    """
     file_path = ORCHESTRATOR_DIR / "orchestrator.py"
-    return extract_prompt_from_agent(str(file_path), "ChiefAgent", "process")
+    
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        # Find ChiefAgent class
+        class_match = re.search(r'class ChiefAgent[:\(]', content)
+        if not class_match:
+            return "[Could not find ChiefAgent class]"
+        
+        class_start = class_match.start()
+        
+        # Extract system_header
+        system_header_pattern = r'system_header\s*=\s*f?(""".*?""")'
+        header_match = re.search(system_header_pattern, content[class_start:], re.DOTALL)
+        system_header = ""
+        if header_match:
+            system_header = header_match.group(1).strip('"""').strip()
+        
+        # Extract sample_json (there are two versions, show both)
+        sample_json_pattern = r'sample_json\s*=\s*(""".*?""")'
+        json_matches = list(re.finditer(sample_json_pattern, content[class_start:], re.DOTALL))
+        sample_jsons = []
+        for match in json_matches:
+            sample_jsons.append(match.group(1).strip('"""').strip())
+        
+        # Extract examples
+        examples_pattern = r'examples\s*=\s*(""".*?""")'
+        examples_match = re.search(examples_pattern, content[class_start:], re.DOTALL)
+        examples = ""
+        if examples_match:
+            examples = examples_match.group(1).strip('"""').strip()
+        
+        # Extract agent_guide
+        agent_guide_pattern = r'agent_guide\s*=\s*(""".*?""")'
+        guide_match = re.search(agent_guide_pattern, content[class_start:], re.DOTALL)
+        agent_guide = ""
+        if guide_match:
+            agent_guide = guide_match.group(1).strip('"""').strip()
+        
+        # Concatenate all parts (showing both JSON schema versions)
+        full_prompt = system_header
+        if sample_jsons:
+            full_prompt += "\n\n[JSON SCHEMA - SYNTHESIS PHASE (with agent results):]\n" + sample_jsons[0]
+            if len(sample_jsons) > 1:
+                full_prompt += "\n\n[JSON SCHEMA - PLANNING PHASE (no agent results yet):]\n" + sample_jsons[1]
+        full_prompt += "\n" + examples
+        full_prompt += "\n" + agent_guide
+        
+        return full_prompt
+        
+    except Exception as e:
+        return f"[Error extracting ChiefAgent prompt: {e}]"
 
 
 def get_code_agent_prompt() -> str:
