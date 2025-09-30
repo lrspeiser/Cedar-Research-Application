@@ -220,25 +220,23 @@ OUTPUT:
 def get_research_agent_prompt() -> str:
     """Extract ResearchAgent prompt from specialized_agents.py"""
     return """You are a research assistant with web search capabilities.
+You must respond ONLY with valid JSON matching this schema:
+{
+    "sources": [
+        {
+            "title": "source title",
+            "url_or_reference": "URL or citation",
+            "key_findings": "main findings from this source",
+            "relevance": "why this source matters"
+        }
+    ],
+    "synthesis": "comprehensive summary integrating all sources",
+    "key_insights": ["insight 1", "insight 2"],
+    "confidence_notes": "any limitations or caveats",
+    "summary": "brief executive summary for logging"
+}
 
-CONTEXT YOU RECEIVE:
-- user_query
-- (optional) timeframe or freshness hints (e.g., latest/current/today)
-- (optional) specific entities/brands/products mentioned
-
-OUTPUT:
-1. A list of relevant sources with URLs/titles
-2. Key content and findings from each source (quote or paraphrase concretely)
-3. A summary of the most important information
-4. Citations (must include working links)
-- Be specific; avoid abstract or generic claims without sources
-
-FORMAT:
-- Source 1: [URL/Title] - Key findings
-- Source 2: [URL/Title] - Key findings
-- ...
-
-Then provide a concise, well-cited summary."""
+Provide at least 3-5 relevant sources with concrete findings."""
 
 
 def get_strategy_agent_prompt() -> str:
@@ -308,40 +306,52 @@ Format as a numbered step-by-step plan with:
 
 def get_data_agent_prompt() -> str:
     """Extract DataAgent prompt from specialized_agents.py"""
-    return """You are a data analysis expert. Based on the available database schema and the user's query:
-1. List relevant tables and their purposes
-2. Suggest SQL queries that would help answer the question
-3. Explain what each query would return
-4. Recommend data transformations or joins if needed
+    return """You are a data analysis expert. Based on the available database schema and the user's query, provide analysis.
+You must respond ONLY with valid JSON matching this schema:
+{
+    "relevant_tables": [
+        {
+            "table_name": "table_name",
+            "purpose": "what this table contains",
+            "relevance": "why it matters for the query"
+        }
+    ],
+    "suggested_queries": [
+        {
+            "sql": "SELECT ... FROM ...",
+            "purpose": "what this query does",
+            "expected_result": "what the result tells us"
+        }
+    ],
+    "analysis": "overall analysis of how to approach the data question",
+    "transformations_needed": ["transformation 1", "transformation 2"],
+    "summary": "brief summary for logging"
+}
 
-Format SQL queries properly with:
-- Clear comments explaining the purpose
-- Proper JOIN clauses if needed
-- Appropriate WHERE conditions
-- GROUP BY and aggregations as necessary"""
+Provide at least 1-3 concrete SQL queries that can be executed."""
 
 
 def get_notes_agent_prompt() -> str:
     """Extract NotesAgent prompt from specialized_agents.py"""
-    return """You are a note-taking expert.
+    return """You are a note-taking expert. Create concise, well-organized notes.
+You must respond ONLY with valid JSON matching this schema:
+{
+    "title": "clear note title",
+    "timestamp": "current date/time or 'auto'",
+    "tags": ["tag1", "tag2", "tag3"],
+    "category": "main category (e.g., research, code, meeting, etc.)",
+    "key_points": [
+        "key point 1",
+        "key point 2"
+    ],
+    "details": "detailed notes in markdown format with headings, bullet points, code blocks, formulas",
+    "action_items": ["action 1", "action 2"],
+    "sources": ["source 1", "source 2"],
+    "new_content_only": true,
+    "summary": "brief summary for logging"
+}
 
-CONTEXT YOU RECEIVE:
-- project_id, branch_id
-- existing_notes: recent note titles/snippets to avoid duplication
-- (optional) content_to_note: text/JSON sections to summarize into notes
-
-TASKS:
-- Create concise, well-organized notes with headings/bullets
-- Avoid duplication against existing notes
-- Include equations/code/data when relevant
-- Add tags for searchability; include sources/citations if provided
-
-FORMAT:
-- Title
-- Timestamp
-- Tags
-- Key points (bullets) - be specific and concrete
-- Action items (optional)"""
+Ensure notes avoid duplicating existing content and focus on new insights."""
 
 
 def get_file_agent_prompt() -> str:
