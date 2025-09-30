@@ -455,160 +455,160 @@ class ThinkerOrchestrator:
             except Exception:
                 pass
             
-                # Send agent results
-                logger.info("[ORCHESTRATOR] Processing agent results")
-                valid_results = []
-                for i, result in enumerate(results):
-                    if isinstance(result, AgentResult):
-                        logger.info(f"[ORCHESTRATOR] Result {i+1}: {result.agent_name} - Confidence: {result.confidence:.2f}, Method: {result.method}")
-                        logger.info(f"[ORCHESTRATOR] Result {i+1} UI label: {result.display_name}")
-                        logger.info(f"[ORCHESTRATOR] Result {i+1} content: {result.result[:200]}...")
-                        
-                        # Persist code artifacts even if not selected by Chief Agent
-                        try:
-                            if db_session and project_id and branch_id and getattr(result, 'artifacts', None):
-                                art = result.artifacts or {}
-                                if str(art.get('type', '')).lower() == 'code' and str(art.get('source', '')).strip():
-                                    from main_models import SavedCode
-                                    name = (str(art.get('name') or '') or 'Generated Code')[:255]
-                                    desc = str(art.get('description') or '')
-                                    lang = str(art.get('language') or 'python')[:50]
-                                    src = str(art.get('source') or '')
-                                    sc = SavedCode(
-                                        project_id=int(project_id),
-                                        branch_id=int(branch_id),
-                                        name=name,
-                                        description=desc,
-                                        language=lang,
-                                        code=src,
-                                        agent_name=(result.display_name or result.agent_name)[:100]
-                                    )
-                                    db_session.add(sc)
-                                    db_session.commit()
-                                    logger.info(f"[ORCHESTRATOR] Saved code snippet id={getattr(sc, 'id', None)} lang={lang} name={name[:40]}")
-                        except Exception as e:
-                            logger.warning(f"[ORCHESTRATOR] Failed to persist code artifact: {type(e).__name__}: {e}")
-                        
-                        # Send agent completion status with display name
-                        status_text = result.result  # Already formatted by the agent
-                        
-                        await websocket.send_json({
-                            "type": "agent_result",
-                            "agent_name": result.display_name,  # Use display name for UI
-                            "text": status_text,
-                            "summary": result.summary,  # Include summary for user visibility
-                            "metadata": {
-                                "agent": result.agent_name,
-                                "confidence": result.confidence,
-                                "method": result.method,
-                                "needs_rerun": result.needs_rerun,
-                                "summary": result.summary  # Also include in metadata
-                            }
-                        })
-                        try:
-                            short = (result.summary or (result.result or '').split('\n',1)[0] or '').strip()
-                            if len(short) > 160: short = short[:160]
-                            run_logs.append(f"AgentOK: {result.display_name} conf={result.confidence:.2f} sum={short}")
-                        except Exception:
-                            pass
-                        valid_results.append(result)
-                        await asyncio.sleep(0.2)
-                    elif isinstance(result, Exception):
-                        logger.error(f"[ORCHESTRATOR] Agent {i+1} failed with exception: {result}")
-                        had_errors = True
-                        
-                        # Determine which agent failed based on index
-                        agent_name = "Unknown Agent"
-                        display_name = "Unknown Agent"
-                        if i < len(agents):
-                            agent = agents[i]
-                            agent_name = agent.__class__.__name__
-                            # Map agent to display name
-                            agent_display_names = {
-                                "CodeAgent": "Coding Agent",
-                                "ShellAgent": "Desktop Agent",
-                                "SQLAgent": "SQL Agent",
-                                "FormulaAgent": "Formula Agent",
-                                "ResearchAgent": "Research Agent",
-                                "StrategyAgent": "Strategy Agent",
-                                "DataAgent": "Data Agent",
-                                "NotesAgent": "Notes Agent",
-                                "FileAgent": "File Manager",
-                                "ImageCreationAgent": "Image Creation",
-                                "ImageAnalysisAgent": "Image Analysis"
-                            }
-                            display_name = agent_display_names.get(agent_name, agent_name)
-                        
-                        # Create error report with detailed information
-                        error_type = type(result).__name__
-                        error_msg = str(result)
-                        
-                        # Check for common error patterns and provide specific guidance
-                        error_details = f"""Exception Type: {error_type}
-Error Message: {error_msg}
-Agent: {agent_name}
-Task: {message[:200]}{'...' if len(message) > 200 else ''}"""
-                        
-                        suggested_fix = "Review the error details and check:"
-                        if "OPENAI_API_KEY" in error_msg or "api_key" in error_msg.lower():
-                            suggested_fix += "\n- Ensure OPENAI_API_KEY is set in environment"
-                            suggested_fix += "\n- Check the API key is valid and has proper permissions"
-                        elif "connection" in error_msg.lower() or "network" in error_msg.lower():
-                            suggested_fix += "\n- Check network connectivity"
-                            suggested_fix += "\n- Verify firewall settings allow API access"
-                        elif "timeout" in error_msg.lower():
-                            suggested_fix += "\n- The operation took too long to complete"
-                            suggested_fix += "\n- Try a simpler query or break it into smaller parts"
-                    elif "module" in error_msg.lower() or "import" in error_msg.lower():
-                        suggested_fix += "\n- Required Python modules may not be installed"
-                        suggested_fix += "\n- Check if all dependencies are properly installed"
-                    else:
-                        suggested_fix += "\n- Check the agent's configuration"
-                        suggested_fix += "\n- Review the error message for specific issues"
+            # Send agent results
+            logger.info("[ORCHESTRATOR] Processing agent results")
+            valid_results = []
+            for i, result in enumerate(results):
+                if isinstance(result, AgentResult):
+                    logger.info(f"[ORCHESTRATOR] Result {i+1}: {result.agent_name} - Confidence: {result.confidence:.2f}, Method: {result.method}")
+                    logger.info(f"[ORCHESTRATOR] Result {i+1} UI label: {result.display_name}")
+                    logger.info(f"[ORCHESTRATOR] Result {i+1} content: {result.result[:200]}...")
                     
-                    # Create an AgentResult for the exception
-                    error_result = AgentResult(
-                        agent_name=agent_name,
-                        display_name=display_name,
-                        result=f"""**Agent Failure Report:**\n\n{display_name} encountered an unexpected error and could not complete the task.\n\n**Error Details:**\n```\n{error_details}\n```\n\n**Suggested Fix:**\n{suggested_fix}\n\n**What the Chief Agent should know:**\nThis agent crashed during execution. The error has been logged and detailed information is provided above for troubleshooting.""",
-                        confidence=0.0,
-                        method="Agent Exception",
-                        explanation=f"Agent crashed: {error_type}",
-                        summary=f"{display_name} failed with {error_type}: {error_msg[:100]}{'...' if len(error_msg) > 100 else ''}"
-                    )
+                    # Persist code artifacts even if not selected by Chief Agent
+                    try:
+                        if db_session and project_id and branch_id and getattr(result, 'artifacts', None):
+                            art = result.artifacts or {}
+                            if str(art.get('type', '')).lower() == 'code' and str(art.get('source', '')).strip():
+                                from main_models import SavedCode
+                                name = (str(art.get('name') or '') or 'Generated Code')[:255]
+                                desc = str(art.get('description') or '')
+                                lang = str(art.get('language') or 'python')[:50]
+                                src = str(art.get('source') or '')
+                                sc = SavedCode(
+                                    project_id=int(project_id),
+                                    branch_id=int(branch_id),
+                                    name=name,
+                                    description=desc,
+                                    language=lang,
+                                    code=src,
+                                    agent_name=(result.display_name or result.agent_name)[:100]
+                                )
+                                db_session.add(sc)
+                                db_session.commit()
+                                logger.info(f"[ORCHESTRATOR] Saved code snippet id={getattr(sc, 'id', None)} lang={lang} name={name[:40]}")
+                    except Exception as e:
+                        logger.warning(f"[ORCHESTRATOR] Failed to persist code artifact: {type(e).__name__}: {e}")
                     
-                    # Send the error as an agent result
+                    # Send agent completion status with display name
+                    status_text = result.result  # Already formatted by the agent
+                    
                     await websocket.send_json({
                         "type": "agent_result",
-                        "agent_name": display_name,
-                        "text": error_result.result,
-                        "summary": error_result.summary,
+                        "agent_name": result.display_name,  # Use display name for UI
+                        "text": status_text,
+                        "summary": result.summary,  # Include summary for user visibility
                         "metadata": {
-                            "agent": agent_name,
-                            "confidence": 0.0,
-                            "method": "Agent Exception",
-                            "error": True,
-                            "error_type": error_type,
-                            "summary": error_result.summary
+                            "agent": result.agent_name,
+                            "confidence": result.confidence,
+                            "method": result.method,
+                            "needs_rerun": result.needs_rerun,
+                            "summary": result.summary  # Also include in metadata
                         }
                     })
                     try:
-                        run_logs.append(f"AgentERR: {display_name} type={error_type} msg={error_msg[:160]}")
+                        short = (result.summary or (result.result or '').split('\n',1)[0] or '').strip()
+                        if len(short) > 160: short = short[:160]
+                        run_logs.append(f"AgentOK: {result.display_name} conf={result.confidence:.2f} sum={short}")
                     except Exception:
                         pass
-                    valid_results.append(error_result)
+                    valid_results.append(result)
                     await asyncio.sleep(0.2)
+                elif isinstance(result, Exception):
+                    logger.error(f"[ORCHESTRATOR] Agent {i+1} failed with exception: {result}")
+                    had_errors = True
+                    
+                    # Determine which agent failed based on index
+                    agent_name = "Unknown Agent"
+                    display_name = "Unknown Agent"
+                    if i < len(agents):
+                        agent = agents[i]
+                        agent_name = agent.__class__.__name__
+                        # Map agent to display name
+                        agent_display_names = {
+                            "CodeAgent": "Coding Agent",
+                            "ShellAgent": "Desktop Agent",
+                            "SQLAgent": "SQL Agent",
+                            "FormulaAgent": "Formula Agent",
+                            "ResearchAgent": "Research Agent",
+                            "StrategyAgent": "Strategy Agent",
+                            "DataAgent": "Data Agent",
+                            "NotesAgent": "Notes Agent",
+                            "FileAgent": "File Manager",
+                            "ImageCreationAgent": "Image Creation",
+                            "ImageAnalysisAgent": "Image Analysis"
+                        }
+                        display_name = agent_display_names.get(agent_name, agent_name)
+                    
+                    # Create error report with detailed information
+                    error_type = type(result).__name__
+                    error_msg = str(result)
+                    
+                    # Check for common error patterns and provide specific guidance
+                    error_details = f"""Exception Type: {error_type}
+Error Message: {error_msg}
+Agent: {agent_name}
+Task: {message[:200]}{'...' if len(message) > 200 else ''}"""
+                    
+                    suggested_fix = "Review the error details and check:"
+                    if "OPENAI_API_KEY" in error_msg or "api_key" in error_msg.lower():
+                        suggested_fix += "\n- Ensure OPENAI_API_KEY is set in environment"
+                        suggested_fix += "\n- Check the API key is valid and has proper permissions"
+                    elif "connection" in error_msg.lower() or "network" in error_msg.lower():
+                        suggested_fix += "\n- Check network connectivity"
+                        suggested_fix += "\n- Verify firewall settings allow API access"
+                    elif "timeout" in error_msg.lower():
+                        suggested_fix += "\n- The operation took too long to complete"
+                        suggested_fix += "\n- Try a simpler query or break it into smaller parts"
+                elif "module" in error_msg.lower() or "import" in error_msg.lower():
+                    suggested_fix += "\n- Required Python modules may not be installed"
+                    suggested_fix += "\n- Check if all dependencies are properly installed"
+                else:
+                    suggested_fix += "\n- Check the agent's configuration"
+                    suggested_fix += "\n- Review the error message for specific issues"
+                
+                # Create an AgentResult for the exception
+                error_result = AgentResult(
+                    agent_name=agent_name,
+                    display_name=display_name,
+                    result=f"""**Agent Failure Report:**\n\n{display_name} encountered an unexpected error and could not complete the task.\n\n**Error Details:**\n```\n{error_details}\n```\n\n**Suggested Fix:**\n{suggested_fix}\n\n**What the Chief Agent should know:**\nThis agent crashed during execution. The error has been logged and detailed information is provided above for troubleshooting.""",
+                    confidence=0.0,
+                    method="Agent Exception",
+                    explanation=f"Agent crashed: {error_type}",
+                    summary=f"{display_name} failed with {error_type}: {error_msg[:100]}{'...' if len(error_msg) > 100 else ''}"
+                )
+                
+                # Send the error as an agent result
+                await websocket.send_json({
+                    "type": "agent_result",
+                    "agent_name": display_name,
+                    "text": error_result.result,
+                    "summary": error_result.summary,
+                    "metadata": {
+                        "agent": agent_name,
+                        "confidence": 0.0,
+                        "method": "Agent Exception",
+                        "error": True,
+                        "error_type": error_type,
+                        "summary": error_result.summary
+                    }
+                })
+                try:
+                    run_logs.append(f"AgentERR: {display_name} type={error_type} msg={error_msg[:160]}")
+                except Exception:
+                    pass
+                valid_results.append(error_result)
+                await asyncio.sleep(0.2)
             else:
                 # Iteration 1+: Use previous_results instead of running agents again
                 logger.info(f"[ORCHESTRATOR] PHASE 2 SKIPPED: Using previous_results from iteration {iteration - 1}")
                 valid_results = previous_results or []
                 logger.info(f"[ORCHESTRATOR] Loaded {len(valid_results)} results from previous iteration")
-                    
-            # Phase 3: Chief Agent Review and Decision
-            logger.info("[ORCHESTRATOR] PHASE 3: Chief Agent Review and Decision")
-            logger.info(f"[ORCHESTRATOR] Chief Agent reviewing {len(valid_results)} valid results")
-            
-            # Don't send stream updates - let agent results speak for themselves
+                
+        # Phase 3: Chief Agent Review and Decision
+        logger.info("[ORCHESTRATOR] PHASE 3: Chief Agent Review and Decision")
+        logger.info(f"[ORCHESTRATOR] Chief Agent reviewing {len(valid_results)} valid results")
+        
+        # Don't send stream updates - let agent results speak for themselves
         
         # Do not pass previous iterations context to Chief Agent; keep input minimal
         previous_context = ""
