@@ -147,7 +147,7 @@ IMPORTANT FOR SYNTHESIS:
                 # PLANNING PHASE: No agent results yet, explain routing decision
                 sample_json = """
 {
-  "decision": "final" or "loop" or "clarify",
+  "decision": "loop",
   "thinking_process": "Internal: 'User asks X. I will use [agents] because [reasons].'",
   "user_facing_message": "Brief formatted text explaining your routing decision. Keep it conversational and succinct. Example: 'I'll use CodeAgent to calculate this for you.'",
   "agent_tasks": [
@@ -156,11 +156,12 @@ IMPORTANT FOR SYNTHESIS:
       "task": "Specific task/question to pass to this agent",
       "context": "Optional: Any specific context or parameters this agent needs"
     }
-  ],
-  "clarification_question": "ONLY if 'clarify' - formatted question text"
+  ]
 }
 
-PLANNING PHASE RULES:
+IMPORTANT - PLANNING PHASE (no agent results yet):
+- decision MUST BE "loop" to dispatch agents (never "final" - you haven't run agents yet!)
+- ONLY use "clarify" if you need more information from the user
 - user_facing_message is displayed to user while agents work
 - Keep it SHORT - just explain what you're doing
 - Our code displays it AS-IS, no parsing or manipulation
