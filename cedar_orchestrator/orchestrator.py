@@ -972,36 +972,43 @@ class ThinkerOrchestrator:
             return
         
         # Phase 1: Chief Agent planning (stream analysis before sub-agents) and selection
-        logger.info("[ORCHESTRATOR] PHASE 1: Chief Agent Planning (stream)")
-        try:
-            run_logs.append("Phase: planning.start")
-        except Exception:
-            pass
+        # ONLY RUN THIS ON ITERATION 0 - subsequent iterations have previous_results and should skip to Phase 3
         planning_decision = None
-        try:
-            planning_decision = await self.chief_agent.review_and_decide(
-                user_query=message,
-                agent_results=[],  # no agent results yet
-                iteration=iteration,
-                max_iterations=self.MAX_ITERATIONS,
-                previous_context="",
-                resources=None,
-                conversation_history=conversation_history,
-                ws=websocket,  # emit thinking_start + prompt + thinking
-                run_logs=run_logs,
-                thread_id=thread_id  # pass thread_id for WebSocket event correlation
-            )
-        except Exception as e:
-            logger.warning(f"[ORCHESTRATOR] Pre-analysis planning emit failed: {e}")
+        
+        if iteration == 0:
+            logger.info("[ORCHESTRATOR] PHASE 1: Chief Agent Planning (iteration 0 only)")
             try:
-                run_logs.append(f"Error: planning.emit_failed: {type(e).__name__}: {e}")
+                run_logs.append("Phase: planning.start")
             except Exception:
                 pass
-            planning_decision = {"decision": "loop", "agent_tasks": []}
+            try:
+                planning_decision = await self.chief_agent.review_and_decide(
+                    user_query=message,
+                    agent_results=[],  # no agent results yet in iteration 0
+                    iteration=iteration,
+                    max_iterations=self.MAX_ITERATIONS,
+                    previous_context="",
+                    resources=None,
+                    conversation_history=conversation_history,
+                    ws=websocket,  # emit thinking_start + prompt + thinking
+                    run_logs=run_logs,
+                    thread_id=thread_id  # pass thread_id for WebSocket event correlation
+                )
+            except Exception as e:
+                logger.warning(f"[ORCHESTRATOR] Pre-analysis planning emit failed: {e}")
+                try:
+                    run_logs.append(f"Error: planning.emit_failed: {type(e).__name__}: {e}")
+                except Exception:
+                    pass
+                planning_decision = {"decision": "loop", "agent_tasks": []}
+        else:
+            logger.info(f"[ORCHESTRATOR] SKIP PHASE 1: Iteration {iteration} has previous_results={len(previous_results or [])} results, going straight to Phase 3 synthesis")
+            # Skip to Phase 3 with previous results - no need to plan again
+            pass
 
         # Short-circuit only for clarifications - Chief Agent must NOT answer directly without agents
         try:
-            if planning_decision.get('decision') == 'clarify':
+            if planning_decision and planning_decision.get('decision') == 'clarify':
                 clarification_question = planning_decision.get('clarification_question', 'Could you please provide more details about your request?')
                 thinking = planning_decision.get('thinking_process', 'Need more information from user')
                 await websocket.send_json({
@@ -1015,7 +1022,12 @@ class ThinkerOrchestrator:
         except Exception:
             pass
 
-        # Parse agent_tasks from planning_decision
+        # Phase 2: Only run if we're in iteration 0 (planning phase)
+        # For iteration 1+, skip to Phase 3 with previous_results
+        valid_results = []
+        
+        if iteration == 0:
+            # Parse agent_tasks from planning_decision
         agent_tasks_list = []
         try:
             if isinstance(planning_decision.get('agent_tasks'), list):
@@ -1132,10 +1144,10 @@ class ThinkerOrchestrator:
         except Exception:
             pass
         
-        # Send agent results
-        logger.info("[ORCHESTRATOR] Processing agent results")
-        valid_results = []
-        for i, result in enumerate(results):
+            # Send agent results
+            logger.info("[ORCHESTRATOR] Processing agent results")
+            valid_results = []
+            for i, result in enumerate(results):
             if isinstance(result, AgentResult):
                 logger.info(f"[ORCHESTRATOR] Result {i+1}: {result.agent_name} - Confidence: {result.confidence:.2f}, Method: {result.method}")
                 logger.info(f"[ORCHESTRATOR] Result {i+1} UI label: {result.display_name}")
@@ -1275,6 +1287,11 @@ Task: {message[:200]}{'...' if len(message) > 200 else ''}"""
                     pass
                 valid_results.append(error_result)
                 await asyncio.sleep(0.2)
+        else:
+            # Iteration 1+: Use previous_results instead of running agents again
+            logger.info(f"[ORCHESTRATOR] PHASE 2 SKIPPED: Using previous_results from iteration {iteration - 1}")
+            valid_results = previous_results or []
+            logger.info(f"[ORCHESTRATOR] Loaded {len(valid_results)} results from previous iteration")
                 
         # Phase 3: Chief Agent Review and Decision
         logger.info("[ORCHESTRATOR] PHASE 3: Chief Agent Review and Decision")
