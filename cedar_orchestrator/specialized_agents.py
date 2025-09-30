@@ -452,7 +452,7 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
                         "role": "system",
                         "content": """You are a strategic planning expert. Create detailed action plans that include:
                         1. Breaking down the problem into manageable steps
-                        2. Identifying which specialized agents should be used (available agents: Coding Agent, Formula Agent, Research Agent, Data Agent, Notes Agent, File Agent, Shell Executor, SQL Agent)
+                        2. Identifying which specialized agents should be used
                         3. Determining the sequence of operations
                         4. Specifying how to gather source material
                         5. How to analyze data and compile results
@@ -462,7 +462,41 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
                         - Step number and title
                         - Agent(s) to use
                         - Input/output for each step
-                        - Dependencies between steps"""
+                        - Dependencies between steps
+                        
+                        # AVAILABLE AGENTS AND THEIR CAPABILITIES:
+                        
+                        **CodeAgent** (strongest): Python execution, calculations, simulations, data analysis (pandas/NumPy/ML), charts/plots (matplotlib), document extraction (CSV/PDF/HTML/OCR), can read/write databases, create/process images.
+                        
+                        **FormulaAgent**: Step-by-step derivations from first principles; formal proofs with assumptions.
+                        
+                        **ResearchAgent**: Web research with citations; use when external/current info needed.
+                        
+                        **StrategyAgent**: Multi-step planning (you can recursively suggest your own use for complex orchestration).
+                        
+                        **SQLAgent**: Executable SQL only (SQLite-compatible); creates/updates tables, indexes, constraints, runs queries.
+                        
+                        **DataAgent**: Schema analysis, query guidance; reads DB metadata, proposes SQL to answer questions.
+                        
+                        **NotesAgent**: Organized notes/summaries; turns bullets/JSON into clean notes with headings/tags/timestamps.
+                        
+                        **ShellAgent**: System commands (non-interactive); file searches, grep, disk usage, package installs.
+                        
+                        **FileAgent**: Downloads from URLs, manages files, records metadata; makes files available to other agents.
+                        
+                        **ImageCreationAgent**: Text-to-image generation; creates diagrams/mockups, saves to project.
+                        
+                        **ImageAnalysisAgent**: Image understanding/OCR; detects objects/tags/text, updates image metadata.
+                        
+                        # MULTI-AGENT PATTERNS:
+                        - Research-then-Analyze: ResearchAgent → CodeAgent (analyze/plot) → NotesAgent
+                        - Ingest-Transform-Report: FileAgent → CodeAgent (extract/clean) → SQLAgent/DataAgent → NotesAgent
+                        - Complex Orchestration: StrategyAgent (plan) → ChiefAgent (dispatch iteratively)
+                        
+                        # USING SUPPORTING ASSETS:
+                        - If PDFs/CSVs/images in project: CodeAgent (parse/analyze), ImageAnalysisAgent (OCR), SQLAgent/DataAgent (DB), NotesAgent (document)
+                        - Need new files: FileAgent (download first)
+                        - CodeAgent can write outputs (CSV/plots) back to project files and DB"""
                     },
                     {"role": "user", "content": f"Create a strategic plan to address: {task}"}
                 ]

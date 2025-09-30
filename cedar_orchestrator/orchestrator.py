@@ -221,7 +221,77 @@ Examples (Routing Guidance):
     Agents to use: [FileAgent]
 """
 
-            system_prompt = system_header + sample_json + examples
+            agent_guide = """
+
+# CEDAR AGENT CAPABILITIES REFERENCE
+
+If there are supporting files, images, or databases already in your project, prefer agents that can read/write those assets directly.
+
+## Quick Role Summary:
+
+**CodeAgent** (strongest): Python execution, calculations, simulations, data analysis (pandas/NumPy/ML), charts/plots (matplotlib), document extraction (CSV/PDF/HTML/OCR), can read/write databases, create/process images.
+  - Examples: Calculate "2+2?", parse PDF tables to CSV, train models, write to project DB.
+
+**FormulaAgent**: Step-by-step derivations from first principles; formal proofs with assumptions.
+  - Examples: Prove harmonic series diverges, derive wave equation from Maxwell's, prove 2+2=4 formally.
+
+**ResearchAgent**: Web research with citations; use when external/current info needed.
+  - Examples: Explain MOND vs dark matter (cited), summarize policy changes with links, historical queries.
+
+**StrategyAgent**: Multi-step planning; produces numbered plan with steps/inputs/outputs/agent assignments/dependencies.
+  - Examples: "Ingest PDFs → extract → load DB → charts → report"; incident playbooks; data product rollouts.
+
+**SQLAgent**: Executable SQL only (SQLite-compatible); creates/updates tables, indexes, constraints, runs queries.
+  - Examples: Create `daily_metrics` with indexes, backfill columns, aggregations/joins.
+
+**DataAgent**: Schema analysis, query guidance; reads DB metadata, proposes SQL to answer questions.
+  - Examples: Conversion funnels with indexes, orphan detection, design reporting tables.
+
+**NotesAgent**: Organized notes/summaries; turns bullets/JSON into clean notes with headings/tags/timestamps.
+  - Examples: Meeting minutes, consolidate summaries, running investigation logs.
+
+**ShellAgent**: System commands (non-interactive); file searches, grep, disk usage, package installs.
+  - Examples: Find recently modified files, search logs, disk usage.
+
+**FileAgent**: Downloads from URLs, manages files, records metadata; makes files available to other agents.
+  - Examples: Download PDF/CSV with metadata, fetch robots.txt, register local files.
+
+**ImageCreationAgent**: Text-to-image generation; creates diagrams/mockups, saves to project.
+  - Examples: Concept art, storyboard frames.
+
+**ImageAnalysisAgent**: Image understanding/OCR; detects objects/tags/text, updates image metadata.
+  - Examples: OCR charts, auto-tag photos for search.
+
+## Trigger Word Cheat Sheet:
+- plan, roadmap, steps, orchestrate, dependencies → **StrategyAgent**
+- calculate, simulate, analyze, plot, Python, parse tables → **CodeAgent**
+- derive, prove, closed-form, theorem → **FormulaAgent**
+- explain, summarize, cite, who/when/where → **ResearchAgent**
+- SELECT, CREATE TABLE, ALTER, index, backfill → **SQLAgent**
+- schema, tables, design reporting table → **DataAgent**
+- summarize notes, structure bullets, tags → **NotesAgent**
+- find files, grep, disk usage, install → **ShellAgent**
+- download file, import URL, metadata → **FileAgent**
+- generate image, concept art → **ImageCreationAgent**
+- analyze image, OCR, detect objects → **ImageAnalysisAgent**
+
+## Multi-Agent Patterns:
+- Research-then-Analyze: ResearchAgent → CodeAgent (analyze/plot) → NotesAgent
+- Ingest-Transform-Report: FileAgent → CodeAgent (extract/clean) → SQLAgent/DataAgent → NotesAgent
+- Complex Orchestration: StrategyAgent (plan) → ChiefAgent (dispatch iteratively)
+
+## Using Supporting Assets:
+- If PDFs/CSVs/images in project: CodeAgent (parse/analyze), ImageAnalysisAgent (OCR), SQLAgent/DataAgent (DB), NotesAgent (document)
+- Need new files: FileAgent (download first)
+- CodeAgent can write outputs (CSV/plots) back to project files and DB
+
+## When to Start with StrategyAgent:
+- Prompt spans multiple modalities (files + web + DB + plots)
+- Unclear dependencies or decision points ("if extraction fails, try OCR")
+- Want reusable, auditable plan for ChiefAgent to execute step-by-step
+"""
+
+            system_prompt = system_header + sample_json + examples + agent_guide
 
             # Ask Chief Agent to review and decide
             # Build messages, including resource index if provided
