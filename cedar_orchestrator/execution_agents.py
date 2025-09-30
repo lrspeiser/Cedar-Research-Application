@@ -66,73 +66,120 @@ class ShellAgent:
         self.conversation_history = []  # Store conversation context
         
     async def process(self, task: str, conversation_context: str = None) -> AgentResult:
-        """Execute shell commands exactly as provided and analyze results
+        """Use LLM to extract and confirm shell command, then execute it
         
         Args:
-            task: Either a shell command to execute or a request from Chief Agent with command
+            task: Request from Chief Agent describing what shell command to run
             conversation_context: Optional conversation history for context
         """
         start_time = time.time()
         logger.info(f"[ShellAgent] Starting shell execution for: {task[:200]}...")
         
-        # The task should contain the exact shell command from the Chief Agent
-        # Look for shell command in various formats
-        shell_command = None
-        
-        # Pattern 1: Command in backticks `command`
-        import re
-        backtick_match = re.search(r'`([^`]+)`', task)
-        
-        # Pattern 2: Command after "Execute:" or "Run:" or "Command:"
-        exec_match = re.search(r'(?:Execute|Run|Command):\s*(.+?)(?:\n|$)', task, re.IGNORECASE)
-        
-        # Pattern 3: Command in quotes after shell-related keywords
-        quote_match = re.search(r'(?:run|execute|shell)\s+["\']([^"\']]+)["\']', task, re.IGNORECASE)
-        
-        # Pattern 4: The entire task is the command (if it starts with common shell commands)
-        shell_commands = ['ls', 'cd', 'pwd', 'grep', 'find', 'cat', 'echo', 'pip', 'npm', 'brew', 'apt-get', 'chmod', 'mkdir', 'rm', 'cp', 'mv', 'curl', 'wget', 'git', 'docker', 'python', 'node']
-        
-        if backtick_match:
-            shell_command = backtick_match.group(1).strip()
-            logger.info(f"[ShellAgent] Extracted command from backticks: {shell_command}")
-        elif exec_match:
-            shell_command = exec_match.group(1).strip()
-            logger.info(f"[ShellAgent] Extracted command after keyword: {shell_command}")
-        elif quote_match:
-            shell_command = quote_match.group(1).strip()
-            logger.info(f"[ShellAgent] Extracted command from quotes: {shell_command}")
-        elif any(task.strip().startswith(cmd) for cmd in shell_commands):
-            shell_command = task.strip()
-            logger.info(f"[ShellAgent] Using entire task as command: {shell_command}")
-        else:
-            # Last resort: if the task looks like it might be a command
-            lines = task.strip().split('\n')
-            for line in lines:
-                line = line.strip()
-                if line and not line.startswith('#') and not line.startswith('//'):
-                    # Check if line contains shell-like syntax
-                    if any(cmd in line.lower() for cmd in shell_commands) or '|' in line or '>' in line or '&&' in line:
-                        shell_command = line
-                        logger.info(f"[ShellAgent] Found command-like line: {shell_command}")
-                        break
-        
-        if not shell_command:
+        if not self.llm_client:
             return AgentResult(
                 agent_name="ShellAgent",
                 display_name="Shell Executor",
-                result="""Answer: No executable shell command found
+                result="**Agent Failure Report:**\n\nThe Shell Agent requires an LLM to extract and validate shell commands.\n\n**What the Chief Agent should know:**\nThis agent needs an LLM to safely parse and execute shell commands.",
+                confidence=0.0,
+                method="Configuration Error",
+                explanation="LLM client not available",
+                summary="Shell Agent failed: No LLM configured"
+            )
+        
+        # Use LLM to extract command in JSON format
+        try:
+            model = os.getenv("CEDARPY_OPENAI_MODEL") or "gpt-5"
+            logger.info(f"[ShellAgent] Requesting command extraction from LLM using model: {model}")
+            
+            completion_params = {
+                "model": model,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": """You are a shell command expert.
 
-Error: The Shell Agent requires an exact shell command to execute. 
+You MUST respond with VALID JSON in this EXACT format:
+{
+  "answer": "Complete formatted response explaining what command you'll run and why. Use markdown. This is displayed AS-IS.",
+  "command": "exact_shell_command_to_execute",
+  "expected_output": "Brief description of what output to expect",
+  "summary": "Brief 1-sentence description for logging"
+}
 
-The Chief Agent should provide the command in one of these formats:
-- In backticks: `ls -la`
-- After a keyword: Execute: ls -la
-- As a direct command: grep -r "pattern" /path
+IMPORTANT:
+- 'answer' field: YOU format it with markdown - explain what you're doing, displayed AS-IS
+- 'command' field: Our code will EXTRACT and EXECUTE this exact shell command
+- 'expected_output' field: What the user should expect to see
+- 'summary' field: Brief summary for logs
+- No text outside the JSON object
+- The command must be a single-line shell command (can use pipes, &&, etc.)
+- Use non-interactive commands only
+- Working directory is ~/Projects/cedarpy
 
-Suggested Next Steps: Please provide the exact shell command to execute.""",
+Example response:
+{
+  "answer": "**Finding Python files**\n\nI'll search for all .py files in the current directory.",
+  "command": "find . -name '*.py' -type f",
+  "expected_output": "List of Python file paths",
+  "summary": "Find all Python files"
+}"""
+                    },
+                    {"role": "user", "content": task}
+                ]
+            }
+            
+            response = await self.llm_client.chat.completions.create(**completion_params)
+            full_response = response.choices[0].message.content.strip()
+            
+            # Parse JSON response
+            try:
+                response_data = json.loads(full_response)
+            except json.JSONDecodeError as e:
+                logger.error(f"[ShellAgent] Failed to parse JSON response: {e}")
+                return AgentResult(
+                    agent_name="ShellAgent",
+                    display_name="Shell Executor",
+                    result=f"**JSON Parse Error:**\n\nThe LLM returned invalid JSON.\n\n**Error:** {e}",
+                    confidence=0.1,
+                    method="JSON parse error",
+                    explanation="LLM did not return valid JSON",
+                    summary="Failed to parse LLM response as JSON"
+                )
+            
+            # Extract fields from JSON
+            answer = response_data.get('answer', '').strip()
+            shell_command = response_data.get('command', '').strip()
+            expected_output = response_data.get('expected_output', '').strip()
+            summary = response_data.get('summary', '').strip()
+            
+            if not shell_command:
+                return AgentResult(
+                    agent_name="ShellAgent",
+                    display_name="Shell Executor",
+                    result="**Missing Command:**\n\nThe LLM response did not include a shell command in the 'command' field.",
+                    confidence=0.1,
+                    method="Missing command field",
+                    explanation="No command provided by LLM",
+                    summary="No command generated"
+                )
+            
+            if not summary:
+                summary = f"Execute: {shell_command[:100]}"
+            
+            logger.info(f"[ShellAgent] Extracted command: {shell_command}")
+            logger.info(f"[ShellAgent] Expected output: {expected_output}")
+            logger.info(f"[ShellAgent] LLM-provided answer:\n{answer[:200]}...")
+            
+        except Exception as e:
+            logger.error(f"[ShellAgent] Command extraction error: {e}")
+            return AgentResult(
+                agent_name="ShellAgent",
+                display_name="Shell Executor",
+                result=f"**Command Extraction Failed:**\n\n{str(e)}",
                 confidence=0.1,
-                method="No command found",
-                explanation="No shell command identified in the request"
+                method="Extraction error",
+                explanation=f"Failed to extract command: {str(e)[:100]}",
+                summary="Command extraction failed"
             )
         
         # Store the command in history
@@ -140,6 +187,7 @@ Suggested Next Steps: Please provide the exact shell command to execute.""",
         
         # Execute the shell command
         logger.info(f"[ShellAgent] Executing command: {shell_command}")
+        logger.info(f"[ShellAgent] Expected output: {expected_output}")
         
         try:
             # Use subprocess for actual shell execution
@@ -158,173 +206,63 @@ Suggested Next Steps: Please provide the exact shell command to execute.""",
             error = result.stderr if result.stderr else ""
             exit_code = result.returncode
             
-            # Build execution report
-            execution_report = f"""Shell Command Execution Report
-============================================
-Command: {shell_command}
-Working Directory: ~/Projects/cedarpy
-Exit Code: {exit_code}
-Execution Time: {time.time() - start_time:.2f}s
-"""
-            
-            if output:
-                execution_report += f"\nStandard Output:\n{'-' * 40}\n{output}\n"
-            if error:
-                execution_report += f"\nError Output:\n{'-' * 40}\n{error}\n"
-            
             logger.info(f"[ShellAgent] Command completed with exit code: {exit_code}")
+            logger.info(f"[ShellAgent] Stdout length: {len(output)} chars")
+            logger.info(f"[ShellAgent] Stderr length: {len(error)} chars")
             
-            # Analyze results with LLM
-            analysis = ""
-            suggested_followups = []
+            # Build formatted output: LLM's answer + execution results
+            formatted_output = answer  # Use LLM's pre-formatted answer AS-IS
             
-            if self.llm_client:
-                try:
-                    # Build context including conversation history if available
-                    context = f"""You are analyzing shell command execution results.
-                    
-Conversation Context:
-{conversation_context if conversation_context else 'No prior context provided'}
-
-Previous Commands in Session:
-{self._format_history()}
-
-Analyze the results and provide:
-1. A brief SUMMARY of what you did and key findings (2-3 sentences)
-2. Details about what happened (success/failure)
-2. Extract key information from the output
-3. Identify any errors or warnings
-4. Recommend specific follow-up shell commands if needed
-5. Note if the original goal was achieved
-
-Format follow-up commands exactly as they should be run."""
-                    
-                    model = os.getenv("CEDARPY_OPENAI_MODEL") or "gpt-5"
-                    completion_params = {
-                        "model": model,
-                        "messages": [
-                            {"role": "system", "content": context},
-                            {"role": "user", "content": f"Command: {shell_command}\n\nExecution Report:\n{execution_report}"}
-                        ]
-                    }
-                    response = await self.llm_client.chat.completions.create(**completion_params)
-                    analysis = response.choices[0].message.content.strip()
-                    
-                    # Extract summary if present (look for SUMMARY: or similar)
-                    summary = ""
-                    summary_match = re.search(r'SUMMARY[:\s]+(.+?)(?:\n\n|\n(?:[A-Z]|\d\.)|$)', analysis, re.IGNORECASE | re.DOTALL)
-                    if summary_match:
-                        summary = summary_match.group(1).strip()
-                    else:
-                        # Fallback: use first paragraph as summary
-                        first_para = analysis.split('\n\n')[0] if '\n\n' in analysis else analysis.split('\n')[0]
-                        summary = first_para[:200] + "..." if len(first_para) > 200 else first_para
-                    
-                    # Extract follow-up commands if mentioned
-                    followup_matches = re.findall(r'`([^`]+)`', analysis)
-                    if followup_matches:
-                        suggested_followups = followup_matches
-                    
-                except Exception as e:
-                    logger.warning(f"[ShellAgent] Failed to analyze results: {e}")
-                    analysis = self._basic_analysis(shell_command, exit_code, output, error)
-                    summary = f"Executed shell command '{shell_command}' with exit code {exit_code}"
-            else:
-                # Provide basic analysis without LLM
-                analysis = self._basic_analysis(shell_command, exit_code, output, error)
-                summary = f"Executed shell command '{shell_command}' with exit code {exit_code}"
-            
-            # Format the final response
+            # Add execution status
             if exit_code == 0:
-                status = "✅ Command executed successfully"
-                confidence = 0.9
+                formatted_output += f"\n\n**Status:** ✅ Success (exit code 0)"
             else:
-                status = f"❌ Command failed with exit code {exit_code}"
-                confidence = 0.6
+                formatted_output += f"\n\n**Status:** ❌ Failed (exit code {exit_code})"
             
-            # Build formatted output
-            formatted_output = f"""Answer: {status}
-
-**Executed Command:**
-```bash
-{shell_command}
-```
-
-**Analysis:**
-{analysis}
-
-**Execution Details:**
-- Working Directory: ~/Projects/cedarpy
-- Exit Code: {exit_code}
-- Execution Time: {time.time() - start_time:.2f}s
-"""
+            # Add command and output
+            formatted_output += f"\n\n**Command Executed:**\n```bash\n{shell_command}\n```"
             
-            # Console logs (full)
-            formatted_output += "\n**Console Logs:**\n"
             if output:
-                formatted_output += f"\nStdout:\n```\n{output}\n```\n"
+                # Truncate very long output
+                display_output = output if len(output) < 3000 else output[:3000] + "\n... (output truncated)"
+                formatted_output += f"\n\n**Output:**\n```\n{display_output}\n```"
             else:
-                formatted_output += "\nStdout:\n```\n(empty)\n```\n"
+                formatted_output += f"\n\n**Output:**\n```\n(no output)\n```"
+            
             if error:
-                formatted_output += f"\nStderr:\n```\n{error}\n```\n"
+                display_error = error if len(error) < 1000 else error[:1000] + "\n... (truncated)"
+                formatted_output += f"\n\n**Errors/Warnings:**\n```\n{display_error}\n```"
             
-            # Add follow-up suggestions
-            if suggested_followups:
-                formatted_output += "\n**Suggested Follow-up Commands:**\n"
-                for cmd in suggested_followups[:3]:  # Limit to 3 suggestions
-                    formatted_output += f"- `{cmd}`\n"
+            # Determine confidence
+            confidence = 0.9 if exit_code == 0 else 0.6
             
-            formatted_output += "\nWhy: Direct shell command execution with full system access\n"
-            formatted_output += "\nSuggested Next Steps: "
-            
-            if exit_code == 0:
-                if suggested_followups:
-                    formatted_output += "Run the suggested follow-up commands to continue."
-                else:
-                    formatted_output += "The command succeeded. Review the output for the information you need."
-            else:
-                formatted_output += "Review the error message and adjust the command as needed."
-            
-                return AgentResult(
-                    agent_name="ShellAgent",
-                    display_name="Desktop Agent",
-                    result=formatted_output,
-                    confidence=confidence,
-                    method=f"Shell execution (exit code: {exit_code})",
-                    explanation=f"Executed: {shell_command[:50]}{'...' if len(shell_command) > 50 else ''}",
-                    summary=summary if 'summary' in locals() else f"Executed shell command '{shell_command[:50]}{'...' if len(shell_command) > 50 else ''}' with {'success' if exit_code == 0 else f'exit code {exit_code}'}"
-                )
+            return AgentResult(
+                agent_name="ShellAgent",
+                display_name="Shell Executor",
+                result=formatted_output,
+                confidence=confidence,
+                method=f"Shell execution (exit code: {exit_code})",
+                explanation=f"Executed: {shell_command[:50]}{'...' if len(shell_command) > 50 else ''}",
+                summary=summary
+            )
             
         except subprocess.TimeoutExpired:
             logger.error(f"[ShellAgent] Command timed out: {shell_command}")
+            timeout_msg = answer if answer else "**Timeout:**\n\nCommand execution timed out."
+            timeout_msg += f"\n\n**Command:** `{shell_command}`\n\n**Reason:** The command took longer than 60 seconds and was terminated."
             return AgentResult(
                 agent_name="ShellAgent",
-                display_name="Desktop Agent",
-                result=f"""Answer: ⏱️ Command timed out after 60 seconds
-
-**Command:** `{shell_command}`
-
-**Why:** The command took too long to execute and was terminated
-
-**Suggested Next Steps:**
-- Try adding output redirection or limiting the scope (e.g., `grep -r "pattern" . --include="*.py"`)
-- Use `head` or `tail` to limit output (e.g., `command | head -100`)
-- Run the command with `&` to run in background if it's a long process""",
+                display_name="Shell Executor",
+                result=timeout_msg,
                 confidence=0.3,
                 method="Timeout",
                 explanation="Command timed out",
-                summary=f"Command '{shell_command[:50]}{'...' if len(shell_command) > 50 else ''}' timed out after 60 seconds"
+                summary=summary if summary else f"Command '{shell_command[:50]}...' timed out"
             )
         except Exception as e:
             logger.error(f"[ShellAgent] Execution error: {e}")
-            return AgentResult(
-                agent_name="ShellAgent",
-                display_name="Desktop Agent",
-                result=f"""Answer: ❌ Failed to execute command
-
-**Command:** `{shell_command}`
-
-**Error:** {str(e)}
+            error_msg = answer if answer else "**Execution Error:**\n\nCommand failed to execute."
+            error_msg += f"\n\n**Command:** `{shell_command}`\n\n**Error:** {str(e)}
 
 **Common Issues:**
 - Command not found: Install the tool or check the PATH
@@ -340,44 +278,6 @@ Format follow-up commands exactly as they should be run."""
                 explanation=f"Error: {str(e)[:100]}",
                 summary=f"Failed to execute '{shell_command[:50]}{'...' if len(shell_command) > 50 else ''}' - {str(e)[:50]}"
             )
-    
-    def _format_history(self) -> str:
-        """Format command history for context"""
-        if not self.conversation_history:
-            return "No previous commands in this session"
-        
-        history_lines = []
-        for i, entry in enumerate(self.conversation_history[-5:], 1):  # Last 5 commands
-            cmd = entry.get('command', 'Unknown')
-            history_lines.append(f"{i}. {cmd}")
-        
-        return "\n".join(history_lines)
-    
-    def _basic_analysis(self, command: str, exit_code: int, output: str, error: str) -> str:
-        """Provide basic analysis without LLM"""
-        analysis = []
-        
-        if exit_code == 0:
-            analysis.append("The command completed successfully.")
-            if output:
-                lines = output.strip().split('\n')
-                analysis.append(f"Generated {len(lines)} lines of output.")
-                # Try to identify common patterns
-                if 'successfully installed' in output.lower():
-                    analysis.append("Package installation completed.")
-                elif re.search(r'\d+ files?', output):
-                    match = re.search(r'(\d+) files?', output)
-                    analysis.append(f"Found or processed {match.group(1)} file(s).")
-        else:
-            analysis.append(f"The command failed with exit code {exit_code}.")
-            if 'command not found' in error.lower():
-                analysis.append("The command or program is not installed or not in PATH.")
-            elif 'permission denied' in error.lower():
-                analysis.append("Permission denied. You may need elevated privileges.")
-            elif 'no such file or directory' in error.lower():
-                analysis.append("File or directory not found. Check the path.")
-            
-        return " ".join(analysis)
 
 class CodeAgent:
     """Agent that uses LLM to write code, then executes it"""
@@ -414,28 +314,35 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
             
             # Ask LLM to write Python code to solve the problem
             logger.info(f"[CodeAgent] Requesting code generation from LLM using model: {model}")
-            # Use correct parameter name based on model
             completion_params = {
                 "model": model,
                 "messages": [
                     {
                         "role": "system", 
-                        "content": """You are a Python code generator. Your response should have two parts:
-                        
-                        1. SUMMARY: A brief 2-3 sentence description of what the code does and key computations/operations
-                        
-                        2. CODE: The executable Python code (no markdown, just raw Python)
-                        
-                        Requirements for the code:
-                        - The code should print the final result
-                        - Use proper error handling
-                        - For mathematical expressions, parse them correctly (e.g., 'square root of 5*10' means sqrt(5*10))
-                        - The code must be complete and runnable as-is
-                        
-                        Format:
-                        SUMMARY: [Your summary here]
-                        
-                        [Your Python code here]"""
+                        "content": """You are a Python code generator.
+
+You MUST respond with VALID JSON in this EXACT format:
+{
+  "answer": "Complete formatted response explaining what you're doing and the result. Use markdown formatting (bold, code blocks, etc). Include the computed result clearly. This is displayed to the user AS-IS.",
+  "code": "executable_python_code_here_without_markdown_fences",
+  "summary": "Brief 1-sentence description for logging"
+}
+
+IMPORTANT:
+- 'answer' field: YOU format it with markdown, explanation, result - displayed AS-IS
+- 'code' field: Our code will EXTRACT and EXECUTE this Python (no ``` fences, just raw Python)
+- 'summary' field: Brief summary for logs
+- The code must print its result to stdout
+- Use proper error handling in the code
+- For math expressions, parse correctly (e.g., 'square root of 5*10' = sqrt(5*10))
+- No text outside the JSON object
+
+Example response:
+{
+  "answer": "**Result: 4**\n\nCalculated 2+2 using Python addition.",
+  "code": "result = 2 + 2\nprint(f'Result: {result}')",
+  "summary": "Calculated 2+2"
+}"""
                     },
                     {"role": "user", "content": task}
                 ]
@@ -459,40 +366,43 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
             
             full_response = response.choices[0].message.content.strip()
             
-            # Extract summary and code
-            summary = ""
-            generated_code = full_response
+            # Parse JSON response
+            try:
+                response_data = json.loads(full_response)
+            except json.JSONDecodeError as e:
+                logger.error(f"[CodeAgent] Failed to parse JSON response: {e}")
+                logger.error(f"[CodeAgent] Raw response: {full_response[:500]}")
+                return AgentResult(
+                    agent_name="CodeAgent",
+                    display_name="Coding Agent",
+                    result=f"**JSON Parse Error:**\n\nThe LLM returned invalid JSON.\n\n**Error:** {e}\n\n**Raw Response (truncated):**\n```\n{full_response[:500]}\n```",
+                    confidence=0.1,
+                    method="JSON parse error",
+                    explanation="LLM did not return valid JSON",
+                    summary="Failed to parse LLM response as JSON"
+                )
             
-            # Look for SUMMARY section
-            if "SUMMARY:" in full_response:
-                parts = full_response.split("SUMMARY:", 1)[1]
-                if "\n\n" in parts:
-                    summary_part, code_part = parts.split("\n\n", 1)
-                    summary = summary_part.strip()
-                    generated_code = code_part.strip()
-                elif "\n" in parts:
-                    lines = parts.split("\n")
-                    # Find where code starts (non-empty line after summary)
-                    for i, line in enumerate(lines):
-                        if i > 0 and line.strip() and not line.startswith("SUMMARY"):
-                            summary = lines[0].strip()
-                            generated_code = "\n".join(lines[i:]).strip()
-                            break
+            # Extract fields from JSON
+            answer = response_data.get('answer', '').strip()
+            generated_code = response_data.get('code', '').strip()
+            summary = response_data.get('summary', '').strip()
             
-            # Remove markdown code blocks if present in code
-            if generated_code.startswith("```"):
-                generated_code = generated_code.split("\n", 1)[1]
-                if generated_code.endswith("```"):
-                    generated_code = generated_code.rsplit("```", 1)[0]
+            if not generated_code:
+                return AgentResult(
+                    agent_name="CodeAgent",
+                    display_name="Coding Agent",
+                    result="**Missing Code:**\n\nThe LLM response did not include executable code in the 'code' field.",
+                    confidence=0.1,
+                    method="Missing code field",
+                    explanation="No code provided by LLM",
+                    summary="No code generated"
+                )
             
-            # Fallback summary if not extracted
             if not summary:
-                summary = f"Generated and executed Python code to solve: {task[:100]}"
+                summary = f"Generated Python code for: {task[:100]}"
             
             logger.info(f"[CodeAgent] Generated code:\n{generated_code}")
-            
-            # Show the code that will be executed
-            code_preview = f"**Code to execute:**\n```python\n{generated_code}\n```\n\n"
+            logger.info(f"[CodeAgent] LLM-provided answer:\n{answer[:200]}...")
             
             # Execute the generated code
             import io
@@ -523,15 +433,17 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
                 logger.info(f"[CodeAgent] Execution output: {output}")
                 logger.info(f"[CodeAgent] Completed in {time.time() - start_time:.3f}s")
                 
-                # Format output for user with structured sections
-                answer = output.strip() if output else 'Code executed successfully'
-                formatted_output = f"""{code_preview}Answer: {answer}
-
-Why: Generated and executed Python code to compute the exact result"""
+                # Build final output: LLM's answer + execution results + code block
+                formatted_output = answer  # Use LLM's pre-formatted answer AS-IS
+                
+                # Append execution results
+                formatted_output += f"\n\n**Execution Output:**\n```\n{output if output else '(no output)'}\n```"
+                
+                # Append the code that was executed
+                formatted_output += f"\n\n**Code Executed:**\n```python\n{generated_code}\n```"
                 
                 if errors:
-                    formatted_output += f"\n\nPotential Issues: {errors}"
-                    formatted_output += f"\n\nSuggested Next Steps: Review the error messages and adjust the query if needed"
+                    formatted_output += f"\n\n**Warnings:**\n```\n{errors}\n```"
 
                 return AgentResult(
                     agent_name="CodeAgent",
@@ -552,15 +464,14 @@ Why: Generated and executed Python code to compute the exact result"""
                 
             except Exception as exec_error:
                 logger.error(f"[CodeAgent] Code execution error: {exec_error}")
-                formatted_output = f"""{code_preview}Answer: Unable to complete the calculation due to an error
-
-**Execution Error:** {str(exec_error)}
-
-Why: The generated code encountered an execution error
-
-Potential Issues: The code failed during execution - see error above
-
-Suggested Next Steps: Review the code and error, then provide a more specific query"""
+                # Use LLM's answer if available, otherwise create error message
+                if answer:
+                    formatted_output = answer
+                    formatted_output += f"\n\n**Execution Failed:**\n```\n{str(exec_error)}\n```"
+                else:
+                    formatted_output = f"**Execution Error:**\n\nThe generated code failed to execute.\n\n**Error:** {str(exec_error)}"
+                
+                formatted_output += f"\n\n**Code That Failed:**\n```python\n{generated_code}\n```"
 
                 return AgentResult(
                     agent_name="CodeAgent",
@@ -644,37 +555,59 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
             model = os.getenv("CEDARPY_OPENAI_MODEL") or os.getenv("OPENAI_API_KEY_MODEL") or "gpt-5"
             # Ask LLM to write SQL query
             logger.info(f"[SQLAgent] Requesting SQL generation from LLM using model: {model}")
-            # Use correct parameter name based on model
             completion_params = {
                 "model": model,
                 "messages": [
                     {
                         "role": "system",
-                        "content": """You are a SQL expert. Generate SQL for database operations including:
-                        - CREATE DATABASE statements for new databases
-                        - CREATE TABLE statements with proper schemas and constraints
-                        - INSERT, UPDATE, DELETE operations for data manipulation
-                        - SELECT queries with JOINs, aggregations, and subqueries
-                        - ALTER TABLE for schema modifications
-                        - CREATE INDEX for performance optimization
-                        
-                        IMPORTANT: The project database includes a 'notes' table with the following schema:
-                        CREATE TABLE notes (
-                          id INTEGER PRIMARY KEY,
-                          project_id INTEGER NOT NULL,
-                          branch_id INTEGER NOT NULL,
-                          content TEXT NOT NULL,
-                          tags JSON,  -- list of strings
-                          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                        );
-                        
-                        You can query the notes table to search for saved notes, agent findings, and research results.
-                        Example: SELECT * FROM notes WHERE content LIKE '%keyword%' ORDER BY created_at DESC;
-                        
-                        - Output ONLY the SQL statements, no explanations
-                        - Use standard SQL syntax (SQLite/PostgreSQL compatible)
-                        - Include proper constraints (PRIMARY KEY, FOREIGN KEY, NOT NULL, UNIQUE)
-                        - For CREATE TABLE, include appropriate data types and relationships"""
+                        "content": """You are a SQL expert.
+
+You MUST respond with VALID JSON in this EXACT format:
+{
+  "answer": "Complete formatted response explaining the SQL and what it does. Use markdown. This is displayed AS-IS.",
+  "sql": "executable_sql_statements_here",
+  "operation_type": "CREATE_TABLE | SELECT | INSERT | UPDATE | DELETE | ALTER_TABLE | CREATE_INDEX | CREATE_DATABASE",
+  "summary": "Brief 1-sentence description for logging"
+}
+
+IMPORTANT:
+- 'answer' field: YOU format it with markdown - explain what the SQL does, displayed AS-IS
+- 'sql' field: Our code will EXTRACT and EXECUTE this SQL (no markdown fences, just SQL)
+- 'operation_type' field: Type of SQL operation
+- 'summary' field: Brief summary for logs
+- No text outside the JSON object
+
+SQL CAPABILITIES:
+- CREATE DATABASE statements for new databases
+- CREATE TABLE with proper schemas and constraints
+- INSERT, UPDATE, DELETE for data manipulation
+- SELECT queries with JOINs, aggregations, subqueries
+- ALTER TABLE for schema modifications
+- CREATE INDEX for performance optimization
+
+AVAILABLE TABLES:
+The project database includes a 'notes' table:
+CREATE TABLE notes (
+  id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL,
+  branch_id INTEGER NOT NULL,
+  content TEXT NOT NULL,
+  tags JSON,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+REQUIREMENTS:
+- Use SQLite/PostgreSQL compatible syntax
+- Include proper constraints (PRIMARY KEY, FOREIGN KEY, NOT NULL, UNIQUE)
+- For queries on notes table, you can search content, filter by tags, etc.
+
+Example response:
+{
+  "answer": "**Query to find recent notes**\n\nThis SELECT query retrieves the 10 most recent notes, ordered by creation date.",
+  "sql": "SELECT * FROM notes ORDER BY created_at DESC LIMIT 10;",
+  "operation_type": "SELECT",
+  "summary": "Query for 10 most recent notes"
+}"""
                     },
                     {"role": "user", "content": task}
                 ]
@@ -682,57 +615,66 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
             
             response = await self.llm_client.chat.completions.create(**completion_params)
             
-            generated_sql = response.choices[0].message.content.strip()
-            # Remove markdown if present
-            if generated_sql.startswith("```"):
-                generated_sql = generated_sql.split("\n", 1)[1]
-                if generated_sql.endswith("```"):
-                    generated_sql = generated_sql.rsplit("```", 1)[0]
+            full_response = response.choices[0].message.content.strip()
+            
+            # Parse JSON response
+            try:
+                response_data = json.loads(full_response)
+            except json.JSONDecodeError as e:
+                logger.error(f"[SQLAgent] Failed to parse JSON response: {e}")
+                logger.error(f"[SQLAgent] Raw response: {full_response[:500]}")
+                return AgentResult(
+                    agent_name="SQLAgent",
+                    display_name="SQL Agent",
+                    result=f"**JSON Parse Error:**\n\nThe LLM returned invalid JSON.\n\n**Error:** {e}\n\n**Raw Response (truncated):**\n```\n{full_response[:500]}\n```",
+                    confidence=0.1,
+                    method="JSON parse error",
+                    explanation="LLM did not return valid JSON",
+                    summary="Failed to parse LLM response as JSON"
+                )
+            
+            # Extract fields from JSON
+            answer = response_data.get('answer', '').strip()
+            generated_sql = response_data.get('sql', '').strip()
+            operation_type = response_data.get('operation_type', 'SQL Operation').strip()
+            summary = response_data.get('summary', '').strip()
+            
+            if not generated_sql:
+                return AgentResult(
+                    agent_name="SQLAgent",
+                    display_name="SQL Agent",
+                    result="**Missing SQL:**\n\nThe LLM response did not include executable SQL in the 'sql' field.",
+                    confidence=0.1,
+                    method="Missing sql field",
+                    explanation="No SQL provided by LLM",
+                    summary="No SQL generated"
+                )
+            
+            if not summary:
+                summary = f"Generated {operation_type} SQL for: {task[:100]}"
             
             logger.info(f"[SQLAgent] Generated SQL: {generated_sql}")
+            logger.info(f"[SQLAgent] Operation type: {operation_type}")
+            logger.info(f"[SQLAgent] LLM-provided answer:\n{answer[:200]}...")
             
-            # Determine the type of SQL operation
-            sql_upper = generated_sql.upper()
-            if "CREATE DATABASE" in sql_upper:
-                operation_type = "Database Creation"
-            elif "CREATE TABLE" in sql_upper:
-                operation_type = "Table Creation"
-            elif "INSERT" in sql_upper:
-                operation_type = "Data Insertion"
-            elif "UPDATE" in sql_upper:
-                operation_type = "Data Update"
-            elif "DELETE" in sql_upper:
-                operation_type = "Data Deletion"
-            elif "ALTER TABLE" in sql_upper:
-                operation_type = "Schema Modification"
-            elif "CREATE INDEX" in sql_upper:
-                operation_type = "Index Creation"
-            elif "SELECT" in sql_upper:
-                operation_type = "Data Query"
+            # Build formatted output: LLM's answer + SQL code block
+            formatted_output = answer  # Use LLM's pre-formatted answer AS-IS
+            formatted_output += f"\n\n**Generated SQL:**\n```sql\n{generated_sql}\n```"
+            
+            # Determine confidence based on operation type
+            if operation_type in ['CREATE_TABLE', 'CREATE_DATABASE', 'CREATE_INDEX']:
+                confidence = 0.9
             else:
-                operation_type = "SQL Operation"
-            
-            # Show the SQL that was generated
-            sql_preview = f"**SQL Generated:**\n```sql\n{generated_sql}\n```\n\n"
-            
-            formatted_output = f"""{sql_preview}Answer: Generated {operation_type} SQL for your request
-
-Why: Translated your request into executable SQL statements
-
-Suggested Next Steps: 
-- Review the SQL for correctness
-- Execute in your database environment
-- For CREATE operations, ensure database permissions
-- For data modifications, consider using transactions"""
+                confidence = 0.85
             
             return AgentResult(
                 agent_name="SQLAgent",
                 display_name="SQL Agent",
                 result=formatted_output,
-                confidence=0.9 if "CREATE" in sql_upper else 0.85,
+                confidence=confidence,
                 method=f"LLM-generated {operation_type}",
                 explanation=f"Generated {operation_type} SQL",
-                summary=f"Generated {operation_type} SQL for {task[:50]}{'...' if len(task) > 50 else ''}"
+                summary=summary
             )
             
         except Exception as e:
