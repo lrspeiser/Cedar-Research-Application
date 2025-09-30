@@ -440,17 +440,27 @@ For most agents (CodeAgent, ShellAgent, SQLAgent, FormulaAgent, ResearchAgent, S
                     "content": f"Conversation History (verbatim):\n{conversation_history}"
                 })
 
-            # Provide full agent responses from this iteration
+            # Provide agent responses from this iteration (truncated for large responses)
             try:
                 if agent_results:
                     parts = []
                     for r in agent_results:
-                        parts.append(f"Agent: {r.display_name}\nResponse (verbatim):\n{r.result}\n----")
+                        # Truncate very long results to prevent context overflow
+                        result_text = str(r.result or "")
+                        if len(result_text) > 3000:
+                            # For long results, include summary + beginning + end
+                            summary = r.summary if hasattr(r, 'summary') and r.summary else "(no summary)"
+                            result_preview = result_text[:1500] + "\n\n[... truncated for length ...]\n\n" + result_text[-500:]
+                            parts.append(f"Agent: {r.display_name}\nSummary: {summary}\nResponse (truncated):\n{result_preview}\n----")
+                            logger.info(f"[ChiefAgent] Truncated {r.display_name} result from {len(result_text)} to 2000 chars")
+                        else:
+                            parts.append(f"Agent: {r.display_name}\nResponse:\n{result_text}\n----")
                     msgs.append({
                         "role": "user",
-                        "content": "Agent Responses (verbatim):\n" + "\n".join(parts)
+                        "content": "Agent Responses:\n" + "\n".join(parts)
                     })
-            except Exception:
+            except Exception as e:
+                logger.warning(f"[ChiefAgent] Failed to build agent responses for synthesis: {e}")
                 pass
 
             msgs.append({
@@ -505,11 +515,17 @@ For most agents (CodeAgent, ShellAgent, SQLAgent, FormulaAgent, ResearchAgent, S
             api_retries = 0
             api_max_retries = 3
             last_api_error = None
-            # Per-call timeout (seconds)
+            # Per-call timeout (seconds) - longer for synthesis phase
             try:
-                llm_timeout_s = int(os.getenv("CEDARPY_LLM_TIMEOUT_SECONDS", "45"))
+                base_timeout = int(os.getenv("CEDARPY_LLM_TIMEOUT_SECONDS", "45"))
+                # Use longer timeout for synthesis phase (has agent results to process)
+                if agent_results:
+                    llm_timeout_s = int(os.getenv("CEDARPY_LLM_SYNTHESIS_TIMEOUT_SECONDS", str(base_timeout * 2)))
+                    logger.info(f"[ChiefAgent] Using extended synthesis timeout: {llm_timeout_s}s (base: {base_timeout}s)")
+                else:
+                    llm_timeout_s = base_timeout
             except Exception:
-                llm_timeout_s = 45
+                llm_timeout_s = 90 if agent_results else 45
             while True:
                 try:
                     # Enforce a timeout on the LLM call
