@@ -237,6 +237,17 @@ class ChiefAgent:
             except Exception:
                 pass
             
+            # Send completion event to stop spinner
+            try:
+                if ws is not None:
+                    event_type = "thinking_complete" if not agent_results else "synthesis_complete"
+                    await ws.send_json({
+                        "type": event_type,
+                        "elapsed_ms": int((time.time() - start_time) * 1000)
+                    })
+            except Exception:
+                pass
+            
             return decision_data
             
         except Exception as e:
