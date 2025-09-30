@@ -1096,13 +1096,19 @@ def get_main_chat_script() -> str:
   
   window.startNewChat = function(projectId, branchId) {
     // Create a new chat and start it
+    console.log('[startNewChat] Called with projectId=' + projectId + ', branchId=' + branchId);
     fetch(`/api/chat/new`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({project_id: projectId, branch_id: branchId})
     }).then(function(r) {
+      console.log('[startNewChat] Response status:', r.status);
+      if (!r.ok) {
+        throw new Error('HTTP ' + r.status + ': ' + r.statusText);
+      }
       return r.json();
     }).then(function(data) {
+      console.log('[startNewChat] Chat created:', data.chat_number);
       window.currentChatNumber = data.chat_number;
       updateChatNumberDisplay(data.chat_number);
       // Clear current messages
@@ -1111,7 +1117,16 @@ def get_main_chat_script() -> str:
       // Refresh history panel
       refreshHistoryPanel();
     }).catch(function(e) {
-      console.error('Failed to create new chat:', e);
+      console.error('[startNewChat] Failed to create new chat:', e);
+      // Show user-visible error
+      var msgs = document.getElementById('msgs');
+      if (msgs) {
+        var err = document.createElement('div');
+        err.className = 'muted small';
+        err.style.color = '#ef4444';
+        err.textContent = 'Error creating new chat. Check console for details.';
+        msgs.appendChild(err);
+      }
     });
   }
   
