@@ -441,13 +441,8 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
             response = await self.llm_client.chat.completions.create(**completion_params)
             raw_content = response.choices[0].message.content.strip()
             
-            # Parse JSON response
-            try:
-                research_data = json.loads(raw_content)
-            except json.JSONDecodeError:
-                # Fallback if not valid JSON
-                logger.warning(f"[ResearchAgent] Response was not valid JSON, using raw text")
-                research_data = {"synthesis": raw_content, "sources": [], "summary": "Research completed (raw text)"}
+            # Parse JSON response - fail fast if invalid
+            research_data = json.loads(raw_content)
             
             logger.info(f"[ResearchAgent] Completed research in {time.time() - start_time:.3f}s")
             
@@ -722,13 +717,8 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
             response = await self.llm_client.chat.completions.create(**completion_params)
             raw_content = response.choices[0].message.content.strip()
             
-            # Parse JSON response
-            try:
-                data_analysis = json.loads(raw_content)
-            except json.JSONDecodeError:
-                # Fallback if not valid JSON
-                logger.warning(f"[DataAgent] Response was not valid JSON, using raw text")
-                data_analysis = {"analysis": raw_content, "suggested_queries": [], "summary": "Data analysis completed (raw text)"}
+            # Parse JSON response - fail fast if invalid
+            data_analysis = json.loads(raw_content)
             
             logger.info(f"[DataAgent] Completed data analysis in {time.time() - start_time:.3f}s")
             
@@ -1091,13 +1081,8 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
             response = await self.llm_client.chat.completions.create(**completion_params)
             raw_content = response.choices[0].message.content.strip()
             
-            # Parse JSON response
-            try:
-                notes_data = json.loads(raw_content)
-            except json.JSONDecodeError:
-                # Fallback if not valid JSON
-                logger.warning(f"[NotesAgent] Response was not valid JSON, using raw text")
-                notes_data = {"details": raw_content, "title": "Notes", "summary": "Notes created (raw text)"}
+            # Parse JSON response - fail fast if invalid
+            notes_data = json.loads(raw_content)
             
             logger.info(f"[NotesAgent] Completed note creation in {time.time() - start_time:.3f}s")
             
