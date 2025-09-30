@@ -336,21 +336,48 @@ async def handle_ws_chat(
                                     # IMAGE-SPECIFIC PROMPT
                                     query_to_send = f"""{file_info}
 
-**Task:** Extract and store chart/image data in database
+**Task:** Analyze image and store structured results in database
 
 **Step 1 (This iteration):** Use ImageAnalysisAgent to:
-- Identify image type (chart/diagram/photo/screenshot)
-- Extract chart data: type, axes, data points, series
-- Perform OCR on any text
-- Extract metadata
+- Assess PURPOSE: What is this image communicating? Who is the audience? What context?
+- Draw CONCLUSIONS: What insights can be derived? Provide evidence and reasoning.
+- Extract technical data: image type, chart type (if applicable), axes, series, data points
+- Perform OCR on all visible text
+- Return structured JSON matching the schema in `IMAGE_ANALYSIS_SCHEMA.md`
+
+**Expected JSON structure from ImageAnalysisAgent:**
+```json
+{{
+  "file_id": {file_id},
+  "metadata": {{"image_type", "chart_type", "title", "width", "height", "color_palette", "has_annotations", "has_legend", "has_gridlines"}},
+  "purpose": {{"purpose_type", "primary_message", "audience", "context", "confidence"}},
+  "conclusions": [{{"conclusion_text", "evidence", "reasoning", "confidence", "conclusion_type", "order_index"}}],
+  "axes": [{{"axis_name", "label", "units", "scale_type", "min_value", "max_value", "tick_values", "gridlines"}}],
+  "series": [{{"series_name", "legend_label", "color", "marker_style", "line_style", "series_type", "order_index"}}],
+  "data_points": [{{"series_name", "x_value", "y_value", "z_value", "error_x", "error_y", "label", "order_index"}}],
+  "text_extractions": [{{"text_content", "text_type", "bbox_x0", "bbox_y0", "bbox_x1", "bbox_y1", "confidence", "order_index"}}]
+}}
+```
 
 **Step 2 (Next iteration):** Use SQLAgent to:
-- CREATE tables: chart_data, chart_metadata, image_text
-- INSERT extracted data with file_id={file_id} as foreign key
-- Return row counts and table names
+- CREATE tables using schema from `IMAGE_ANALYSIS_SCHEMA.md`:
+  - `image_metadata` (file_id, image_type, chart_type, title, width, height, color_palette, has_annotations, has_legend, has_gridlines)
+  - `image_purpose` (file_id, purpose_type, primary_message, audience, context, confidence)
+  - `image_conclusions` (file_id, conclusion_text, evidence, reasoning, confidence, conclusion_type, order_index)
+  - `chart_axes` (file_id, axis_name, label, units, scale_type, min_value, max_value, tick_values, gridlines)
+  - `chart_series` (file_id, series_name, legend_label, color, marker_style, line_style, series_type, order_index)
+  - `chart_data_points` (file_id, series_id, x_value, y_value, z_value, error_x, error_y, label, order_index)
+  - `image_text` (file_id, text_content, text_type, bbox_x0, bbox_y0, bbox_x1, bbox_y1, confidence, order_index)
+- INSERT data from ImageAnalysisAgent's JSON into these tables
+- Use file_id={file_id} as foreign key in all tables
+- Return confirmation with row counts per table
 {db_metadata}
 
-**IMPORTANT:** Start by analyzing the image with ImageAnalysisAgent."""
+**IMPORTANT:** 
+1. Start by analyzing the image with ImageAnalysisAgent
+2. ImageAnalysisAgent will return structured JSON with purpose, conclusions, and reasoning
+3. Pass that JSON to SQLAgent for storage in the database tables
+4. See `IMAGE_ANALYSIS_SCHEMA.md` for complete schema documentation"""
                                     logger.info(f"[WebSocket] Using image-specific prompt for {filename}")
                                 
                                 elif "pdf" in mime or ext == "pdf":

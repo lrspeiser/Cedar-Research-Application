@@ -128,22 +128,135 @@ class ImageAnalysisAgent:
             vision_model = "gpt-4o" if "gpt-5" in model else model  # gpt-5 doesn't support vision yet
             logger.info(f"[ImageAnalysisAgent] Analyzing with vision model: {vision_model}")
             
-            # Build analysis prompt based on task
-            analysis_prompt = task if task else "Analyze this image comprehensively and describe what it shows."
+            # Build enhanced analysis prompt with schema requirements
+            # Read schema documentation for reference
+            schema_instruction = f"""
+**CRITICAL: Return your analysis as a single, valid JSON object matching this exact structure:**
+
+```json
+{{
+  "file_id": {file_id},
+  "metadata": {{
+    "image_type": "chart|diagram|photo|screenshot|mixed",
+    "chart_type": "line|scatter|bar|histogram|heatmap|pie|etc (null if not a chart)",
+    "title": "extracted title text",
+    "width": <pixel width>,
+    "height": <pixel height>,
+    "color_palette": ["#hex1", "#hex2"],
+    "has_annotations": true|false,
+    "has_legend": true|false,
+    "has_gridlines": true|false
+  }},
+  "purpose": {{
+    "purpose_type": "data_visualization|comparison|trend_analysis|distribution|relationship|composition|documentation|illustration",
+    "primary_message": "What is the main takeaway or message this image communicates?",
+    "audience": "Who is the intended audience? (e.g., researchers, students, general public)",
+    "context": "What domain or field does this relate to? (e.g., astronomy, finance, medical)",
+    "confidence": 0.0-1.0
+  }},
+  "conclusions": [
+    {{
+      "conclusion_text": "A specific conclusion that can be drawn from this image",
+      "evidence": "Observable evidence in the image that supports this conclusion (be specific)",
+      "reasoning": "Logical reasoning that connects the evidence to the conclusion",
+      "confidence": 0.0-1.0,
+      "conclusion_type": "trend|correlation|anomaly|pattern|relationship|comparison",
+      "order_index": 0
+    }}
+  ],
+  "axes": [
+    {{
+      "axis_name": "x|y|z|color|size",
+      "label": "axis label",
+      "units": "units",
+      "scale_type": "linear|log|log10|symlog|date",
+      "min_value": <number>,
+      "max_value": <number>,
+      "tick_values": [tick1, tick2, ...],
+      "gridlines": true|false
+    }}
+  ],
+  "series": [
+    {{
+      "series_name": "series name",
+      "legend_label": "legend text",
+      "color": "#hexcolor",
+      "marker_style": "circle|square|triangle|none",
+      "line_style": "solid|dashed|dotted|none",
+      "series_type": "line|scatter|bar|area|error_bars",
+      "order_index": 0
+    }}
+  ],
+  "data_points": [
+    {{
+      "series_name": "series name",
+      "x_value": <number>,
+      "y_value": <number>,
+      "z_value": <number or null>,
+      "error_x": <number or null>,
+      "error_y": <number or null>,
+      "label": "point label or null",
+      "order_index": 0
+    }}
+  ],
+  "text_extractions": [
+    {{
+      "text_content": "extracted text",
+      "text_type": "title|subtitle|axis_label|legend|annotation|caption|table|equation|body",
+      "bbox_x0": <int or null>,
+      "bbox_y0": <int or null>,
+      "bbox_x1": <int or null>,
+      "bbox_y1": <int or null>,
+      "confidence": 0.0-1.0,
+      "order_index": 0
+    }}
+  ]
+}}
+```
+
+**INSTRUCTIONS:**
+1. **Metadata**: Identify image type and basic properties
+2. **Purpose**: Assess what this image is trying to communicate and why it was created
+3. **Conclusions**: Draw 1-3 specific conclusions from the data/content with evidence and reasoning
+4. **Technical Details**: Extract axes, series, data points for charts; or relevant structures for other image types
+5. **Text**: OCR all visible text with context about its role
+6. **Format**: Return ONLY the JSON object, no markdown, no extra text
+
+For the **purpose** section, think about:
+- What story is this image telling?
+- What should the viewer learn or understand?
+- What decision or insight might this support?
+
+For **conclusions**, follow this pattern:
+- State the conclusion clearly
+- Cite specific visual evidence (e.g., "Data points show X decreasing from A to B")
+- Explain the reasoning (e.g., "This pattern suggests...because...")
+- Assess your confidence (higher if evidence is clear and unambiguous)
+"""
+            
+            analysis_prompt = f"{task}\n\n{schema_instruction}"
             
             completion_params = {
                 "model": vision_model,
                 "messages": [
                     {
                         "role": "system",
-                        "content": """You are an expert image analyst. Provide detailed, structured analysis.
+                        "content": """You are an expert image analyst specializing in scientific visualization, data extraction, and visual reasoning.
 
-For charts/plots: Identify chart type, axes, legend, data series, and extract visible data points.
-For diagrams: Describe structure, flow, and key components.
-For text-heavy images: Perform OCR and extract all readable text.
-For photos: Describe scene, objects, composition.
+Your task is to:
+1. Analyze images comprehensively (charts, diagrams, photos, screenshots)
+2. Extract structured data (axes, series, data points for charts)
+3. Assess the PURPOSE: What is this image trying to communicate?
+4. Draw CONCLUSIONS: What insights can be derived from this image?
+5. Provide REASONING: Why do these conclusions follow from the visual evidence?
+6. Return results as valid JSON matching the exact schema provided
 
-Format your response with markdown headings and bullet points for clarity."""
+IMPORTANT:
+- Return ONLY valid JSON, no markdown code fences, no explanatory text
+- Be specific and quantitative in evidence and reasoning
+- Assess confidence honestly (0.0 = uncertain, 1.0 = certain)
+- For charts: extract as many data points as visible
+- For conclusions: connect observable evidence to logical inferences"""
                     },
                     {
                         "role": "user",
@@ -169,8 +282,86 @@ Format your response with markdown headings and bullet points for clarity."""
                 analysis_text = response.choices[0].message.content
                 logger.info(f"[ImageAnalysisAgent] Analysis complete, response length={len(analysis_text)} chars")
                 
-                # Format the result
-                result_text = f"""## Image Analysis Complete
+                # Try to parse as JSON and format nicely
+                try:
+                    # Clean response - remove markdown code fences if present
+                    cleaned_response = analysis_text.strip()
+                    if cleaned_response.startswith("```json"):
+                        cleaned_response = cleaned_response[7:]
+                    if cleaned_response.startswith("```"):
+                        cleaned_response = cleaned_response[3:]
+                    if cleaned_response.endswith("```"):
+                        cleaned_response = cleaned_response[:-3]
+                    cleaned_response = cleaned_response.strip()
+                    
+                    # Parse JSON
+                    analysis_data = json.loads(cleaned_response)
+                    logger.info(f"[ImageAnalysisAgent] Successfully parsed JSON response")
+                    
+                    # Format as human-readable text + preserve JSON
+                    purpose = analysis_data.get('purpose', {})
+                    conclusions = analysis_data.get('conclusions', [])
+                    metadata = analysis_data.get('metadata', {})
+                    
+                    result_text = f"""## Image Analysis Complete
+
+**File:** {file_metadata.get('filename', 'Unknown')}
+**Type:** {file_metadata.get('mime_type', 'Unknown')}
+**Size:** {file_metadata.get('size_bytes', 0):,} bytes
+
+---
+
+### Purpose
+**Type:** {purpose.get('purpose_type', 'Unknown')}
+**Message:** {purpose.get('primary_message', 'Not specified')}
+**Context:** {purpose.get('context', 'Not specified')}
+**Audience:** {purpose.get('audience', 'Not specified')}
+
+### Conclusions
+"""
+                    
+                    for i, conclusion in enumerate(conclusions, 1):
+                        result_text += f"""
+**{i}. {conclusion.get('conclusion_text', 'Unknown conclusion')}**
+- **Evidence:** {conclusion.get('evidence', 'Not provided')}
+- **Reasoning:** {conclusion.get('reasoning', 'Not provided')}
+- **Confidence:** {conclusion.get('confidence', 0.5):.0%}
+- **Type:** {conclusion.get('conclusion_type', 'unknown')}
+"""
+                    
+                    result_text += f"""
+
+### Structured Data (JSON)
+
+```json
+{json.dumps(analysis_data, indent=2)}
+```
+
+**Note:** This JSON can be passed directly to SQLAgent for database storage using the schema defined in `IMAGE_ANALYSIS_SCHEMA.md`.
+"""
+                    
+                    duration = time.time() - start_time
+                    logger.info(f"[ImageAnalysisAgent] Completed successfully in {duration:.2f}s")
+                    
+                    return AgentResult(
+                        agent_name="ImageAnalysisAgent",
+                        display_name="Image Analysis Agent",
+                        result=result_text,
+                        confidence=0.9,
+                        method=f"GPT Vision ({vision_model}) + Structured Analysis",
+                        explanation=f"Analyzed image with purpose assessment, conclusions, and reasoning. Extracted structured data in JSON format.",
+                        summary=f"Analyzed {file_metadata.get('filename', 'image')}: {purpose.get('primary_message', 'No summary')[:100]}",
+                        artifacts={
+                            "file_metadata": file_metadata,
+                            "analysis_json": analysis_data  # Store full JSON for SQLAgent
+                        }
+                    )
+                    
+                except json.JSONDecodeError as e:
+                    logger.warning(f"[ImageAnalysisAgent] Could not parse response as JSON: {e}")
+                    logger.warning(f"[ImageAnalysisAgent] Raw response: {analysis_text[:500]}...")
+                    # Fallback: return raw text if JSON parsing fails
+                    result_text = f"""## Image Analysis Complete
 
 **File:** {file_metadata.get('filename', 'Unknown')}
 **Type:** {file_metadata.get('mime_type', 'Unknown')}
@@ -179,21 +370,25 @@ Format your response with markdown headings and bullet points for clarity."""
 ---
 
 {analysis_text}
+
+---
+
+**Warning:** Response was not in expected JSON format. See IMAGE_ANALYSIS_SCHEMA.md for required format.
 """
-                
-                duration = time.time() - start_time
-                logger.info(f"[ImageAnalysisAgent] Completed successfully in {duration:.2f}s")
-                
-                return AgentResult(
-                    agent_name="ImageAnalysisAgent",
-                    display_name="Image Analysis Agent",
-                    result=result_text,
-                    confidence=0.9,
-                    method=f"GPT Vision ({vision_model})",
-                    explanation=f"Analyzed image using {vision_model} with vision API",
-                    summary=f"Analyzed {file_metadata.get('filename', 'image')} using GPT Vision",
-                    artifacts={"file_metadata": file_metadata}  # Store metadata in artifacts instead
-                )
+                    
+                    duration = time.time() - start_time
+                    logger.info(f"[ImageAnalysisAgent] Completed (non-JSON response) in {duration:.2f}s")
+                    
+                    return AgentResult(
+                        agent_name="ImageAnalysisAgent",
+                        display_name="Image Analysis Agent",
+                        result=result_text,
+                        confidence=0.7,
+                        method=f"GPT Vision ({vision_model})",
+                        explanation=f"Analyzed image but response was not in structured JSON format",
+                        summary=f"Analyzed {file_metadata.get('filename', 'image')} (unstructured output)",
+                        artifacts={"file_metadata": file_metadata}
+                    )
                 
             except Exception as e:
                 logger.error(f"[ImageAnalysisAgent] Vision API call failed: {e}")
