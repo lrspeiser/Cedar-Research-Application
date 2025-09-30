@@ -39,13 +39,12 @@ class LangExtractAgent:
         logger.info(f"[LangExtractAgent] Processing text of length {len(text)}")
         
         if not self.available:
-            # Fallback to simple detection
-            metadata = {"detected_languages": ["unknown"], "confidence": 0}
-            return FileProcessingResult(
-                agent_name="LangExtractAgent",
-                success=True,
-                data=None,
-                metadata=metadata
+            # NEVER CREATE A FALLBACK - Fail loudly so dependencies are properly installed
+            logger.error(f"[LangExtractAgent] FATAL: langdetect library not available")
+            logger.error(f"[LangExtractAgent] Install it with: pip install langdetect")
+            logger.error(f"[LangExtractAgent] DO NOT return fake 'unknown' data - fail the operation")
+            raise RuntimeError(
+                "LangExtractAgent requires langdetect library. Install with: pip install langdetect"
             )
         
         try:

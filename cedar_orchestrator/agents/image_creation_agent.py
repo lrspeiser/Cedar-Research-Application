@@ -101,8 +101,9 @@ class ImageCreationAgent:
                 db_session.commit()
                 db_session.refresh(fe)
             except Exception as e:
-                try: db_session.rollback()
-                except Exception: pass
+                # NEVER CREATE A FALLBACK - Let rollback exceptions propagate
+                logger.error(f"[ImageCreationAgent] Database commit failed: {e}")
+                db_session.rollback()  # If this fails, let it raise
                 raise
             
             url_rel = f"/uploads/{project_id}/images/{fname}"

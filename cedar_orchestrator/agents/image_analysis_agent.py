@@ -358,36 +358,15 @@ IMPORTANT:
                     )
                     
                 except json.JSONDecodeError as e:
-                    logger.warning(f"[ImageAnalysisAgent] Could not parse response as JSON: {e}")
-                    logger.warning(f"[ImageAnalysisAgent] Raw response: {analysis_text[:500]}...")
-                    # Fallback: return raw text if JSON parsing fails
-                    result_text = f"""## Image Analysis Complete
-
-**File:** {file_metadata.get('filename', 'Unknown')}
-**Type:** {file_metadata.get('mime_type', 'Unknown')}
-**Size:** {file_metadata.get('size_bytes', 0):,} bytes
-
----
-
-{analysis_text}
-
----
-
-**Warning:** Response was not in expected JSON format. See IMAGE_ANALYSIS_SCHEMA.md for required format.
-"""
-                    
-                    duration = time.time() - start_time
-                    logger.info(f"[ImageAnalysisAgent] Completed (non-JSON response) in {duration:.2f}s")
-                    
-                    return AgentResult(
-                        agent_name="ImageAnalysisAgent",
-                        display_name="Image Analysis Agent",
-                        result=result_text,
-                        confidence=0.7,
-                        method=f"GPT Vision ({vision_model})",
-                        explanation=f"Analyzed image but response was not in structured JSON format",
-                        summary=f"Analyzed {file_metadata.get('filename', 'image')} (unstructured output)",
-                        artifacts={"file_metadata": file_metadata}
+                    # NEVER CREATE A FALLBACK - Fail loudly so we can fix the root cause
+                    logger.error(f"[ImageAnalysisAgent] FATAL: Could not parse response as JSON: {e}")
+                    logger.error(f"[ImageAnalysisAgent] Raw response: {analysis_text}")
+                    logger.error(f"[ImageAnalysisAgent] This indicates the LLM did not follow the JSON schema in its prompt")
+                    logger.error(f"[ImageAnalysisAgent] Fix the prompt or LLM model - DO NOT add fallback logic")
+                    raise ValueError(
+                        f"ImageAnalysisAgent failed to return valid JSON. "
+                        f"Error: {e}. "
+                        f"Raw response (first 1000 chars): {analysis_text[:1000]}"
                     )
                 
             except Exception as e:
