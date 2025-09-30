@@ -280,9 +280,17 @@ async def handle_ws_chat(
                         # Chat numbers map to threads in this implementation
                         derived_thread_id = chat_number if chat_number else None
                         
-                        # If file_id is present but content is empty/minimal, provide helpful default prompt
+                        # If file_id is present and this looks like auto-upload message, provide helpful default prompt
                         query_to_send = content
-                        if file_id and (not content or len(content.strip()) < 20):
+                        is_file_upload_message = (
+                            file_id and (
+                                not content or 
+                                len(content.strip()) < 20 or 
+                                content.strip().startswith("Uploaded ") or
+                                content.strip() in ["Uploaded file", "File uploaded"]
+                            )
+                        )
+                        if is_file_upload_message:
                             # Get database metadata for context
                             db_metadata = ""
                             try:
