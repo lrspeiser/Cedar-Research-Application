@@ -291,6 +291,18 @@ async def handle_ws_chat(
                             )
                         )
                         if is_file_upload_message:
+                            # Get file metadata from database
+                            file_rec = None
+                            try:
+                                if db_session and file_id:
+                                    from main_models import FileEntry
+                                    file_rec = db_session.query(FileEntry).filter(
+                                        FileEntry.id == int(file_id),
+                                        FileEntry.project_id == int(project_id)
+                                    ).first()
+                            except Exception as e:
+                                logger.warning(f"[WebSocket] Could not fetch file metadata: {e}")
+                            
                             # Get database metadata for context
                             db_metadata = ""
                             try:
@@ -306,8 +318,103 @@ async def handle_ws_chat(
                             except Exception as e:
                                 logger.warning(f"[WebSocket] Could not fetch database metadata: {e}")
                             
-                            # Enhanced action-oriented prompt
-                            query_to_send = f"""I uploaded a file (file_id: {file_id}). Please process it and integrate into our database system:
+                            # Build file-type-specific prompt based on mime_type
+                            if file_rec:
+                                mime = (file_rec.mime_type or "").lower()
+                                ext = (file_rec.file_type or "").lower()
+                                filename = file_rec.display_name or file_rec.name or f"file_{file_id}"
+                                size_kb = file_rec.size_bytes / 1024 if file_rec.size_bytes else 0
+                                
+                                # File metadata header (used in all prompts)
+                                file_info = f"""**Uploaded File:**
+- Filename: {filename}
+- Type: {mime} (.{ext})
+- Size: {size_kb:.1f} KB
+- File ID: {file_id}"""
+                                
+                                if "image" in mime or ext in ["png", "jpg", "jpeg", "gif", "svg", "webp", "bmp"]:
+                                    # IMAGE-SPECIFIC PROMPT
+                                    query_to_send = f"""{file_info}
+
+**Task:** Extract and store chart/image data in database
+
+**Step 1 (This iteration):** Use ImageAnalysisAgent to:
+- Identify image type (chart/diagram/photo/screenshot)
+- Extract chart data: type, axes, data points, series
+- Perform OCR on any text
+- Extract metadata
+
+**Step 2 (Next iteration):** Use SQLAgent to:
+- CREATE tables: chart_data, chart_metadata, image_text
+- INSERT extracted data with file_id={file_id} as foreign key
+- Return row counts and table names
+{db_metadata}
+
+**IMPORTANT:** Start by analyzing the image with ImageAnalysisAgent."""
+                                    logger.info(f"[WebSocket] Using image-specific prompt for {filename}")
+                                
+                                elif "pdf" in mime or ext == "pdf":
+                                    # PDF-SPECIFIC PROMPT
+                                    query_to_send = f"""{file_info}
+
+**Task:** Extract PDF content and store in database
+
+**Step 1 (This iteration):** Use PDFExtractionAgent to:
+- Extract text from all pages
+- Extract tables (convert to structured data)
+- Extract embedded images
+- Get metadata (author, title, page count)
+
+**Step 2 (Next iteration):** Use SQLAgent to:
+- CREATE tables: pdf_pages, pdf_tables, pdf_metadata
+- INSERT extracted content with file_id={file_id}
+- Return summary of what was stored
+{db_metadata}
+
+**IMPORTANT:** Start by extracting PDF content with PDFExtractionAgent."""
+                                    logger.info(f"[WebSocket] Using PDF-specific prompt for {filename}")
+                                
+                                elif any(x in mime for x in ["csv", "json", "excel", "spreadsheet"]) or ext in ["csv", "json", "xlsx", "xls"]:
+                                    # STRUCTURED DATA-SPECIFIC PROMPT
+                                    query_to_send = f"""{file_info}
+
+**Task:** Parse structured data and load into database
+
+**Step 1 (This iteration):** Use CodeAgent to:
+- Read file from storage path
+- Infer schema (column names, types, constraints)
+- Detect issues (nulls, duplicates, outliers)
+- Generate summary statistics
+
+**Step 2 (Next iteration):** Use SQLAgent to:
+- CREATE TABLE with appropriate types
+- Add constraints (NOT NULL, UNIQUE, PRIMARY KEY)
+- INSERT all rows
+- Add indexes on key columns
+- Return table name and row count
+{db_metadata}
+
+**IMPORTANT:** Start by parsing the file with CodeAgent."""
+                                    logger.info(f"[WebSocket] Using structured-data prompt for {filename}")
+                                
+                                else:
+                                    # GENERIC FALLBACK PROMPT (for text, markdown, unknown types)
+                                    query_to_send = f"""{file_info}
+
+**Task:** Process file and integrate into database
+{db_metadata}
+
+**Action Required:**
+1. Analyze file content using appropriate agent
+2. Extract structured data where possible
+3. Store in database with file_id={file_id} as foreign key
+4. Provide confirmation of what was stored
+
+**IMPORTANT:** Start by determining the best approach for this file type."""
+                                    logger.info(f"[WebSocket] Using generic prompt for {filename} (mime={mime})")
+                            else:
+                                # Fallback if file metadata couldn't be fetched
+                                query_to_send = f"""I uploaded a file (file_id: {file_id}). Please process it and integrate into our database system:
 
 **DATABASE SYSTEM:** SQLite with SQLAlchemy ORM
 **How to write to database:** Use SQLAgent to execute SQL CREATE TABLE and INSERT statements

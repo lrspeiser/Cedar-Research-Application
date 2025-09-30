@@ -317,6 +317,146 @@ def delete_project(app, project_id: int):
     except Exception as e:
         logger.error(f"Failed to delete chat history: {e}")
     
+    # Clean per-project database BEFORE removing directory
+    # This ensures all records are properly deleted to avoid ghost data
+    try:
+        from sqlalchemy.orm import sessionmaker
+        from ..db_utils import _get_project_engine
+        
+        # Get the project-specific database engine
+        try:
+            engine = _get_project_engine(project_id)
+            SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+            
+            with SessionLocal() as pdb:
+                # Delete all data from the per-project database in proper order
+                # (respecting foreign key constraints)
+                
+                # 1. Delete ThreadMessages first (references threads)
+                try:
+                    thread_messages = pdb.query(ThreadMessage).filter(
+                        ThreadMessage.project_id == project_id
+                    ).all()
+                    for tm in thread_messages:
+                        pdb.delete(tm)
+                    pdb.commit()
+                    logger.info(f"Deleted {len(thread_messages)} thread messages for project {project_id}")
+                except Exception as e:
+                    logger.error(f"Failed to delete thread messages: {e}")
+                    pdb.rollback()
+                
+                # 2. Delete Threads
+                try:
+                    threads = pdb.query(Thread).filter(
+                        Thread.project_id == project_id
+                    ).all()
+                    deleted_items["threads"] = len(threads)
+                    for t in threads:
+                        pdb.delete(t)
+                    pdb.commit()
+                    logger.info(f"Deleted {deleted_items['threads']} threads for project {project_id}")
+                except Exception as e:
+                    logger.error(f"Failed to delete threads: {e}")
+                    pdb.rollback()
+                
+                # 3. Delete FileEntries
+                try:
+                    files = pdb.query(FileEntry).filter(
+                        FileEntry.project_id == project_id
+                    ).all()
+                    deleted_items["files"] = len(files)
+                    for f in files:
+                        pdb.delete(f)
+                    pdb.commit()
+                    logger.info(f"Deleted {deleted_items['files']} file entries for project {project_id}")
+                except Exception as e:
+                    logger.error(f"Failed to delete file entries: {e}")
+                    pdb.rollback()
+                
+                # 4. Delete Datasets
+                try:
+                    datasets = pdb.query(Dataset).filter(
+                        Dataset.project_id == project_id
+                    ).all()
+                    deleted_items["datasets"] = len(datasets)
+                    for d in datasets:
+                        pdb.delete(d)
+                    pdb.commit()
+                    logger.info(f"Deleted {deleted_items['datasets']} datasets for project {project_id}")
+                except Exception as e:
+                    logger.error(f"Failed to delete datasets: {e}")
+                    pdb.rollback()
+                
+                # 5. Delete Notes
+                try:
+                    notes = pdb.query(Note).filter(
+                        Note.project_id == project_id
+                    ).all()
+                    deleted_items["notes"] = len(notes)
+                    for n in notes:
+                        pdb.delete(n)
+                    pdb.commit()
+                    logger.info(f"Deleted {deleted_items['notes']} notes for project {project_id}")
+                except Exception as e:
+                    logger.error(f"Failed to delete notes: {e}")
+                    pdb.rollback()
+                
+                # 6. Delete ChangelogEntries
+                try:
+                    changelog_entries = pdb.query(ChangelogEntry).filter(
+                        ChangelogEntry.project_id == project_id
+                    ).all()
+                    for ce in changelog_entries:
+                        pdb.delete(ce)
+                    pdb.commit()
+                    logger.info(f"Deleted {len(changelog_entries)} changelog entries for project {project_id}")
+                except Exception as e:
+                    logger.error(f"Failed to delete changelog entries: {e}")
+                    pdb.rollback()
+                
+                # 7. Delete SQLUndoLog entries
+                try:
+                    undo_logs = pdb.query(SQLUndoLog).filter(
+                        SQLUndoLog.project_id == project_id
+                    ).all()
+                    for ul in undo_logs:
+                        pdb.delete(ul)
+                    pdb.commit()
+                    logger.info(f"Deleted {len(undo_logs)} undo log entries for project {project_id}")
+                except Exception as e:
+                    logger.error(f"Failed to delete undo logs: {e}")
+                    pdb.rollback()
+                
+                # 8. Delete Branches from per-project DB
+                try:
+                    branches = pdb.query(Branch).filter(
+                        Branch.project_id == project_id
+                    ).all()
+                    for b in branches:
+                        pdb.delete(b)
+                    pdb.commit()
+                    logger.info(f"Deleted {len(branches)} branches from project DB for project {project_id}")
+                except Exception as e:
+                    logger.error(f"Failed to delete branches from project DB: {e}")
+                    pdb.rollback()
+                
+                # 9. Finally, delete the Project record from per-project DB
+                try:
+                    proj_in_db = pdb.query(Project).filter(Project.id == project_id).first()
+                    if proj_in_db:
+                        pdb.delete(proj_in_db)
+                        pdb.commit()
+                        logger.info(f"Deleted project record from project DB for project {project_id}")
+                except Exception as e:
+                    logger.error(f"Failed to delete project record from project DB: {e}")
+                    pdb.rollback()
+        
+        except Exception as e:
+            logger.error(f"Failed to access project database for cleanup: {e}")
+    
+    except Exception as e:
+        logger.error(f"Failed to clean project database: {e}")
+    
     # Remove project storage directory (DB + files)
     try:
         dirs = _project_dirs(project_id)

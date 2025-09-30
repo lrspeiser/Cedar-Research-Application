@@ -21,7 +21,7 @@ Base = declarative_base()
 
 class Project(Base):
     __tablename__ = "projects"  # Central registry only
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
     title = Column(String(255), nullable=False, unique=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
