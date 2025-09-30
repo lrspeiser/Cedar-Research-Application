@@ -353,6 +353,44 @@ If there are supporting files, images, or databases already in your project, pre
 - Prompt spans multiple modalities (files + web + DB + plots)
 - Unclear dependencies or decision points ("if extraction fails, try OCR")
 - Want reusable, auditable plan for ChiefAgent to execute step-by-step
+
+## Agent Input Requirements (for agent_tasks):
+
+When creating agent_tasks entries, the 'task' field should be a natural language string that will be passed directly to the agent. All agents accept plain text tasks.
+
+**Basic format for all agents:**
+```json
+{"agent": "AgentName", "task": "Natural language description of what to do"}
+```
+
+**Special cases:**
+
+- **ImageAnalysisAgent**: Requires file_id in context
+  ```json
+  {"agent": "ImageAnalysisAgent", "task": "Analyze this image", "context": {"file_id": 123}}
+  ```
+
+- **ImageCreationAgent**: Task is the image description
+  ```json
+  {"agent": "ImageCreationAgent", "task": "A sunset over mountains with snow"}
+  ```
+
+- **FileAgent**: Task should include URLs or file paths
+  ```json
+  {"agent": "FileAgent", "task": "Download https://example.com/data.pdf"}
+  ```
+
+- **DataAgent**: Include database context if available
+  ```json
+  {"agent": "DataAgent", "task": "Suggest queries for user conversion", "context": {"project_id": 1}}
+  ```
+
+- **NotesAgent**: Can include existing notes context
+  ```json
+  {"agent": "NotesAgent", "task": "Summarize these findings", "context": {"content_to_note": "..."}}
+  ```
+
+For most agents (CodeAgent, ShellAgent, SQLAgent, FormulaAgent, ResearchAgent, StrategyAgent), just provide a clear task description as a string.
 """
 
             system_prompt = system_header + sample_json + examples + agent_guide
@@ -865,7 +903,7 @@ class ThinkerOrchestrator:
                 run_logs.append(f"Error: planning.emit_failed: {type(e).__name__}: {e}")
             except Exception:
                 pass
-            planning_decision = {"decision": "loop", "agents_to_use": []}
+            planning_decision = {"decision": "loop", "agent_tasks": []}
 
         # Short-circuit only for clarifications - Chief Agent must NOT answer directly without agents
         try:
@@ -883,28 +921,40 @@ class ThinkerOrchestrator:
         except Exception:
             pass
 
-        # Determine which agents to run from planning_decision
+        # Parse agent_tasks from planning_decision
+        agent_tasks_list = []
+        try:
+            if isinstance(planning_decision.get('agent_tasks'), list):
+                agent_tasks_list = planning_decision.get('agent_tasks', [])
+        except Exception as e:
+            logger.warning(f"[ORCHESTRATOR] Failed to parse agent_tasks: {e}")
+            agent_tasks_list = []
+        
+        # Extract unique agent names from tasks
         agents_to_use = []
-        try:
-            if isinstance(planning_decision.get('agents_to_use'), list):
-                agents_to_use = [str(a).strip() for a in planning_decision.get('agents_to_use') if str(a).strip()]
-            elif isinstance(planning_decision.get('selected_agent'), str):
-                sel = planning_decision.get('selected_agent').strip()
-                if sel and sel.lower() != 'combined':
-                    agents_to_use = [sel]
-        except Exception:
-            agents_to_use = []
+        agent_task_map = {}  # Map agent name to task string
+        for task_entry in agent_tasks_list:
+            try:
+                agent_name = str(task_entry.get('agent', '')).strip()
+                task_str = str(task_entry.get('task', '')).strip()
+                context = task_entry.get('context', {})
+                if agent_name and task_str:
+                    if agent_name not in agents_to_use:
+                        agents_to_use.append(agent_name)
+                    # Store task and context for this agent
+                    agent_task_map[agent_name] = {
+                        'task': task_str,
+                        'context': context
+                    }
+            except Exception as e:
+                logger.warning(f"[ORCHESTRATOR] Failed to parse task entry: {e}")
+        
         logger.info(f"[ORCHESTRATOR] Agents selected by Chief Agent: {agents_to_use}")
+        logger.info(f"[ORCHESTRATOR] Agent tasks: {agent_task_map}")
         try:
-            run_logs.append("Planning: agents_to_use=" + ",".join(agents_to_use))
+            run_logs.append("Planning: agents=" + ",".join(agents_to_use))
         except Exception:
             pass
-
-        # Build additional guidance payload
-        guidance = (planning_decision.get('additional_guidance') or '').strip()
-        message_with_guidance = message
-        if guidance:
-            message_with_guidance = f"{message}\n\nGuidance: {guidance}"
 
         # Phase 2: Parallel agent processing based on Chief Agent selection
         logger.info("[ORCHESTRATOR] PHASE 2: Parallel Agent Processing (from Chief selection)")
@@ -947,21 +997,39 @@ class ThinkerOrchestrator:
         # Don't send stream updates that would overwrite the Chief Agent analysis
         # The detailed analysis message is complete and should stand on its own
         
-        # Create agent tasks - pass conversation context/guidance
+        # Create agent tasks - use specific task strings from agent_task_map
         agent_tasks = []
         for agent in agents:
+            agent_class_name = agent.__class__.__name__
+            
+            # Get the specific task for this agent, fallback to user message
+            task_info = agent_task_map.get(agent_class_name, {'task': message, 'context': {}})
+            task_str = task_info.get('task', message)
+            task_context = task_info.get('context', {})
+            
+            logger.info(f"[ORCHESTRATOR] Dispatching to {agent_class_name} with task: {task_str[:100]}...")
+            
             if isinstance(agent, ShellAgent):
-                # Only run a concrete command if guidance includes backticked code; otherwise pass context
-                conversation_context = f"User Query: {message}\nIteration: {iteration + 1}"
-                if guidance:
-                    conversation_context += f"\nGuidance: {guidance}"
-                agent_tasks.append(agent.process(message_with_guidance, conversation_context=conversation_context))
+                conversation_context = f"User Query: {message}\nIteration: {iteration + 1}\nSpecific Task: {task_str}"
+                agent_tasks.append(agent.process(task_str, conversation_context=conversation_context))
             elif agent is self.image_creation_agent:
-                agent_tasks.append(agent.process(message_with_guidance, project_id=project_id, branch_id=branch_id, db_session=db_session))
+                agent_tasks.append(agent.process(task_str, project_id=project_id, branch_id=branch_id, db_session=db_session))
             elif agent is self.image_analysis_agent:
-                agent_tasks.append(agent.process(message_with_guidance, project_id=project_id, branch_id=branch_id, db_session=db_session, file_id=file_id))
+                # ImageAnalysisAgent may need file_id from context
+                file_id_for_analysis = task_context.get('file_id', file_id)
+                agent_tasks.append(agent.process(task_str, project_id=project_id, branch_id=branch_id, db_session=db_session, file_id=file_id_for_analysis))
+            elif agent is self.data_agent:
+                # DataAgent may use project_id from context
+                project_id_for_data = task_context.get('project_id', project_id)
+                agent_tasks.append(agent.process(task_str, project_id=project_id_for_data))
+            elif agent is self.notes_agent:
+                # NotesAgent may have content_to_note in context
+                content_to_note = task_context.get('content_to_note', '')
+                existing_notes = task_context.get('existing_notes', [])
+                agent_tasks.append(agent.process(task_str, content_to_note=content_to_note, existing_notes=existing_notes))
             else:
-                agent_tasks.append(agent.process(message_with_guidance))
+                # Default: just pass the task string
+                agent_tasks.append(agent.process(task_str))
         
         results = await asyncio.gather(*agent_tasks, return_exceptions=True)
         logger.info(f"[ORCHESTRATOR] Parallel processing completed in {time.time() - parallel_start:.3f}s")
