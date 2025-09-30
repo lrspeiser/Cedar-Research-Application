@@ -60,8 +60,8 @@ def simulate_agent_results():
     # Mock agent results
     agent_results = [
         SimpleNamespace(
-            agent_name="MathAgent",
-            display_name="The Math Agent",
+            agent_name="FormulaAgent",
+            display_name="The Formula Agent",
             confidence=0.95,
             method="calculation",
             result="Answer: 42\n\nWhy: The calculation was performed successfully.",
@@ -82,8 +82,8 @@ def simulate_agent_results():
     # Mock chief decision
     chief_decision = {
         'decision': 'final',
-        'selected_agent': 'MathAgent',
-        'reasoning': 'The Math Agent provided the most accurate answer',
+        'selected_agent': 'FormulaAgent',
+        'reasoning': 'The Formula Agent provided the most accurate answer',
         'final_answer': 'The answer is 42 based on mathematical calculation.',
         'thinking_process': 'Analyzed both agent responses and selected the math approach.'
     }

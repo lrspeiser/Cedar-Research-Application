@@ -40,7 +40,7 @@ You MUST respond in this EXACT JSON format:
   "additional_guidance": "SPECIFIC next action(s) for selected agents (only if 'loop')",
   "clarification_question": "SPECIFIC question about ambiguity: 'When you say X, do you mean Y or Z?' (only if 'clarify')",
   "selected_agent": "Single agent name OR 'combined' for multiple agents (backward compatibility)",
-  "agents_to_use": ["CodeAgent" | "MathAgent" | "ResearchAgent" | "StrategyAgent" | "SQLAgent" | "DataAgent" | "NotesAgent" | "ShellAgent" | "FileAgent" | "ImageCreationAgent" | "ImageAnalysisAgent"],
+  "agents_to_use": ["CodeAgent" | "FormulaAgent" | "ResearchAgent" | "StrategyAgent" | "SQLAgent" | "DataAgent" | "NotesAgent" | "ShellAgent" | "FileAgent" | "ImageCreationAgent" | "ImageAnalysisAgent"],
   "reasoning": "Why these agents will give us a CONFIDENT answer: 'For MOND theory, I need Research Agent for papers AND Notes Agent for documentation'",
   "confidence_strategy": "How many agents and why: 'Using 3 agents for cross-validation' or 'Single agent sufficient for simple calc'"
 }
@@ -51,7 +51,7 @@ EXAMPLES (Routing Guidance):
   * What are the main differences between L1 and L2 regularization in ML? Cite authoritative sources.
   * Summarize the latest (past 12 months) changes to Apple's App Store policy and link to the official page.
 
-- MathAgent
+- FormulaAgent
   * Derive the closed-form solution of the logistic differential equation from dP/dt = rP(1 - P/K).
   * Prove that the harmonic series diverges and include the reasoning steps.
   * From Maxwell's equations, derive the wave equation for E in vacuum and state the assumptions.
@@ -176,8 +176,8 @@ When returning SQL that reads/writes branch-aware tables, include WHERE project_
 '''
             },
             {
-                "name": "Math Agent",
-                "internal_name": "MathAgent",
+                "name": "Formula Agent",
+                "internal_name": "FormulaAgent",
                 "description": "Derives mathematical formulas from first principles and walks through detailed proofs",
                 "is_primary": False,
                 "prompt": '''You are a mathematical expert who derives formulas from first principles.

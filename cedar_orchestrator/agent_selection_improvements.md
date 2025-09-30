@@ -6,10 +6,10 @@ The CedarPy orchestrator doesn't always use exactly 3 agents. The number varies 
 
 ### Current Agent Selection Logic:
 
-1. **Mathematical Derivation**: 2 agents (MathAgent, CodeAgent)
+1. **Mathematical Derivation**: 2 agents (FormulaAgent, CodeAgent)
 2. **Research Task**: 2 agents (ResearchAgent, NotesAgent) 
 3. **Strategic Planning**: 1 agent (StrategyAgent)
-4. **Mathematical Computation**: 2 agents (CodeAgent, MathAgent)
+4. **Mathematical Computation**: 2 agents (CodeAgent, FormulaAgent)
 5. **Coding Task**: 2 agents (CodeAgent, StrategyAgent)
 6. **Database Query**: 2 agents (DataAgent, SQLAgent)
 7. **Note Taking**: 1 agent (NotesAgent)
@@ -124,7 +124,7 @@ Query Type: Complex Mathematical Derivation with Research
 Complexity Assessment: High (score: 5/6)
 
 Selecting 5 specialized agents for this task:
-• Math Agent - For mathematical derivation from first principles
+• Formula Agent - For mathematical derivation from first principles
 • Research Agent - To find relevant sources and prior work
 • Coding Agent - To verify calculations programmatically  
 • Reasoning Agent - For step-by-step logical analysis

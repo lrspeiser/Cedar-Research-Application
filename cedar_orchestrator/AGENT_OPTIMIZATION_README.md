@@ -13,7 +13,7 @@ This update optimizes the multi-agent orchestration system by:
 #### Before
 - GeneralAgent and ReasoningAgent were included in almost every query (now removed)
 - This led to redundant processing and slower response times
-- Example: A math calculation would run 4 agents (Code, Math, Reasoning, General)
+- Example: A math calculation would run 4 agents (Code, Formula, Reasoning, General)
 
 #### After
 - Agents are selected more precisely based on need
@@ -46,7 +46,7 @@ The FileAgent is a specialized agent that handles:
 | Query Type | Before | After |
 |------------|--------|-------|
 | File operations | Not supported | FileAgent + NotesAgent |
-| Math calculations | Code + Math + Reasoning + General | Code + Math |
+| Math calculations | Code + Formula + Reasoning + General | Code + Formula |
 | Code generation | Code + Strategy + General | Code + Strategy |
 | SQL queries | Data + SQL + General | Data + SQL |
 | Research | Research + General + Notes | Research + Notes |
@@ -66,7 +66,7 @@ Result: File downloaded, saved to database, metadata extracted
 ### Math Calculation
 ```
 User: "Calculate the square root of 144"
-Agents Used: CodeAgent, MathAgent
+Agents Used: CodeAgent, FormulaAgent
 Result: Faster execution with same accuracy
 ```
 

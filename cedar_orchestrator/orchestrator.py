@@ -21,7 +21,7 @@ from fastapi import WebSocket
 from .execution_agents import AgentResult, ShellAgent, CodeAgent, SQLAgent
 
 # Import specialized agents
-from .specialized_agents import MathAgent, ResearchAgent, StrategyAgent, DataAgent, NotesAgent, FileAgent, ImageCreationAgent, ImageAnalysisAgent
+from .specialized_agents import FormulaAgent, ResearchAgent, StrategyAgent, DataAgent, NotesAgent, FileAgent, ImageCreationAgent, ImageAnalysisAgent
 
 # Import file processing agents if available
 try:
@@ -107,7 +107,15 @@ class ChiefAgent:
             system_header = f"""You are the Chief Agent - an intelligent orchestrator who analyzes queries and deploys the right agents to get confident, accurate answers.
 
 🎯 YOUR PRIMARY DIRECTIVE:
-ASSESS the query complexity, then deploy AS MANY agents as needed to achieve HIGH CONFIDENCE in the answer.
+ALWAYS delegate work to specialized agents. NEVER answer directly, even for simple questions.
+ASSESS the query complexity, then deploy the appropriate specialized agent(s) to achieve HIGH CONFIDENCE in the answer.
+
+IMPORTANT:
+- For math/formulas: Use FormulaAgent (not you)
+- For code: Use CodeAgent (not you) 
+- For research: Use ResearchAgent (not you)
+- For ALL tasks: Use the specialized agent, then return 'decision: final' with agents_to_use populated
+- ONLY use 'decision: final' WITHOUT agents_to_use if you need to clarify the user's request first
 
 CURRENT ITERATION STATUS:
 - Iteration: {iteration + 1} of {max_iterations}
@@ -126,7 +134,7 @@ You MUST respond in this EXACT JSON format:
   "additional_guidance": "SPECIFIC next action(s) for selected agents (only if 'loop')",
   "clarification_question": "SPECIFIC question about ambiguity: 'When you say X, do you mean Y or Z?' (only if 'clarify')",
   "selected_agent": "Single agent name OR 'combined' for multiple agents (backward compatibility)",
-  "agents_to_use": ["CodeAgent" | "MathAgent" | "ResearchAgent" | "StrategyAgent" | "SQLAgent" | "DataAgent" | "NotesAgent" | "ShellAgent" | "FileAgent" | "ImageCreationAgent" | "ImageAnalysisAgent"],
+  "agents_to_use": ["CodeAgent" | "FormulaAgent" | "ResearchAgent" | "StrategyAgent" | "SQLAgent" | "DataAgent" | "NotesAgent" | "ShellAgent" | "FileAgent" | "ImageCreationAgent" | "ImageAnalysisAgent"],
   "reasoning": "Why these agents will give us a CONFIDENT answer: 'For MOND theory, I need Research Agent for papers AND Notes Agent for documentation'",
   "confidence_strategy": "How many agents and why: 'Using 3 agents for cross-validation' or 'Single agent sufficient for simple calc'"
 }
@@ -143,13 +151,13 @@ Examples (Routing Guidance):
   • User: "Summarize the latest (past 12 months) changes to Apple’s App Store policy and link to the official page."
     Agents to use: [ResearchAgent]
 
-- MathAgent (derivations/proofs)
+- FormulaAgent (derivations/proofs)
   • User: "Derive the closed-form solution of the logistic differential equation from dP/dt = rP(1 − P/K)."
-    Agents to use: [MathAgent]
+    Agents to use: [FormulaAgent]
   • User: "Prove that the harmonic series diverges and include the reasoning steps."
-    Agents to use: [MathAgent]
-  • User: "From Maxwell’s equations, derive the wave equation for E in vacuum and state the assumptions."
-    Agents to use: [MathAgent]
+    Agents to use: [FormulaAgent]
+  • User: "From Maxwell's equations, derive the wave equation for E in vacuum and state the assumptions."
+    Agents to use: [FormulaAgent]
 
 - CodeAgent (generate/run code)
   • User: "Write a short Python script that reads every CSV in a folder and prints row counts per file (no third-party libs)."
@@ -525,7 +533,7 @@ class ThinkerOrchestrator:
         self.shell_agent = ShellAgent(self.llm_client)  # NEW: Full shell access
         
         # Specialized agents
-        self.math_agent = MathAgent(self.llm_client)
+        self.formula_agent = FormulaAgent(self.llm_client)
         self.research_agent = ResearchAgent(self.llm_client)
         self.strategy_agent = StrategyAgent(self.llm_client)
         self.data_agent = DataAgent(self.llm_client)
@@ -570,8 +578,8 @@ class ThinkerOrchestrator:
             thinking_process["complexity"] = "simple"
             thinking_process["identified_type"] = "simple_calculation"
             thinking_process["analysis"] = f"Calculation query: {message}"
-            thinking_process["agents_to_use"] = ["CodeAgent", "MathAgent"]  # Use both for validation
-            thinking_process["selection_reasoning"] = f"User asks '{message}' - using Code and Math agents for confident verification"
+            thinking_process["agents_to_use"] = ["CodeAgent", "FormulaAgent"]  # Use both for validation
+            thinking_process["selection_reasoning"] = f"User asks '{message}' - using Code and Formula agents for confident verification"
             thinking_process["confidence_strategy"] = "appropriate"
             return thinking_process
         
@@ -629,8 +637,8 @@ class ThinkerOrchestrator:
             thinking_process["complexity"] = "complex"
             thinking_process["identified_type"] = "mathematical_derivation"
             thinking_process["analysis"] = f"Complex derivation requested"
-            thinking_process["agents_to_use"] = ["MathAgent", "CodeAgent"]
-            thinking_process["selection_reasoning"] = f"Mathematical derivation - Math Agent for theory, Coding Agent for verification"
+            thinking_process["agents_to_use"] = ["FormulaAgent", "CodeAgent"]
+            thinking_process["selection_reasoning"] = f"Mathematical derivation - Formula Agent for theory, Coding Agent for verification"
         # Simple computation
         elif is_computation:
             thinking_process["complexity"] = "simple"
@@ -739,7 +747,7 @@ class ThinkerOrchestrator:
                 pass
             planning_decision = {"decision": "loop", "agents_to_use": []}
 
-        # Short-circuit if the Chief Agent wants to clarify or can finalize without agents
+        # Short-circuit only for clarifications - Chief Agent must NOT answer directly without agents
         try:
             if planning_decision.get('decision') == 'clarify':
                 clarification_question = planning_decision.get('clarification_question', 'Could you please provide more details about your request?')
@@ -750,22 +758,8 @@ class ThinkerOrchestrator:
                     "text": f"""🤔 **Clarification Needed**\n\n{thinking}\n\n**Question:** {clarification_question}\n\nPlease provide this information so I can better assist you."""
                 })
                 return
-            if planning_decision.get('decision') == 'final':
-                # Only finalize early if we have a substantive final answer
-                final_text = (planning_decision.get('final_answer') or planning_decision.get('user_facing_message') or '').strip()
-                if final_text and final_text.lower() != 'no results available':
-                    await websocket.send_json({
-                        "type": "final",
-                        "text": final_text,
-                        "json": {
-                            "role": 'The Chief Agent',
-                            "selected_agent": planning_decision.get('selected_agent'),
-                            "chief_reasoning": planning_decision.get('reasoning', ''),
-                            "method": "Chief Agent Decision (no agents)",
-                            "metadata": {}
-                        }
-                    })
-                    return
+            # REMOVED: Chief Agent should NEVER finalize without running agents first
+            # All work must be delegated to specialized agents
         except Exception:
             pass
 
@@ -808,7 +802,7 @@ class ThinkerOrchestrator:
         _add("CodeAgent", self.code_agent)
         _add("SQLAgent", self.sql_agent)
         _add("ShellAgent", self.shell_agent)
-        _add("MathAgent", self.math_agent)
+        _add("FormulaAgent", self.formula_agent)
         _add("ResearchAgent", self.research_agent)
         _add("StrategyAgent", self.strategy_agent)
         _add("DataAgent", self.data_agent)
@@ -929,7 +923,7 @@ class ThinkerOrchestrator:
                         "CodeAgent": "Coding Agent",
                         "ShellAgent": "Desktop Agent",
                         "SQLAgent": "SQL Agent",
-                        "MathAgent": "Math Agent",
+                        "FormulaAgent": "Formula Agent",
                         "ResearchAgent": "Research Agent",
                         "StrategyAgent": "Strategy Agent",
                         "DataAgent": "Data Agent",

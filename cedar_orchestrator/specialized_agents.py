@@ -3,7 +3,7 @@ Specialized Agents Module
 Contains domain-specific agents for specialized tasks
 
 These agents handle:
-1. MathAgent - Mathematical derivations from first principles
+1. FormulaAgent - Mathematical derivations from first principles
 2. ResearchAgent - Web research and citations
 3. StrategyAgent - Strategic planning and coordination
 4. DataAgent - Database schema analysis
@@ -242,7 +242,7 @@ class ImageAnalysisAgent:
                 summary="Image analysis failed"
             )
 
-class MathAgent:
+class FormulaAgent:
     """Agent that derives mathematical formulas from first principles"""
     
     def __init__(self, llm_client: Optional[AsyncOpenAI]):
@@ -251,10 +251,10 @@ class MathAgent:
     async def process(self, task: str) -> AgentResult:
         """Derive mathematical formulas from first principles and walk through derivations"""
         start_time = time.time()
-        logger.info(f"[MathAgent] Starting mathematical derivation for: {task[:100]}...")
+        logger.info(f"[FormulaAgent] Starting mathematical derivation for: {task[:100]}...")
         
         if not self.llm_client:
-            error_details = f"""Agent: MathAgent
+            error_details = f"""Agent: FormulaAgent
 Task: {task}
 Error: No LLM client configured
 API Key Status: {'Not provided' if not os.getenv('OPENAI_API_KEY') else 'Provided but client not initialized'}
@@ -262,18 +262,18 @@ Environment Variables: OPENAI_API_KEY={'SET' if os.getenv('OPENAI_API_KEY') else
 Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is properly initialized"""
             
             return AgentResult(
-                agent_name="MathAgent",
-                display_name="Math Agent",
-                result=f"**Agent Failure Report:**\n\nThe Math Agent was unable to process your request due to missing LLM configuration.\n\n**Error Details:**\n{error_details}\n\n**What the Chief Agent should know:**\nThis agent requires an LLM to derive mathematical formulas from first principles. Without it, no derivation is possible.",
+                agent_name="FormulaAgent",
+                display_name="Formula Agent",
+                result=f"**Agent Failure Report:**\n\nThe Formula Agent was unable to process your request due to missing LLM configuration.\n\n**Error Details:**\n{error_details}\n\n**What the Chief Agent should know:**\nThis agent requires an LLM to derive mathematical formulas from first principles. Without it, no derivation is possible.",
                 confidence=0.0,
                 method="Configuration Error",
                 explanation="LLM client not available - cannot derive formulas",
-                summary="Math Agent failed: No LLM configured"
+                summary="Formula Agent failed: No LLM configured"
             )
         
         try:
             model = os.getenv("CEDARPY_OPENAI_MODEL") or os.getenv("OPENAI_API_KEY_MODEL") or "gpt-5"
-            logger.info(f"[MathAgent] Using model: {model}")
+            logger.info(f"[FormulaAgent] Using model: {model}")
             
             completion_params = {
                 "model": model,
@@ -295,7 +295,7 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
             response = await self.llm_client.chat.completions.create(**completion_params)
             derivation = response.choices[0].message.content
             
-            logger.info(f"[MathAgent] Completed derivation in {time.time() - start_time:.3f}s")
+            logger.info(f"[FormulaAgent] Completed derivation in {time.time() - start_time:.3f}s")
             
             formatted_output = f"""Answer: Mathematical Derivation from First Principles
 
@@ -304,8 +304,8 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
 Why: Derived the formula step-by-step from fundamental mathematical principles"""
             
             return AgentResult(
-                agent_name="MathAgent",
-                display_name="Math Agent",
+                agent_name="FormulaAgent",
+                display_name="Formula Agent",
                 result=formatted_output,
                 confidence=0.85,
                 method="First principles derivation",
@@ -314,10 +314,10 @@ Why: Derived the formula step-by-step from fundamental mathematical principles""
             )
             
         except Exception as e:
-            logger.error(f"[MathAgent] Error: {e}")
+            logger.error(f"[FormulaAgent] Error: {e}")
             return AgentResult(
-                agent_name="MathAgent",
-                display_name="Math Agent",
+                agent_name="FormulaAgent",
+                display_name="Formula Agent",
                 result=f"Answer: Unable to complete derivation\n\nPotential issues: {str(e)}",
                 confidence=0.1,
                 method="Error",
@@ -452,7 +452,7 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
                         "role": "system",
                         "content": """You are a strategic planning expert. Create detailed action plans that include:
                         1. Breaking down the problem into manageable steps
-                        2. Identifying which specialized agents should be used (available agents: Coding Agent, Math Agent, Research Agent, Data Agent, Notes Agent, File Agent, Shell Executor, SQL Agent)
+                        2. Identifying which specialized agents should be used (available agents: Coding Agent, Formula Agent, Research Agent, Data Agent, Notes Agent, File Agent, Shell Executor, SQL Agent)
                         3. Determining the sequence of operations
                         4. Specifying how to gather source material
                         5. How to analyze data and compile results
@@ -935,4 +935,4 @@ Why: Created structured notes from the provided content, avoiding duplication wi
             )
 
 # Export the specialized agents
-__all__ = ['MathAgent', 'ResearchAgent', 'StrategyAgent', 'DataAgent', 'NotesAgent', 'FileAgent']
+__all__ = ['FormulaAgent', 'ResearchAgent', 'StrategyAgent', 'DataAgent', 'NotesAgent', 'FileAgent']

@@ -18,7 +18,7 @@ Successfully refactored the large `advanced_orchestrator.py` file (2,566 lines) 
 2. **`specialized_agents.py`** (757 lines)
    - Contains specialized domain-specific agents
    - Classes included:
-     - `MathAgent` - Mathematical derivations and proofs
+     - `FormulaAgent` - Mathematical derivations and proofs
      - `ResearchAgent` - Research and citation finding
      - `StrategyAgent` - Research planning and methodology
      - `DataAgent` - Data schema analysis

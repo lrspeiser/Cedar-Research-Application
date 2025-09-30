@@ -532,7 +532,7 @@ if not _AGENTS_ROUTE_REGISTERED:
             {"name": "Code Agent", "internal": "CodeAgent", "desc": "Python coding & data analysis.", "prompt": "Write and run Python for calculations, analytics, parsing, plotting."},
             {"name": "Shell Agent", "internal": "ShellAgent", "desc": "Executes non-interactive shell commands.", "prompt": "Output only the exact commands to run; no prose."},
             {"name": "SQL Agent", "internal": "SQLAgent", "desc": "Creates tables and runs SQL queries.", "prompt": "Output only SQL; prefer SQLite; include proper constraints and indexes."},
-            {"name": "Math Agent", "internal": "MathAgent", "desc": "Derivations and proofs.", "prompt": "Derive from first principles; show steps and assumptions."},
+            {"name": "Formula Agent", "internal": "FormulaAgent", "desc": "Derivations and proofs.", "prompt": "Derive from first principles; show steps and assumptions."},
             {"name": "Research Agent", "internal": "ResearchAgent", "desc": "Web research with citations.", "prompt": "List sources with URLs, key findings, and a concise summary with citations."},
             {"name": "Strategy Agent", "internal": "StrategyAgent", "desc": "Plans and playbooks.", "prompt": "Numbered plan: steps, agents per step, inputs/outputs, dependencies."},
             {"name": "Data Agent", "internal": "DataAgent", "desc": "Schema analysis and query suggestions.", "prompt": "List relevant tables and propose SQL with expected results."},

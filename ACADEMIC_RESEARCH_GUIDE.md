@@ -57,7 +57,7 @@ The Chief Agent coordinates multiple specialized agents simultaneously:
 - ❌ CANNOT: Search your computer for files
 - USE FOR: ONLY downloading from the internet
 
-**🔬 Math Agent**:
+**🔬 Formula Agent**:
 - ✅ CAN: Derive formulas and write proofs
 - ❌ CANNOT: Execute calculations (use Code Agent)
 - USE FOR: Mathematical derivations and theorem proofs

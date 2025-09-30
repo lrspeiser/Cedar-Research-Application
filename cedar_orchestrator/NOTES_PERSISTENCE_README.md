@@ -44,7 +44,7 @@ Each automatically generated note contains:
 ### 3. Automatic Tagging
 Notes are automatically tagged based on:
 - Query type (math, code, database, research, strategy, explanation)
-- Selected agents (agent:code_agent, agent:math_agent, etc.)
+- Selected agents (agent:code_agent, agent:formula_agent, etc.)
 - Decision type (iterative, direct)
 - Date (date:YYYY-MM-DD)
 
@@ -93,12 +93,12 @@ Notes appear automatically in the Notes tab of the Cedar UI for the relevant pro
 
 ### Example Flow
 1. User sends query: "Calculate the square root of 144"
-2. Multiple agents process (MathAgent, CodeAgent, etc.)
+2. Multiple agents process (FormulaAgent, CodeAgent, etc.)
 3. Chief Agent reviews and decides on best answer
 4. **Automatically**: Note is created with:
    - Full analysis from all agents
    - Chief Agent's reasoning
-   - Tags: ["math", "agent:math_agent", "direct", "date:2024-12-20"]
+   - Tags: ["math", "agent:formula_agent", "direct", "date:2024-12-20"]
 5. Note appears in Notes tab immediately
 
 ## Benefits

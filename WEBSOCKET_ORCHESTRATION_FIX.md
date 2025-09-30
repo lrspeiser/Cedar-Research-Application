@@ -34,7 +34,7 @@ var answerMatch = fullText.match(/Answer:\\s*([^\\n]+...)/);
 2. **Thinker analyzes** the query type (mathematical, coding, explanation, etc.)
 3. **Orchestrator dispatches** to relevant agents in parallel:
    - Coding Agent (for calculations)
-   - Math Agent (for mathematical derivations)
+   - Formula Agent (for mathematical derivations)
    - SQL Agent (for database queries)
    - Research Agent (for web searches)
 4. **Each agent processes** the query independently

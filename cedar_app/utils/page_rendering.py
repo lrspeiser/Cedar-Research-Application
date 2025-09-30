@@ -1142,33 +1142,7 @@ def project_page_html(
               }
             } catch(_){}
             
-            // Ensure a dedicated Chief Agent prompt bubble exists ASAP (not only at final)
-            try {
-              var titles0 = Array.from(document.querySelectorAll('#msgs .msg.assistant .meta .title'));
-              var haveChiefPrompt = false;
-              try { haveChiefPrompt = titles0.some(function(el){ return String(el.textContent||'').trim().toLowerCase() === 'chief agent'; }); } catch(_){}
-              if (!haveChiefPrompt) {
-                var detIdP = 'det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
-                var wrapP = document.createElement('div'); wrapP.className = 'msg assistant';
-                var metaP = document.createElement('div'); metaP.className = 'meta small'; metaP.innerHTML = "<span class='pill'>Chief Agent</span> <span class='title' style='font-weight:600'>Chief Agent</span>";
-                var bubP = document.createElement('div'); bubP.className = 'bubble assistant'; bubP.setAttribute('data-details-id', detIdP);
-                var contP = document.createElement('div'); contP.className='content'; contP.style.whiteSpace='pre-wrap';
-                try { contP.textContent = 'Prepared LLM prompt (click to view JSON).'; } catch(_){ }
-                bubP.appendChild(contP);
-                var detailsP = document.createElement('div'); detailsP.id = detIdP; detailsP.style.display='none';
-                var preP = document.createElement('pre'); preP.className='small'; preP.style.whiteSpace='pre-wrap'; preP.style.background='#f8fafc'; preP.style.padding='8px'; preP.style.borderRadius='6px';
-                try { preP.textContent = JSON.stringify(m.messages||[], null, 2); } catch(_){ preP.textContent = String(m.messages||[]); }
-                var barP = document.createElement('div'); barP.className='small'; barP.style.margin='6px 0 8px 0';
-                var copyBtnP = document.createElement('button'); copyBtnP.textContent='Copy JSON'; copyBtnP.className='secondary';
-                copyBtnP.addEventListener('click', function(){ try { navigator.clipboard.writeText(preP.textContent); } catch(_){} });
-                barP.appendChild(copyBtnP);
-                detailsP.appendChild(barP);
-                detailsP.appendChild(preP);
-                wrapP.appendChild(metaP); wrapP.appendChild(bubP); wrapP.appendChild(detailsP);
-                var msgsElP = document.getElementById('msgs'); if (msgsElP) msgsElP.appendChild(wrapP);
-                try { stepAdvance('assistant:prompt', wrapP); } catch(_){}
-              }
-            } catch(_){}
+            // DO NOT create visible prompt bubbles - prompts are cached internally only for edit feature
             
             ackEvent(m);
           } catch(e) { 
@@ -1524,82 +1498,7 @@ def project_page_html(
               wrapF.appendChild(detailsF);
             }
             if (msgs) msgs.appendChild(wrapF);
-            // Ensure an Assistant prompt bubble exists for JSON drilldown, even if the initial 'prompt' event was missed
-            try {
-              // Only synthesize if no existing Assistant-titled message exists. The final bubble's title may be 'final' or a function name,
-              // so do not treat that as satisfying the Assistant prompt presence check.
-              var titles = Array.from(document.querySelectorAll('#msgs .msg.assistant .meta .title'));
-              var haveAssistantTitle = false;
-              try {
-                haveAssistantTitle = titles.some(function(el){ return String(el.textContent||'').trim().toLowerCase() === 'chief agent'; });
-              } catch(_){ haveAssistantTitle = false; }
-              if (!haveAssistantTitle) {
-                var detIdP2 = 'det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
-                var wrapP2 = document.createElement('div'); wrapP2.className = 'msg assistant';
-                var metaP2 = document.createElement('div'); metaP2.className = 'meta small'; metaP2.innerHTML = "<span class='pill'>Chief Agent</span> <span class='title' style='font-weight:600'>Chief Agent</span>";
-                var bubP2 = document.createElement('div'); bubP2.className = 'bubble assistant'; bubP2.setAttribute('data-details-id', detIdP2);
-                var contP2 = document.createElement('div'); contP2.className='content'; contP2.style.whiteSpace='pre-wrap';
-                try { contP2.textContent = 'Prepared LLM prompt (click to view JSON).'; } catch(_){ }
-                bubP2.appendChild(contP2);
-                var detailsP2 = document.createElement('div'); detailsP2.id = detIdP2; detailsP2.style.display='none';
-                var preP2 = document.createElement('pre'); preP2.className='small'; preP2.style.whiteSpace='pre-wrap'; preP2.style.background='#f8fafc'; preP2.style.padding='8px'; preP2.style.borderRadius='6px';
-                var fallbackMsgs = null;
-                
-                // [cedar-ui] Retrieve cached prompt for this thread
-                try {
-                  var threadIdStr = String(threadId || '');
-                  console.debug('[cedar-ui] Looking up cached prompt for thread:', threadIdStr);
-                  console.debug('[cedar-ui] Cache state:', window.__cedar_last_prompts);
-                  
-                  var cachedEntries = (window.__cedar_last_prompts || {})[threadIdStr];
-                  if (cachedEntries && Array.isArray(cachedEntries) && cachedEntries.length > 0) {
-                    // Get the latest cached entry (last one in array)
-                    var latestEntry = cachedEntries[cachedEntries.length - 1];
-                    fallbackMsgs = latestEntry.prompt_json || null;
-                    console.debug('[cedar-ui] Retrieved cached prompt:', {stage: latestEntry.stage, iteration: latestEntry.iteration, msg_count: (fallbackMsgs||[]).length});
-                  } else {
-                    console.warn('[cedar-ui] No cached prompts found for thread', threadIdStr);
-                  }
-                } catch(e) { 
-                  console.error('[cedar-ui] Error retrieving cached prompt:', e);
-                }
-                
-                if (!fallbackMsgs) {
-                  var fromFinal = null;
-                  try { if (m && m.prompt) { fromFinal = m.prompt; } } catch(_){ }
-                  if (fromFinal && Array.isArray(fromFinal)) {
-                    fallbackMsgs = fromFinal;
-                  } else {
-                    var reason = 'No LLM prompt available';
-                    try { if (m && m.json && m.json.meta && m.json.meta.fastpath) { reason = 'No LLM prompt: fast-path (' + String(m.json.meta.fastpath) + ')'; } } catch(_){ }
-                    fallbackMsgs = [{ role: 'system', content: reason }];
-                    console.warn('[cedar-ui] Using fallback message:', reason);
-                  }
-                }
-                try { preP2.textContent = JSON.stringify(fallbackMsgs, null, 2); } catch(_){ preP2.textContent = String(fallbackMsgs); }
-                var barP2 = document.createElement('div'); barP2.className='small'; barP2.style.margin='6px 0 8px 0';
-                var copyBtnP2 = document.createElement('button'); copyBtnP2.textContent='Copy JSON'; copyBtnP2.className='secondary';
-                copyBtnP2.addEventListener('click', function(){ try { navigator.clipboard.writeText(preP2.textContent); } catch(_){} });
-                barP2.appendChild(copyBtnP2);
-                detailsP2.appendChild(barP2);
-                detailsP2.appendChild(preP2);
-                wrapP2.appendChild(metaP2); wrapP2.appendChild(bubP2); wrapP2.appendChild(detailsP2);
-                // Allow clicking the title to toggle details (to satisfy tests)
-                try {
-                  var titleElP2 = metaP2.querySelector('.title');
-                  if (titleElP2) {
-                    titleElP2.setAttribute('role', 'button');
-                    titleElP2.setAttribute('tabindex', '0');
-                    var _tglP2 = function(){ try { var e=document.getElementById(detIdP2); if (e) { e.style.display = (e.style.display==='none'?'block':'none'); } } catch(_){} };
-                    titleElP2.addEventListener('click', function(ev){ try { ev.preventDefault(); } catch(_){}; _tglP2(); });
-                    titleElP2.addEventListener('keydown', function(ev){ try { if (ev && (ev.key==='Enter' || ev.key===' ')) { ev.preventDefault(); _tglP2(); } } catch(_){} });
-                  }
-                } catch(_) {}
-                if (msgs) { try { msgs.insertBefore(wrapP2, wrapF); } catch(_) { msgs.appendChild(wrapP2); } }
-                try { console.log('[ui] synthesized Assistant prompt bubble'); } catch(_){}
-                try { stepAdvance('assistant:prompt', wrapP2); } catch(_){}
-              }
-            } catch(_){ }
+            // Prompt bubbles are now cached silently, not shown in UI
           } catch(_) {
             // Fallback to replacing the processing text if bubble rendering fails
             try { streamText.textContent = m.text; } catch(_){}
@@ -2345,6 +2244,7 @@ def project_page_html(
       }
     }catch(e){ try{ console.debug(LOGP,'submit error',e); }catch(_){} }
   }, true);
+})();
 </script>
     """
     

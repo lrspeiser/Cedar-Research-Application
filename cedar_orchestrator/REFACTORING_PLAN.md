@@ -2,7 +2,7 @@
 
 ## Current Structure (2,566 lines)
 The file contains:
-1. **Agent Classes** (ShellAgent, CodeAgent, SQLAgent, MathAgent, ResearchAgent, StrategyAgent, DataAgent, NotesAgent, FileAgent)
+1. **Agent Classes** (ShellAgent, CodeAgent, SQLAgent, FormulaAgent, ResearchAgent, StrategyAgent, DataAgent, NotesAgent, FileAgent)
 2. **Chief Agent** (decision-making orchestrator)
 3. **ThinkerOrchestrator** (main orchestrator class)
 4. **AgentResult** dataclass and utilities
@@ -27,7 +27,7 @@ The file contains:
 
 ```python
 # Contents:
-- MathAgent class (lines 766-853)
+- FormulaAgent class (lines 766-853)
 - ResearchAgent class (lines 854-947)
 - StrategyAgent class (lines 948-1040)
 - DataAgent class (lines 1041-1158)
@@ -87,7 +87,7 @@ The file contains:
 3. **Update imports in orchestrator:**
    ```python
    from .execution_agents import AgentResult, ShellAgent, CodeAgent, SQLAgent
-   from .specialized_agents import MathAgent, ResearchAgent, StrategyAgent, DataAgent, NotesAgent, FileAgent
+   from .specialized_agents import FormulaAgent, ResearchAgent, StrategyAgent, DataAgent, NotesAgent, FileAgent
    ```
 
 4. **Update external imports:**
@@ -108,7 +108,7 @@ The file contains:
 
 ### Option C: By Complexity
 1. `simple_agents.py` - ShellAgent, SQLAgent, FileAgent
-2. `llm_agents.py` - CodeAgent, MathAgent, ResearchAgent, StrategyAgent, DataAgent, NotesAgent
+2. `llm_agents.py` - CodeAgent, FormulaAgent, ResearchAgent, StrategyAgent, DataAgent, NotesAgent
 3. `orchestrator_core.py` - ChiefAgent and ThinkerOrchestrator
 
 ## Recommendation

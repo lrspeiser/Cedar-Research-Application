@@ -28,8 +28,8 @@ Example:
 🤔 Chief Agent Analysis:
 📋 Query Type: mathematical_computation
 🔍 Problem Analysis: This is a mathematical computation requiring precise calculation
-🤖 Agents Selected: CodeAgent, MathAgent
-💭 Strategy: Code for execution, Math for formula verification
+🤖 Agents Selected: CodeAgent, FormulaAgent
+💭 Strategy: Code for execution, Formula for formula verification
 ```
 
 ### 3. Context Preservation
@@ -131,8 +131,8 @@ User: "Calculate the square root of 144"
 
 Chief Agent Analysis (Iteration 1/10):
 📋 Query Type: mathematical_computation
-🤖 Agents Selected: CodeAgent, MathAgent
-💭 Strategy: Code for execution, Math for formula verification
+🤖 Agents Selected: CodeAgent, FormulaAgent
+💭 Strategy: Code for execution, Formula for formula verification
 
 Result includes:
 **Suggested Next Steps:** Test the calculation with other values...
