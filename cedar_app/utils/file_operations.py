@@ -163,6 +163,39 @@ def _run_upload_postprocess_background(project_id: int, branch_id: int, file_id:
         rec = dbj.query(FileEntry).filter(FileEntry.id == int(file_id), FileEntry.project_id == project_id).first()
         if not rec:
             return
+        
+        # Add user instruction message for file processing
+        try:
+            user_instruction = (
+                "The following file was added to the project. "
+                "If this is an image, analyze the information in the image and update the metadata for it. "
+                "If this is an unstructured file like a pdf, extract all of the unique findings and "
+                "supporting data out of the paper and store them in one or more tables in the database. "
+                "If this is tabular data, create or update our database with it."
+            )
+            user_payload = {
+                "action": "process_uploaded_file",
+                "file_name": original_name,
+                "file_type": rec.file_type,
+                "mime_type": rec.mime_type,
+                "size_bytes": rec.size_bytes,
+                "instructions": user_instruction
+            }
+            tm_user = ThreadMessage(
+                project_id=project_id, 
+                branch_id=branch_id, 
+                thread_id=thread_id, 
+                role="user", 
+                display_title=f"Process file: {original_name}",
+                content=user_instruction,
+                payload_json=user_payload
+            )
+            dbj.add(tm_user)
+            dbj.commit()
+        except Exception:
+            try: dbj.rollback()
+            except Exception: pass
+        
         # Build meta for LLM
         meta_for_llm = dict(meta or {})
         meta_for_llm["display_name"] = original_name
@@ -365,6 +398,35 @@ def upload_file(project_id: int, request: Request, file: UploadFile = File(...),
     db.add(thr); db.commit(); db.refresh(thr)
     try:
         import json as _json
+        
+        # Add a 'user' message with processing instructions
+        user_instruction = (
+            "The following file was added to the project. "
+            "If this is an image, analyze the information in the image and update the metadata for it. "
+            "If this is an unstructured file like a pdf, extract all of the unique findings and "
+            "supporting data out of the paper and store them in one or more tables in the database. "
+            "If this is tabular data, create or update our database with it."
+        )
+        user_payload = {
+            "action": "process_uploaded_file",
+            "file_name": original_name,
+            "file_type": ftype,
+            "mime_type": mime or file.content_type or "",
+            "size_bytes": size,
+            "instructions": user_instruction
+        }
+        tm_user = ThreadMessage(
+            project_id=project.id, 
+            branch_id=branch.id, 
+            thread_id=thr.id, 
+            role="user", 
+            display_title=f"Process file: {original_name}",
+            content=user_instruction,
+            payload_json=user_payload
+        )
+        db.add(tm_user)
+        db.commit()
+        
         # Add a 'system' message with the planned classification prompt payload
         payload = {
             "action": "classify_file",
