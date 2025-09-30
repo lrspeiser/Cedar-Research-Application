@@ -15,7 +15,10 @@ ORCHESTRATOR_DIR = Path(__file__).parent
 def extract_prompt_from_agent(file_path: str, class_name: str, method_name: str = "process") -> str:
     """
     Extract the actual system prompt from an agent class by reading the source file.
-    Looks for the 'content': '''...''' or 'content': \"\"\"...\"\"\" in the system message.
+    Handles multiple prompt patterns:
+    1. "role": "system", "content": '''...'''
+    2. sys_prompt = '''...'''
+    3. system_header = f'''...'''
     """
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
@@ -27,21 +30,41 @@ def extract_prompt_from_agent(file_path: str, class_name: str, method_name: str 
         if not class_match:
             return f"[Could not find class {class_name}]"
         
-        # Find the process method within the class
         class_start = class_match.start()
         
-        # Look for the system prompt in the completion_params or messages
-        # Pattern: "role": "system", "content": """...""" or '''...'''
-        system_prompt_pattern = r'"role"\s*:\s*"system"\s*,\s*"content"\s*:\s*(""".*?"""|\'\'\'.*?\'\'\')'
+        # Find the next class definition to limit our search scope
+        next_class_pattern = r'\nclass \w+[:\(]'
+        next_class_match = re.search(next_class_pattern, content[class_start + 10:])
+        if next_class_match:
+            class_end = class_start + 10 + next_class_match.start()
+            class_content = content[class_start:class_end]
+        else:
+            class_content = content[class_start:]
         
-        # Search from class start onwards
-        matches = list(re.finditer(system_prompt_pattern, content[class_start:], re.DOTALL))
-        
+        # Try pattern 1: "role": "system", "content": """...""" or '''...'''
+        system_prompt_pattern = r'"role"\s*:\s*"system"\s*,\s*"content"\s*:\s*(""".*?"""|\'\'\' .*?\'\'\')'
+        matches = list(re.finditer(system_prompt_pattern, class_content, re.DOTALL))
         if matches:
-            # Get the first system prompt found in this class
             prompt_with_quotes = matches[0].group(1)
-            # Remove the triple quotes
             prompt = prompt_with_quotes.strip('"""').strip("'''").strip()
+            return prompt
+        
+        # Try pattern 2: sys_prompt = """...""" or sys_prompt = '''...'''
+        sys_prompt_pattern = r'sys_prompt\s*=\s*(""".*?"""|\'\'\' .*?\'\'\')'
+        matches = list(re.finditer(sys_prompt_pattern, class_content, re.DOTALL))
+        if matches:
+            prompt_with_quotes = matches[0].group(1)
+            prompt = prompt_with_quotes.strip('"""').strip("'''").strip()
+            return prompt
+        
+        # Try pattern 3: system_header = f"""...""" (for ChiefAgent)
+        system_header_pattern = r'system_header\s*=\s*f?(""".*?"""|\'\'\' .*?\'\'\')'
+        matches = list(re.finditer(system_header_pattern, class_content, re.DOTALL))
+        if matches:
+            prompt_with_quotes = matches[0].group(1)
+            # Remove f-string formatting and quotes
+            prompt = prompt_with_quotes.strip('"""').strip("'''").strip()
+            # Note: f-strings with variables won't render, but schema will be visible
             return prompt
         
         return f"[No system prompt found in {class_name}]"
@@ -107,8 +130,11 @@ def get_notes_agent_prompt() -> str:
 def get_file_agent_prompt() -> str:
     """Extract FileAgent prompt from specialized_agents.py"""
     file_path = ORCHESTRATOR_DIR / "specialized_agents.py"
-    # FileAgent doesn't use LLM prompts for main logic, but may use for descriptions
-    return "[FileAgent uses direct file operations without LLM prompts for main tasks. May use LLM for generating file descriptions.]"
+    # FileAgent uses LLM for optional description generation
+    prompt = extract_prompt_from_agent(str(file_path), "FileAgent", "process")
+    if "[No system prompt found" in prompt:
+        return "[FileAgent uses direct file operations without LLM prompts for main tasks. Optional LLM-based file description generation uses JSON schema: {'description': 'brief 1-2 sentence description'}]"
+    return prompt
 
 
 def get_image_creation_agent_prompt() -> str:
@@ -118,9 +144,9 @@ def get_image_creation_agent_prompt() -> str:
 
 
 def get_image_analysis_agent_prompt() -> str:
-    """Extract ImageAnalysisAgent prompt"""
-    # This agent uses Vision API directly
-    return "[ImageAnalysisAgent uses OpenAI Vision API to analyze images. The user's task is passed directly to the vision model along with the image.]"
+    """Extract ImageAnalysisAgent prompt from specialized_agents.py"""
+    file_path = ORCHESTRATOR_DIR / "specialized_agents.py"
+    return extract_prompt_from_agent(str(file_path), "ImageAnalysisAgent", "process")
 
 
 # Agent metadata for the /agents page
