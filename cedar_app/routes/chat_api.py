@@ -75,6 +75,34 @@ def register_chat_api_routes(app: FastAPI):
         
         return JSONResponse({'success': True})
     
+    @app.post("/api/chat/stop")
+    def stop_chat(payload: Dict[str, Any] = Body(...)):
+        """Stop a running chat by marking it as error and appending a system message."""
+        project_id = payload.get('project_id')
+        branch_id = payload.get('branch_id')
+        chat_number = payload.get('chat_number')
+        reason = (payload.get('reason') or 'Stopped by user via History panel').strip()
+        
+        if not all([project_id, branch_id, chat_number]):
+            raise HTTPException(status_code=400, detail="project_id, branch_id, and chat_number required")
+        
+        chat_manager = get_chat_manager()
+        chat = chat_manager.get_chat(project_id, branch_id, chat_number)
+        if not chat:
+            raise HTTPException(status_code=404, detail=f"Chat {chat_number} not found")
+        
+        # Only change if currently processing
+        if chat.get('status') == 'processing':
+            chat_manager.set_chat_status(project_id, branch_id, chat_number, 'error')
+            chat_manager.add_message(
+                project_id, branch_id, chat_number,
+                role='System',
+                content=reason,
+                metadata={'type': 'user_cancel'}
+            )
+        
+        return JSONResponse({'success': True})
+    
     @app.get("/api/chat/list")
     def list_chats(project_id: int, branch_id: int, limit: int = 20):
         """List chats for a project/branch."""

@@ -1187,6 +1187,35 @@ def get_main_chat_script() -> str:
       // and re-render the history items with correct status indicators
     }
   }
+
+  // Stop a running chat from the History panel
+  window.stopChat = function(projectId, branchId, chatNumber) {
+    try {
+      fetch('/api/chat/stop', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ project_id: projectId, branch_id: branchId, chat_number: chatNumber, reason: 'Stopped by user via History' })
+      }).then(function(r){ return r.json().catch(function(){ return {}; }); }).then(function(){
+        // Update UI: replace spinner with warning icon and remove Stop button
+        try {
+          var spin = document.querySelector('.chat-history-item [data-chat-num="' + String(chatNumber) + '"]');
+          if (spin && spin.parentElement) {
+            var parent = spin.parentElement;
+            var warn = document.createElement('span');
+            warn.style.color = '#ef4444';
+            warn.textContent = '⚠';
+            parent.replaceChild(warn, spin);
+            // Remove a following Stop button if present
+            try {
+              var btn = parent.querySelector('button');
+              if (btn) btn.remove();
+            } catch(_){ }
+          }
+        } catch(_){ }
+      }).catch(function(e){ try { console.error('[stopChat] Failed to stop chat', e); } catch(_){} });
+    } catch(e) { try { console.error('[stopChat] Error', e); } catch(_){} }
+  }
+
   document.addEventListener('DOMContentLoaded', function(){
     try {
       var chatForm = document.getElementById('chatForm');

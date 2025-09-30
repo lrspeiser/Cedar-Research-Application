@@ -172,6 +172,8 @@ def project_page_html(
         # Status indicator - for processing status, add a data attribute for refresh
         if status == 'processing':
             status_icon = "<span class='spinner' style='width:10px; height:10px' data-chat-status='processing' data-chat-num='{}' ></span>".format(chat_num)
+            # Add Stop button next to spinner
+            status_icon += f" <button class=\"secondary small\" title=\"Stop this run\" onclick=\"stopChat({project.id}, {current.id}, {chat_num}); event.stopPropagation(); return false;\">Stop</button>"
         elif status == 'error':
             status_icon = "<span style='color:#ef4444'>⚠</span>"
         elif status == 'complete':

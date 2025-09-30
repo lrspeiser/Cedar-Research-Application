@@ -27,10 +27,20 @@ def migrate_projects_table_autoincrement():
     """Add AUTOINCREMENT to projects table in registry database."""
     
     # Find the registry database
-    registry_db = Path.home() / ".cedar" / "registry.db"
+    # Check multiple possible locations
+    possible_paths = [
+        Path.home() / "CedarPyData" / "cedarpy.db",
+        Path.home() / ".cedar" / "registry.db",
+    ]
     
-    if not registry_db.exists():
-        logging.warning(f"Registry database not found at {registry_db}")
+    registry_db = None
+    for path in possible_paths:
+        if path.exists():
+            registry_db = path
+            break
+    
+    if not registry_db:
+        logging.warning(f"Registry database not found at any of: {[str(p) for p in possible_paths]}")
         return
     
     logging.info(f"Migrating registry database: {registry_db}")

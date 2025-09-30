@@ -564,6 +564,29 @@ Please start by analyzing the file and executing the appropriate data integratio
                     # Handle ping/pong for connection keepalive
                     await websocket.send_json({"type": "pong"})
                     
+                elif data.get("type") == "cancel":
+                    # User requested cancellation; mark chat as error and close
+                    try:
+                        cancel_reason = str(data.get("reason") or "user_cancelled")
+                    except Exception:
+                        cancel_reason = "user_cancelled"
+                    if project_id and current_chat_number:
+                        try:
+                            chat_manager.set_chat_status(project_id, 1, current_chat_number, "error")
+                            chat_manager.add_message(
+                                project_id, 1, current_chat_number,
+                                role="System",
+                                content=f"Run cancelled: {cancel_reason}",
+                                metadata={'type': 'user_cancel'}
+                            )
+                        except Exception as e:
+                            logger.error(f"[WebSocket] Failed to mark chat cancelled: {e}")
+                    try:
+                        await websocket.close(code=4001)
+                    except Exception:
+                        pass
+                    break
+                
                 elif data.get("type") == "close":
                     # Clean close requested
                     break
