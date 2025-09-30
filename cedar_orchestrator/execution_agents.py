@@ -262,17 +262,11 @@ Example response:
         except Exception as e:
             logger.error(f"[ShellAgent] Execution error: {e}")
             error_msg = answer if answer else "**Execution Error:**\n\nCommand failed to execute."
-            error_msg += f"\n\n**Command:** `{shell_command}`\n\n**Error:** {str(e)}
-
-**Common Issues:**
-- Command not found: Install the tool or check the PATH
-- Permission denied: Try with sudo if appropriate
-- Syntax error: Check quotes and special characters
-
-**Suggested Next Steps:** 
-- Verify the command syntax
-- Check if required tools are installed
-- Try a simpler version of the command first""",
+            error_msg += f"\n\n**Command:** `{shell_command}`\n\n**Error:** {str(e)}"
+            return AgentResult(
+                agent_name="ShellAgent",
+                display_name="Shell Executor",
+                result=error_msg,
                 confidence=0.2,
                 method="Execution error",
                 explanation=f"Error: {str(e)[:100]}",
