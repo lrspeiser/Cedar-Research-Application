@@ -230,18 +230,52 @@ If there are supporting files, images, or databases already in your project, pre
 ## Quick Role Summary:
 
 **CodeAgent** (strongest): Python execution, calculations, simulations, data analysis (pandas/NumPy/ML), charts/plots (matplotlib), document extraction (CSV/PDF/HTML/OCR), can read/write databases, create/process images.
+  - Returns: Formatted answer with code blocks, execution results, and explanations
+  - Output includes: Generated Python code, execution output, artifacts (type: code, language: python, source)
   - Examples: Calculate "2+2?", parse PDF tables to CSV, train models, write to project DB.
 
 **FormulaAgent**: Step-by-step derivations from first principles; formal proofs with assumptions.
+  - Returns: Mathematical derivation with clear steps, assumptions, and final formula
+  - NOT for simple calculations - use CodeAgent for arithmetic
   - Examples: Prove harmonic series diverges, derive wave equation from Maxwell's, prove 2+2=4 formally.
 
 **ResearchAgent**: Web research with citations; use when external/current info needed.
+  - Returns: List of sources with URLs, key findings, citations, and summarized answer
+  - Output includes: Source titles, URLs, key content, and comprehensive summary
   - Examples: Explain MOND vs dark matter (cited), summarize policy changes with links, historical queries.
 
 **StrategyAgent**: Multi-step planning; produces numbered plan with steps/inputs/outputs/agent assignments/dependencies.
+  - Returns: Numbered action plan with step titles, agents to use per step, inputs/outputs, dependencies
+  - Use for: Complex multi-step workflows, unclear dependencies, reusable orchestration plans
   - Examples: "Ingest PDFs → extract → load DB → charts → report"; incident playbooks; data product rollouts.
 
 **SQLAgent**: Executable SQL only (SQLite-compatible); creates/updates tables, indexes, constraints, runs queries.
+  - Returns: Raw SQL statements only (no explanations), ready to execute
+  - Output: Pure SQL with CREATE/INSERT/UPDATE/DELETE/SELECT statements
+
+**DataAgent**: Schema analysis, query guidance; reads DB metadata, proposes SQL to answer questions.
+  - Returns: Table analysis, suggested SQL queries with explanations, expected results
+  - Output includes: Relevant tables list, SQL with comments, JOIN clauses, aggregations
+
+**NotesAgent**: Organized notes/summaries; turns bullets/JSON into clean notes with headings/tags/timestamps.
+  - Returns: Structured note with title, timestamp, tags, key points (bullets), action items
+  - Avoids duplication with existing notes in project
+
+**ShellAgent**: System commands (non-interactive); file searches, grep, disk usage, package installs.
+  - Returns: Command output, analysis, execution status, suggested follow-up commands
+  - Output includes: stdout, stderr, exit codes, execution time
+
+**FileAgent**: Downloads from URLs, manages files, records metadata; makes files available to other agents.
+  - Returns: Saved file paths, metadata (size, MIME type), preview of content
+  - Creates FileEntry records in database for project files
+
+**ImageCreationAgent**: Text-to-image generation; creates diagrams/mockups, saves to project.
+  - Returns: Saved image path, access URL, FileEntry ID
+  - Requires: OPENAI_API_KEY or CEDARPY_OPENAI_API_KEY
+
+**ImageAnalysisAgent**: Image understanding/OCR; detects objects/tags/text, updates image metadata.
+  - Returns: Title, detected objects list, tags, OCR text, metadata updates confirmation
+  - Updates FileEntry.ai_* fields and metadata_json in database
   - Examples: Create `daily_metrics` with indexes, backfill columns, aggregations/joins.
 
 **DataAgent**: Schema analysis, query guidance; reads DB metadata, proposes SQL to answer questions.
