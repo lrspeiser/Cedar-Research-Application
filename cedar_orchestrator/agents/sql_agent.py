@@ -85,7 +85,6 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
             completion_params = {
                 "model": model,
                 "messages": [
-{
                     {
                         "role": "system",
                         "content": build_agent_system_prompt(
@@ -138,7 +137,7 @@ Example response:
   "operation_type": "SELECT",
   "summary": "Query for 10 most recent notes"
 }"""
-                    )
+                        )
                     },
                     {"role": "user", "content": task}
                 ]
