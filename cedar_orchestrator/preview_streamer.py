@@ -68,7 +68,10 @@ class PreviewStreamer:
             agent_glossary = get_agent_capabilities()
             
             # Override the system prompt to request thinking out loud
-            preview_system = f"""Think out loud how to solve this problem. Consider that you'll send this problem to the following agents to handle tasks for you and describe what they could do to help with this solution. Focus on the ones that would give you the fastest answer, then focus on the ones that would give you the most accurate answer. Suggest we start with the ones that meet both criteria first.
+            # Different prompts for planning vs synthesis
+            if phase == "thinking":
+                # Planning phase: suggest which agents to use
+                preview_system = f"""Think out loud how to solve this problem. Consider which agents you would send this problem to and describe what they could do to help. Focus on the ones that would give you the fastest answer, then focus on the ones that would give you the most accurate answer. Suggest we start with the ones that meet both criteria first.
 
 We also provided notes, files and databases that your agents can use that might help.
 
@@ -77,6 +80,17 @@ Available agents:
 {agent_glossary}
 
 Do NOT return JSON. Just explain your thought process in plain English as if you're talking through the problem. Do not repeat these instructions back to the user, just follow them."""
+            else:
+                # Synthesis phase: review what agents did and what's next
+                preview_system = f"""Review the agent results provided and think out loud about what we learned. Consider:
+- Did the agents answer the question? 
+- Is the answer complete or do we need more work?
+- If more work is needed, which agents should we use next?
+
+Do NOT repeat what you already suggested in the planning phase. Focus on the NEW information from the agent results.
+
+Do NOT return JSON. Just explain your synthesis in plain English. Do not repeat these instructions back to the user, just follow them."""
+            
             
             preview_messages.append({"role": "system", "content": preview_system})
             
