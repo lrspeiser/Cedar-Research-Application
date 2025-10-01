@@ -57,7 +57,9 @@ class PreviewStreamer:
             # Use gpt-5 for fast nano preview
             # Note: gpt-5 with responses.create uses nano by default for speed
             preview_model = os.getenv("CEDARPY_PREVIEW_MODEL", "gpt-5")
-            log_step(logger, f"Using preview model: {preview_model}")
+            # Display name for UI to distinguish from main model
+            preview_model_display = "gpt-5-nano"
+            log_step(logger, f"Using preview model: {preview_model} (display: {preview_model_display})")
             
             # Create a modified prompt for nano that asks it to think out loud
             # instead of returning JSON
@@ -164,7 +166,7 @@ Do NOT return JSON. Just explain your synthesis in plain English. Do not repeat 
             event_data = {
                 "type": "preview_start",
                 "phase": phase,
-                "model": preview_model,
+                "model": preview_model_display,  # Use display name for UI
                 "timestamp": time.time() * 1000  # milliseconds since epoch
             }
             await websocket.send_json(event_data)
