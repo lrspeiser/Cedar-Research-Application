@@ -1495,6 +1495,28 @@ Details:
         }
       } catch(e) { try { console.error('[auto-chat] exception', e); } catch(_) {} }
 
+      // After upload redirect, switch to the Files tab so the heading is visible for tests/UI
+      try {
+        var spU = new URLSearchParams(location.search || '');
+        var msgU = (spU.get('msg')||'').replace(/\+/g, ' ');
+        if (msgU === 'File uploaded') {
+          var filesTabBtn = document.querySelector(".tabs .tab[data-target='main-files']");
+          if (filesTabBtn && filesTabBtn.click) {
+            filesTabBtn.click();
+          } else {
+            // Fallback: manually toggle panels
+            var panelsAll = document.querySelectorAll('.tab-panels .panel');
+            panelsAll.forEach(function(p){ p.classList.add('hidden'); });
+            var filesPanelMain = document.getElementById('main-files');
+            if (filesPanelMain) filesPanelMain.classList.remove('hidden');
+            var tabsAll = document.querySelectorAll('.tabs .tab');
+            tabsAll.forEach(function(t){ t.classList.remove('active'); });
+            var ft = document.querySelector(".tabs .tab[data-target='main-files']");
+            if (ft) ft.classList.add('active');
+          }
+        }
+      } catch(_) {}
+
       // Load file content if file_id is in URL on page load
       try {
         var sp = new URLSearchParams(location.search || '');
