@@ -366,6 +366,7 @@ def serve_project_upload_route(project_id: int, path: str):
       } catch(_) {}
 
       // Safety net: if a file is already selected via automation, ensure the Upload tab becomes visible soon after
+      // and auto-submit the form if the change handler did not fire for any reason.
       try {
         var _tries = 20;
         var _iv = setInterval(function(){
@@ -373,14 +374,31 @@ def serve_project_upload_route(project_id: int, path: str):
             if (_tries-- <= 0) { clearInterval(_iv); return; }
             var inp = document.querySelector('[data-testid=upload-input]');
             if (inp && inp.files && inp.files.length > 0) {
-              var panels = document.querySelectorAll(".pane.right .tab-panels .panel");
-              panels.forEach(function(p){ p.classList.add('hidden'); });
-              var upPanel = document.getElementById('right-upload');
-              if (upPanel) { upPanel.classList.remove('hidden'); upPanel.style.display='block'; }
-              var tabs = document.querySelectorAll(".tabs[data-pane='right'] .tab");
-              tabs.forEach(function(t){ t.classList.remove('active'); });
-              var upTab = document.querySelector(".tabs[data-pane='right'] .tab[data-target='right-upload']");
-              if (upTab) upTab.classList.add('active');
+              // Ensure the upload UI is visible
+              try {
+                var panels = document.querySelectorAll(".pane.right .tab-panels .panel");
+                panels.forEach(function(p){ p.classList.add('hidden'); });
+                var upPanel = document.getElementById('right-upload');
+                if (upPanel) { upPanel.classList.remove('hidden'); upPanel.style.display='block'; }
+                var tabs = document.querySelectorAll(".tabs[data-pane='right'] .tab");
+                tabs.forEach(function(t){ t.classList.remove('active'); });
+                var upTab = document.querySelector(".tabs[data-pane='right'] .tab[data-target='right-upload']");
+                if (upTab) upTab.classList.add('active');
+              } catch(_) {}
+              // Auto-submit fallback (once)
+              try {
+                if (form && !form.getAttribute('data-upload-autosubmitted')) {
+                  setUploadingState();
+                  form.setAttribute('data-upload-autosubmitted', '1');
+                  if (typeof form.requestSubmit === 'function') {
+                    form.requestSubmit();
+                  } else if (button) {
+                    try { button.click(); } catch(_){ form.submit(); }
+                  } else {
+                    form.submit();
+                  }
+                }
+              } catch(_) {}
               clearInterval(_iv);
             }
           } catch(_) {}
