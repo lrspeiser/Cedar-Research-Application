@@ -978,6 +978,20 @@ def get_main_chat_script() -> str:
             console.error('[preview_complete] error:', e);
             logToBackend('error', 'Failed to handle preview_complete: ' + e.message, 'preview_complete', {});
           }
+        } else if (m.type === 'error') {
+          // Generic error from backend (e.g., preview failure)
+          try {
+            var wrapE = document.createElement('div'); wrapE.className = 'msg system';
+            var metaE = document.createElement('div'); metaE.className = 'meta small'; metaE.innerHTML = "<span class='title' style='font-weight:600'>Error</span>";
+            var bubE = document.createElement('div'); bubE.className = 'bubble system';
+            var contE = document.createElement('div'); contE.className = 'content'; contE.style.whiteSpace='pre-wrap';
+            var txtE = String(m.error || m.content || 'Unknown error');
+            try { if (m.details) { txtE += "\n\nDetails:\n" + JSON.stringify(m.details, null, 2); } } catch(_){}
+            contE.textContent = txtE; bubE.appendChild(contE);
+            wrapE.appendChild(metaE); wrapE.appendChild(bubE);
+            if (msgs) msgs.appendChild(wrapE);
+            stepAdvance('system:error', wrapE);
+          } catch(e) { console.error('[error handler] failed', e); }
         } else if (m.type === 'step_status') {
           try {
             __stepEnabled = !!m.enabled;

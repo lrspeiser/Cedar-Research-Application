@@ -270,7 +270,6 @@ async def handle_ws_chat(
                     except Exception as e:
                         logger.error(f"[WebSocket-DB] ❌ Failed to create project DB session")
                         logger.error(f"[WebSocket-DB]   Error: {e}")
-                        import traceback
                         logger.error(f"[WebSocket-DB]   Traceback:\n{traceback.format_exc()}")
                     
                     # Emit immediate processing bubble if a file context is present (upload auto-chat)

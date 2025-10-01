@@ -176,6 +176,7 @@ Do NOT return JSON. Just explain your synthesis in plain English. Do not repeat 
             full_text = ""
             word_buffer = ""
             token_count = 0
+            tokens_emitted = 0  # number of preview_token events actually sent
             
             # Optional step pause right before reading the first token
             if thread_id is not None:
@@ -218,6 +219,7 @@ Do NOT return JSON. Just explain your synthesis in plain English. Do not repeat 
                         "timestamp": int(time.time() * 1000),
                         "thread_id": str(thread_id) if thread_id is not None else None
                     })
+                    tokens_emitted += 1
                     word_buffer = ""
                 
                 # Small delay for readability (streaming effect)
@@ -235,6 +237,7 @@ Do NOT return JSON. Just explain your synthesis in plain English. Do not repeat 
                     "timestamp": int(time.time() * 1000),
                     "thread_id": str(thread_id) if thread_id is not None else None
                 })
+                tokens_emitted += 1
             
             # Send preview complete
             log_step(logger, "Sending preview_complete event")
@@ -247,7 +250,25 @@ Do NOT return JSON. Just explain your synthesis in plain English. Do not repeat 
                 "canceled": False
             })
             
-            log_success(logger, f"Preview complete: {len(full_text)} chars, {token_count} tokens")
+            # Enforce: if no preview text was streamed, emit an error event to surface the failure
+            if tokens_emitted == 0:
+                try:
+                    await websocket.send_json({
+                        "type": "error",
+                        "error": "Preview streaming produced no text",
+                        "content": "Preview streaming produced no text",
+                        "details": {
+                            "phase": phase,
+                            "model": preview_model_display,
+                            "chunk_count": chunk_count,
+                            "delta_count": delta_count,
+                            "thread_id": str(thread_id) if thread_id is not None else None
+                        }
+                    })
+                except Exception:
+                    pass
+            
+            log_success(logger, f"Preview complete: {len(full_text)} chars, {token_count} tokens (events: {tokens_emitted})")
             log_function_exit(logger, "stream_preview")
             
         except asyncio.CancelledError:
@@ -262,6 +283,18 @@ Do NOT return JSON. Just explain your synthesis in plain English. Do not repeat 
                     "thread_id": str(thread_id) if thread_id is not None else None,
                     "canceled": True
                 })
+                # If no tokens were streamed at all, emit an error per no-fallback policy
+                if 'tokens_emitted' in locals() and tokens_emitted == 0:
+                    await websocket.send_json({
+                        "type": "error",
+                        "error": "Preview streaming produced no text (cancelled)",
+                        "content": "Preview streaming produced no text (cancelled)",
+                        "details": {
+                            "phase": phase,
+                            "model": preview_model_display,
+                            "thread_id": str(thread_id) if thread_id is not None else None
+                        }
+                    })
             except Exception:
                 pass
             log_function_exit(logger, "stream_preview", result="CANCELLED")
