@@ -31,6 +31,7 @@ from openai import AsyncOpenAI
 
 # Import AgentResult from execution_agents
 from .agent_result import AgentResult
+from cedar_orchestrator.cedar_product_preamble import build_agent_system_prompt, AGENT_ROLES
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -98,11 +99,14 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
             completion_params = {
                 "model": model,
                 "messages": [
+{
                     {
                         "role": "system",
-                        "content": """You are a data analysis expert. Based on the available database schema and the user's query, provide analysis.
+                        "content": build_agent_system_prompt(
+                            "DataAgent",
+                            AGENT_ROLES.get("DataAgent", "to analyze database schemas and suggest SQL"),
+                            """You are a data analysis expert. Based on the available database schema and the user's query, provide analysis.
                         You must respond ONLY with valid JSON matching this schema:
-                        {
                             "relevant_tables": [
                                 {
                                     "table_name": "table_name",
@@ -122,7 +126,8 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
                             "summary": "brief summary for logging"
                         }
                         
-                        Provide at least 1-3 concrete SQL queries that can be executed."""
+Provide at least 1-3 concrete SQL queries that can be executed."""
+                    )
                     },
                     {"role": "user", "content": f"Database Schema:\n{db_metadata}\n\nUser Query: {task}\n\nSuggest relevant SQL queries."}
                 ]

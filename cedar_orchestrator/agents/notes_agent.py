@@ -31,6 +31,7 @@ from openai import AsyncOpenAI
 
 # Import AgentResult from execution_agents
 from .agent_result import AgentResult
+from cedar_orchestrator.cedar_product_preamble import build_agent_system_prompt, AGENT_ROLES
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -79,7 +80,10 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
                 "messages": [
                     {
                         "role": "system",
-                        "content": """You are a note-taking expert. Create concise, well-organized notes.
+                        "content": build_agent_system_prompt(
+                            "NotesAgent",
+                            AGENT_ROLES.get("NotesAgent", "to create structured notes and documentation"),
+                            """You are a note-taking expert. Create concise, well-organized notes.
                         You must respond ONLY with valid JSON matching this schema:
                         {
                             "title": "clear note title",
@@ -97,7 +101,8 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
                             "summary": "brief summary for logging"
                         }
                         
-                        Ensure notes avoid duplicating existing content and focus on new insights."""
+Ensure notes avoid duplicating existing content and focus on new insights."""
+                    )
                     },
                     {"role": "user", "content": f"Existing Notes:\n{existing_notes_text}\n\nContent to create notes from:\n{content_to_note or task}\n\nCreate new notes without duplicating existing ones."}
                 ]

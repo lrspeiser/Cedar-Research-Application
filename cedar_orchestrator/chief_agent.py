@@ -12,6 +12,7 @@ import os
 import time
 import json
 import logging
+import asyncio
 from typing import Dict, List, Any, Optional
 from openai import AsyncOpenAI
 from fastapi import WebSocket
@@ -170,12 +171,32 @@ class ChiefAgent:
             # Call LLM (real model)
             log_step(logger, f"Calling LLM with {len(messages)} messages")
             # Note: gpt-5 only supports temperature=1 (default), don't set it
-            response = await self.llm_client.chat.completions.create(
-                model=model,
-                messages=messages,
-                max_completion_tokens=50000
-            )
-            log_success(logger, "LLM response received")
+            try:
+                response = await asyncio.wait_for(
+                    self.llm_client.chat.completions.create(
+                        model=model,
+                        messages=messages,
+                        max_completion_tokens=50000
+                    ),
+                    timeout=300
+                )
+                log_success(logger, "LLM response received")
+            except asyncio.TimeoutError:
+                # Build a loop decision instructing a rethink due to timeout; logs are already fed every iteration
+                decision_data = {
+                    "decision": "loop",
+                    "thinking_process": "Chief Agent call timed out after 300s. Passing control to next iteration with recent run logs to rethink a lighter/faster plan.",
+                    "additional_guidance": "Reduce prompt size and schedule only the next minimal agent step. Prefer targeted tasks (e.g., run SQLRunner on already generated SQL, or re-run a single agent with constrained scope).",
+                    "agent_tasks": []
+                }
+                # Emit synthesis_complete/thinking_complete so UI stops spinner
+                try:
+                    if ws is not None:
+                        event_type = "thinking_complete" if not agent_results else "synthesis_complete"
+                        await ws.send_json({"type": event_type, "elapsed_ms": int((time.time() - start_time) * 1000)})
+                except Exception:
+                    pass
+                return decision_data
             
             # Cancel preview once real response arrives
             if preview_task:

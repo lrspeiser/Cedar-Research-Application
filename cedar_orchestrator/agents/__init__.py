@@ -20,6 +20,7 @@ from .pdf_extraction_agent import PDFExtractionAgent
 from .research_agent import ResearchAgent
 from .sql_agent import SQLAgent
 from .sql_metadata_agent import SQLMetadataAgent
+from .sql_runner import SQLRunner
 from .shell_agent import ShellAgent
 from .strategy_agent import StrategyAgent
 
@@ -38,8 +39,9 @@ __all__ = [
     'OCRAgent',
     'PDFExtractionAgent',
     'ResearchAgent',
-    'SQLAgent',
+'SQLAgent',
     'SQLMetadataAgent',
+    'SQLRunner',
     'ShellAgent',
     'StrategyAgent',
 ]

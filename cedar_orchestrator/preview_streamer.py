@@ -15,6 +15,7 @@ from fastapi import WebSocket
 
 from .logging_config import get_logger, log_function_entry, log_function_exit, log_step, log_success, log_error, log_warning
 from .step_controller import StepController
+from .cedar_product_preamble import get_cedar_product_preamble
 
 logger = get_logger(__name__)
 
@@ -67,33 +68,28 @@ class PreviewStreamer:
             # instead of returning JSON
             preview_messages = []
             
-            # Import full agent capabilities glossary from chief prompts
-            from .prompts.chief_prompts import get_agent_capabilities
-            agent_glossary = get_agent_capabilities()
-            
             # Override the system prompt to request thinking out loud
             # Different prompts for planning vs synthesis
+cedar_intro = get_cedar_product_preamble()
             if phase == "thinking":
-                # Planning phase: suggest which agents to use
-                preview_system = f"""Think out loud how to solve this problem. Consider which agents you would send this problem to and describe what they could do to help. Focus on the ones that would give you the fastest answer, then focus on the ones that would give you the most accurate answer. Suggest we start with the ones that meet both criteria first.
-
-We also provided notes, files and databases that your agents can use that might help.
-
-Available agents:
-
-{agent_glossary}
-
-Do NOT return JSON. Just explain your thought process in plain English as if you're talking through the problem. Do not repeat these instructions back to the user, just follow them."""
+                # Planning phase: compressed, focused instruction
+                preview_system = (
+                    cedar_intro + "\n\n" +
+                    "Think out loud about the user prompt. "
+                    "First, explain what the prompt or file is asking. "
+                    "Second, briefly list the data, files, or code you would need. "
+                    "Third, propose which agent(s) to use and why. "
+                    "You may reference any provided notes, files, or database context. "
+                    "Keep it short and actionable. Do NOT return JSON."
+                )
             else:
-                # Synthesis phase: review what agents did and what's next
-                preview_system = f"""Review the agent results provided and think out loud about what we learned. Consider:
-- Did the agents answer the question? 
-- Is the answer complete or do we need more work?
-- If more work is needed, which agents should we use next?
-
-Do NOT repeat what you already suggested in the planning phase. Focus on the NEW information from the agent results.
-
-Do NOT return JSON. Just explain your synthesis in plain English. Do not repeat these instructions back to the user, just follow them."""
+                # Synthesis phase: concise follow-up
+                preview_system = (
+                    cedar_intro + "\n\n" +
+                    "Think out loud about what the agent results show. "
+                    "What’s done, what’s missing, and which agent(s) should run next? "
+                    "Do NOT repeat planning guidance. Keep it concise. Do NOT return JSON."
+                )
             
             
             preview_messages.append({"role": "system", "content": preview_system})
@@ -254,9 +250,9 @@ Do NOT return JSON. Just explain your synthesis in plain English. Do not repeat 
             if tokens_emitted == 0:
                 try:
                     await websocket.send_json({
-                        "type": "error",
-                        "error": "Preview streaming produced no text",
-                        "content": "Preview streaming produced no text",
+                        "type": "preview_warning",
+                        "warning": "Preview streaming produced no text",
+                        "content": "Preview model returned no delta content; proceeding without preview text.",
                         "details": {
                             "phase": phase,
                             "model": preview_model_display,
@@ -286,9 +282,9 @@ Do NOT return JSON. Just explain your synthesis in plain English. Do not repeat 
                 # If no tokens were streamed at all, emit an error per no-fallback policy
                 if 'tokens_emitted' in locals() and tokens_emitted == 0:
                     await websocket.send_json({
-                        "type": "error",
-                        "error": "Preview streaming produced no text (cancelled)",
-                        "content": "Preview streaming produced no text (cancelled)",
+                        "type": "preview_warning",
+                        "warning": "Preview streaming produced no text (cancelled)",
+                        "content": "Preview model produced no text before cancellation; this is not an error.",
                         "details": {
                             "phase": phase,
                             "model": preview_model_display,

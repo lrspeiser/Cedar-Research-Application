@@ -31,6 +31,7 @@ from openai import AsyncOpenAI
 
 # Import AgentResult from execution_agents
 from .agent_result import AgentResult
+from cedar_orchestrator.cedar_product_preamble import build_agent_system_prompt, AGENT_ROLES
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -74,7 +75,10 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
                 "messages": [
                     {
                         "role": "system",
-                        "content": """You are a research assistant with web search capabilities.
+                        "content": build_agent_system_prompt(
+                            "ResearchAgent",
+                            AGENT_ROLES.get("ResearchAgent", "to perform web research with citations"),
+                            """You are a research assistant with web search capabilities.
                         You must respond ONLY with valid JSON matching this schema:
                         {
                             "sources": [
@@ -92,6 +96,7 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
                         }
                         
                         Provide at least 3-5 relevant sources with concrete findings."""
+                        )
                     },
                     {"role": "user", "content": f"Research this topic and find relevant sources: {task}"}
                 ]

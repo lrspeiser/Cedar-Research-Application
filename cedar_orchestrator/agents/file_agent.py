@@ -31,6 +31,7 @@ from openai import AsyncOpenAI
 
 # Import AgentResult from execution_agents
 from .agent_result import AgentResult
+from cedar_orchestrator.cedar_product_preamble import build_agent_system_prompt, AGENT_ROLES
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -120,11 +121,15 @@ class FileAgent:
                                         "messages": [
                                             {
                                                 "role": "system",
-                                                "content": """You are a file analyzer. You MUST respond ONLY with valid JSON:
+                                                "content": build_agent_system_prompt(
+                                                    "FileAgent",
+                                                    AGENT_ROLES.get("FileAgent", "to download and manage files"),
+                                                    """You are a file analyzer. You MUST respond ONLY with valid JSON:
                                                 {
                                                     "description": "brief 1-2 sentence description of file content"
                                                 }
                                                 No extra text. ONLY JSON."""
+                                                )
                                             },
                                             {"role": "user", "content": f"File: {filename}\nContent preview: {first_lines[:500]}"}
                                         ]

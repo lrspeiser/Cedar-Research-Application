@@ -31,6 +31,7 @@ from openai import AsyncOpenAI
 
 # Import AgentResult from execution_agents
 from .agent_result import AgentResult
+from cedar_orchestrator.cedar_product_preamble import build_agent_system_prompt, AGENT_ROLES
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -73,7 +74,10 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
                 "messages": [
                     {
                         "role": "system",
-                        "content": """You are a strategic planning expert. Create detailed action plans that include:
+                        "content": build_agent_system_prompt(
+                            "StrategyAgent",
+                            AGENT_ROLES.get("StrategyAgent", "to create strategic plans and orchestrate agents"),
+                            """You are a strategic planning expert. Create detailed action plans that include:
                         1. Breaking down the problem into manageable steps
                         2. Identifying which specialized agents should be used
                         3. Determining the sequence of operations
@@ -120,6 +124,7 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
                         - If PDFs/CSVs/images in project: CodeAgent (parse/analyze), ImageAnalysisAgent (OCR), SQLAgent/DataAgent (DB), NotesAgent (document)
                         - Need new files: FileAgent (download first)
                         - CodeAgent can write outputs (CSV/plots) back to project files and DB"""
+                        )
                     },
                     {"role": "user", "content": f"Create a strategic plan to address: {task}"}
                 ]

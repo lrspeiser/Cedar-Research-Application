@@ -31,6 +31,7 @@ from fastapi import WebSocket
 
 # Import AgentResult
 from .agent_result import AgentResult
+from cedar_orchestrator.cedar_product_preamble import build_agent_system_prompt, AGENT_ROLES
 
 # Configure detailed logging
 logging.basicConfig(level=logging.INFO)
@@ -84,10 +85,13 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
             completion_params = {
                 "model": model,
                 "messages": [
+{
                     {
                         "role": "system",
-                        "content": """You are a SQL expert.
-
+                        "content": build_agent_system_prompt(
+                            "SQLAgent",
+                            AGENT_ROLES.get("SQLAgent", "to generate and manage SQL for databases"),
+                            """You are a SQL expert.
 You MUST respond with VALID JSON in this EXACT format:
 {
   "answer": "Complete formatted response explaining the SQL and what it does. Use markdown. This is displayed AS-IS.",
@@ -134,6 +138,7 @@ Example response:
   "operation_type": "SELECT",
   "summary": "Query for 10 most recent notes"
 }"""
+                    )
                     },
                     {"role": "user", "content": task}
                 ]

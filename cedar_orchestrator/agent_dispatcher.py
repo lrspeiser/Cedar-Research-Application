@@ -63,6 +63,7 @@ class AgentDispatcher:
         agent_map = {
             "CodeAgent": orchestrator.code_agent,
             "SQLAgent": orchestrator.sql_agent,
+            "SQLRunner": getattr(orchestrator, 'sql_runner', None),
             "ShellAgent": orchestrator.shell_agent,
             "FormulaAgent": orchestrator.formula_agent,
             "ResearchAgent": orchestrator.research_agent,
@@ -110,7 +111,11 @@ class AgentDispatcher:
                 agent, agent_class_name, task_str, task_context,
                 message, iteration, project_id, branch_id, file_id, db_session
             )
-            agent_tasks.append(task)
+            
+            async def _with_timeout(coro):
+                return await asyncio.wait_for(coro, timeout=300)
+            
+            agent_tasks.append(_with_timeout(task))
         
         # Execute all agents in parallel
         results = await asyncio.gather(*agent_tasks, return_exceptions=True)
@@ -184,6 +189,15 @@ class AgentDispatcher:
                 agent.branch_id = branch_id
                 agent.db_session = db_session
             return agent.process(task_str)
+        
+        # SQLRunner: execute provided SQL against DB session
+        elif agent_class_name == "SQLRunner":
+            return agent.process(
+                task_str,
+                db_session=db_session,
+                project_id=project_id,
+                branch_id=branch_id
+            )
         
         # Default: Just pass task string
         else:

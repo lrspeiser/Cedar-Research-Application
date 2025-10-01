@@ -31,6 +31,7 @@ from fastapi import WebSocket
 
 # Import AgentResult
 from .agent_result import AgentResult
+from cedar_orchestrator.cedar_product_preamble import build_agent_system_prompt, AGENT_ROLES
 
 # Configure detailed logging
 logging.basicConfig(level=logging.INFO)
@@ -72,10 +73,13 @@ class ShellAgent:
             completion_params = {
                 "model": model,
                 "messages": [
+{
                     {
                         "role": "system",
-                        "content": """You are a shell command expert.
-
+                        "content": build_agent_system_prompt(
+                            "ShellAgent",
+                            AGENT_ROLES.get("ShellAgent", "to extract and execute safe, non-interactive shell commands"),
+                            """You are a shell command expert.
 You MUST respond with VALID JSON in this EXACT format:
 {
   "answer": "Complete formatted response explaining what command you'll run and why. Use markdown. This is displayed AS-IS.",
@@ -101,6 +105,7 @@ Example response:
   "expected_output": "List of Python file paths",
   "summary": "Find all Python files"
 }"""
+                    )
                     },
                     {"role": "user", "content": task}
                 ]

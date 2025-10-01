@@ -21,6 +21,7 @@ from pathlib import Path
 import tempfile
 import shutil
 from openai import AsyncOpenAI
+from cedar_orchestrator.cedar_product_preamble import build_agent_system_prompt, AGENT_ROLES
 
 # Import shared file processing utilities
 from .file_processing_result import FileProcessingResult
@@ -241,7 +242,10 @@ For **conclusions**, follow this pattern:
                 "messages": [
                     {
                         "role": "system",
-                        "content": """You are an expert image analyst specializing in scientific visualization, data extraction, and visual reasoning.
+                        "content": build_agent_system_prompt(
+                            "ImageAnalysisAgent",
+                            AGENT_ROLES.get("ImageAnalysisAgent", "to analyze images and extract structured data"),
+                            """You are an expert image analyst specializing in scientific visualization, data extraction, and visual reasoning.
 
 Your task is to:
 1. Analyze images comprehensively (charts, diagrams, photos, screenshots)
@@ -257,6 +261,7 @@ IMPORTANT:
 - Assess confidence honestly (0.0 = uncertain, 1.0 = certain)
 - For charts: extract as many data points as visible
 - For conclusions: connect observable evidence to logical inferences"""
+                    )
                     },
                     {
                         "role": "user",

@@ -31,6 +31,7 @@ from openai import AsyncOpenAI
 
 # Import AgentResult from execution_agents
 from .agent_result import AgentResult
+from cedar_orchestrator.cedar_product_preamble import build_agent_system_prompt, AGENT_ROLES
 
 # Configure logging
 
@@ -70,10 +71,13 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
             completion_params = {
                 "model": model,
                 "messages": [
+{
                     {
                         "role": "system",
-                        "content": """You are a mathematical expert who derives formulas from first principles.
-
+                        "content": build_agent_system_prompt(
+                            "FormulaAgent",
+                            AGENT_ROLES.get("FormulaAgent", "to derive mathematical formulas from first principles"),
+                            """You are a mathematical expert who derives formulas from first principles.
 You MUST respond with VALID JSON in this EXACT format:
 {
   "answer": "Complete formatted derivation with steps, explanations, and final formula. Use markdown with LaTeX for equations. This is displayed AS-IS.",
@@ -98,6 +102,7 @@ Example response:
   "assumptions": ["a ≠ 0", "coefficients are real numbers"],
   "summary": "Derived quadratic formula from first principles"
 }"""
+                    )
                     },
                     {"role": "user", "content": f"Derive from first principles: {task}"}
                 ]

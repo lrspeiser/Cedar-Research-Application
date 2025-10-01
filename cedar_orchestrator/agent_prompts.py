@@ -67,6 +67,14 @@ def extract_prompt_from_agent(file_path: str, class_name: str, method_name: str 
             # Note: f-strings with variables won't render, but schema will be visible
             return prompt
         
+        # Try pattern 4: build_agent_system_prompt(..., """...""")
+        build_call_pattern = r'build_agent_system_prompt\s*\(.*?,.*?,\s*(""".*?"""|\'\'\' .*?\'\'\')\s*\)'
+        matches = list(re.finditer(build_call_pattern, class_content, re.DOTALL))
+        if matches:
+            prompt_with_quotes = matches[0].group(1)
+            prompt = prompt_with_quotes.strip('"""').strip("'''").strip()
+            return prompt
+        
         return f"[No system prompt found in {class_name}]"
         
     except Exception as e:

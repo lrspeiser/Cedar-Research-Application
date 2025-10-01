@@ -21,7 +21,8 @@ from .agents import (
     AgentResult, ShellAgent, CodeAgent, SQLAgent, FormulaAgent,
     ResearchAgent, StrategyAgent, DataAgent, NotesAgent, FileAgent,
     ImageCreationAgent, ImageAnalysisAgent, FileReaderAgent,
-    LangExtractAgent, OCRAgent, PDFExtractionAgent, SQLMetadataAgent
+    LangExtractAgent, OCRAgent, PDFExtractionAgent, SQLMetadataAgent,
+    SQLRunner
 )
 
 # Import modular components
@@ -68,6 +69,7 @@ class ThinkerOrchestrator:
         # Initialize all agents
         self.code_agent = CodeAgent(self.llm_client)
         self.sql_agent = SQLAgent(self.llm_client)
+        self.sql_runner = SQLRunner(self.llm_client)
         self.shell_agent = ShellAgent(self.llm_client)
         self.formula_agent = FormulaAgent(self.llm_client)
         self.research_agent = ResearchAgent(self.llm_client)
@@ -107,9 +109,13 @@ class ThinkerOrchestrator:
         db_session = None,
         conversation_history: Optional[str] = None,
         file_id: int = None,
-        dataset_id: int = None
+        dataset_id: int = None,
+        pending_agent_tasks: Optional[List[Dict[str, Any]]] = None
     ):
-        """Main orchestration flow"""
+        """Main orchestration flow
+        
+        pending_agent_tasks: Agent tasks that should be executed in this iteration (carried from the prior Chief loop decision).
+        """
         orchestration_start = time.time()
         run_logs: List[str] = []
         
@@ -130,7 +136,7 @@ class ThinkerOrchestrator:
         
         # Check iteration limit
         if iteration >= self.MAX_ITERATIONS:
-            await self._send_max_iterations_message(websocket, previous_results)
+            await self._send_max_iterations_message(websocket, previous_results, pending_agent_tasks)
             return
         
         # Phase 1: Chief Agent Planning (iteration 0 only)
@@ -177,12 +183,11 @@ class ThinkerOrchestrator:
             logger.info("[ORCHESTRATOR] PHASE 2: Agent Execution (from planning)")
             agent_tasks_list = planning_decision.get('agent_tasks', []) if isinstance(planning_decision.get('agent_tasks'), list) else []
         else:
-            # Subsequent iterations: previous_results contains the agent_tasks from the loop decision
-            # These are stored in the special __loop_agent_tasks__ attribute
+            # Subsequent iterations: consume pending_agent_tasks passed from the prior loop decision
             logger.info(f"[ORCHESTRATOR] PHASE 2: Agent Execution (from loop iteration {iteration})")
-            if previous_results and hasattr(previous_results, '__loop_agent_tasks__'):
-                agent_tasks_list = getattr(previous_results, '__loop_agent_tasks__', [])
-                logger.info(f"[ORCHESTRATOR] Found {len(agent_tasks_list)} agent tasks from loop decision")
+            if pending_agent_tasks and isinstance(pending_agent_tasks, list):
+                agent_tasks_list = pending_agent_tasks
+                logger.info(f"[ORCHESTRATOR] Found {len(agent_tasks_list)} pending agent tasks from loop decision")
             else:
                 # No new agents to execute - just pass through previous results to synthesis
                 logger.info(f"[ORCHESTRATOR] No new agents to execute, using previous results")
@@ -311,7 +316,7 @@ class ThinkerOrchestrator:
         if thread_id:
             StopHandler.clear_stop(thread_id)
     
-    async def _send_max_iterations_message(self, websocket: WebSocket, previous_results: List[AgentResult]):
+    async def _send_max_iterations_message(self, websocket: WebSocket, previous_results: List[AgentResult], pending_agent_tasks: Optional[List[Dict[str, Any]]] = None):
         """Send message when max iterations reached with progress summary"""
         # Stop all spinners
         await StopHandler.send_stop_signals(websocket)
@@ -344,11 +349,10 @@ class ThinkerOrchestrator:
         
         summary_parts.append("\n\n**What Still Needs to Be Done:**\n")
         # Check if there are pending agent tasks
-        if previous_results and hasattr(previous_results, '__loop_agent_tasks__'):
-            pending_tasks = getattr(previous_results, '__loop_agent_tasks__', [])
-            if pending_tasks:
+        if pending_agent_tasks and isinstance(pending_agent_tasks, list):
+            if pending_agent_tasks:
                 summary_parts.append("The following agent tasks were planned but not executed:\n")
-                for task in pending_tasks:
+                for task in pending_agent_tasks:
                     agent = task.get('agent', 'Unknown')
                     task_desc = task.get('task', 'No description')
                     summary_parts.append(f"- **{agent}**: {task_desc[:200]}{'...' if len(task_desc) > 200 else ''}\n")
@@ -423,23 +427,20 @@ Please provide this information so I can better assist you."""
         
         await asyncio.sleep(0.3)
         
-        # CRITICAL: Pass the new agent_tasks from the loop decision to the next iteration
-        # We attach them to valid_results as a special attribute so Phase 2 can find them
-        if agent_tasks:
-            # Create a list-like object that holds both the results and the new agent tasks
-            results_with_tasks = valid_results if isinstance(valid_results, list) else []
-            # Attach the agent_tasks as a special attribute
-            setattr(results_with_tasks, '__loop_agent_tasks__', agent_tasks)
-            logger.info(f"[ORCHESTRATOR] Attached {len(agent_tasks)} agent tasks to results for next iteration")
-            next_results = results_with_tasks
-        else:
-            next_results = valid_results
-        
         # Recurse with guidance and new agent tasks
         await self.orchestrate(
-            message, websocket, iteration + 1, next_results,
-            project_id, branch_id, thread_id, db_session,
-            conversation_history, file_id, dataset_id
+            message,
+            websocket,
+            iteration + 1,
+            previous_results=valid_results,
+            project_id=project_id,
+            branch_id=branch_id,
+            thread_id=thread_id,
+            db_session=db_session,
+            conversation_history=conversation_history,
+            file_id=file_id,
+            dataset_id=dataset_id,
+            pending_agent_tasks=agent_tasks if agent_tasks else None
         )
     
     async def _send_final_answer(
