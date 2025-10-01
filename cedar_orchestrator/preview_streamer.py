@@ -14,6 +14,7 @@ from openai import AsyncOpenAI
 from fastapi import WebSocket
 
 from .logging_config import get_logger, log_function_entry, log_function_exit, log_step, log_success, log_error, log_warning
+from .step_controller import StepController
 
 logger = get_logger(__name__)
 
@@ -26,7 +27,9 @@ class PreviewStreamer:
         llm_client: AsyncOpenAI,
         messages: List[Dict[str, Any]],
         websocket: Optional[WebSocket] = None,
-        phase: str = "thinking"
+        phase: str = "thinking",
+        thread_id: Optional[str] = None,
+        server_received_ms: Optional[int] = None
     ) -> None:
         """
         Stream a preview response using gpt-5-nano in parallel with main call.
@@ -54,12 +57,11 @@ class PreviewStreamer:
             log_step(logger, f"Starting preview stream for {phase} phase")
             log_step(logger, f"Messages to send: {len(messages)}")
             
-            # Use gpt-5 for fast nano preview
-            # Note: gpt-5 with responses.create uses nano by default for speed
-            preview_model = os.getenv("CEDARPY_PREVIEW_MODEL", "gpt-5")
-            # Display name for UI to distinguish from main model
-            preview_model_display = "gpt-5-nano"
-            log_step(logger, f"Using preview model: {preview_model} (display: {preview_model_display})")
+            # Use configured preview model (defaults to gpt-5-nano)
+            from .preview_streamer import PreviewConfig as _PC  # type: ignore
+            preview_model = _PC.MODEL
+            preview_model_display = preview_model
+            log_step(logger, f"Using preview model: {preview_model}")
             
             # Create a modified prompt for nano that asks it to think out loud
             # instead of returning JSON
@@ -139,30 +141,35 @@ Do NOT return JSON. Just explain your synthesis in plain English. Do not repeat 
                 content_preview = str(msg.get('content', ''))[:500]
                 logger.debug(f"Preview message {i} ({msg.get('role')}): {content_preview}...")
             
+            # Send preview start event BEFORE opening the API stream to ensure immediate UI feedback
+            now_ms = int(time.time() * 1000)
+            log_step(logger, "Sending preview_start event to WebSocket (pre-stream)")
+            event_data = {
+                "type": "preview_start",
+                "phase": phase,
+                "model": preview_model_display,
+                "timestamp": now_ms,
+                "server_emitted_ms": now_ms,
+                "server_received_ms": int(server_received_ms) if server_received_ms else None,
+                "thread_id": str(thread_id) if thread_id is not None else None
+            }
+            await websocket.send_json(event_data)
+            log_success(logger, f"preview_start event sent: {event_data}")
+
+            # Optional step pause after preview_start
+            if thread_id is not None:
+                await StepController.wait_next(str(thread_id), "sent_preview_start")
+
             # Start streaming response
             log_step(logger, "Calling OpenAI API for preview streaming")
-            
             # Use chat.completions for instant streaming (no reasoning delay)
-            # responses API takes 3-5 seconds before first token due to reasoning
-            log_step(logger, f"Using chat.completions.create API for {preview_model}")
             stream = await llm_client.chat.completions.create(
                 model=preview_model,
                 messages=preview_messages,
                 stream=True,
-                max_completion_tokens=2000  # Limit preview length
+                max_completion_tokens=PreviewConfig.MAX_TOKENS
             )
             log_success(logger, "Preview stream initiated")
-            
-            # Send preview start event
-            log_step(logger, "Sending preview_start event to WebSocket")
-            event_data = {
-                "type": "preview_start",
-                "phase": phase,
-                "model": preview_model_display,  # Use display name for UI
-                "timestamp": time.time() * 1000  # milliseconds since epoch
-            }
-            await websocket.send_json(event_data)
-            log_success(logger, f"preview_start event sent: {event_data}")
             
             # Stream word by word
             log_step(logger, "Starting token streaming loop")
@@ -170,6 +177,10 @@ Do NOT return JSON. Just explain your synthesis in plain English. Do not repeat 
             word_buffer = ""
             token_count = 0
             
+            # Optional step pause right before reading the first token
+            if thread_id is not None:
+                await StepController.wait_next(str(thread_id), "first_token")
+
             # chat.completions.create returns chunks with delta.content
             chunk_count = 0
             delta_count = 0
@@ -203,7 +214,9 @@ Do NOT return JSON. Just explain your synthesis in plain English. Do not repeat 
                     await websocket.send_json({
                         "type": "preview_token",
                         "text": word_buffer,
-                        "phase": phase
+                        "phase": phase,
+                        "timestamp": int(time.time() * 1000),
+                        "thread_id": str(thread_id) if thread_id is not None else None
                     })
                     word_buffer = ""
                 
@@ -218,7 +231,9 @@ Do NOT return JSON. Just explain your synthesis in plain English. Do not repeat 
                 await websocket.send_json({
                     "type": "preview_token",
                     "text": word_buffer,
-                    "phase": phase
+                    "phase": phase,
+                    "timestamp": int(time.time() * 1000),
+                    "thread_id": str(thread_id) if thread_id is not None else None
                 })
             
             # Send preview complete
@@ -227,7 +242,9 @@ Do NOT return JSON. Just explain your synthesis in plain English. Do not repeat 
                 "type": "preview_complete",
                 "phase": phase,
                 "total_length": len(full_text),
-                "timestamp": time.time() * 1000  # milliseconds since epoch
+                "timestamp": int(time.time() * 1000),
+                "thread_id": str(thread_id) if thread_id is not None else None,
+                "canceled": False
             })
             
             log_success(logger, f"Preview complete: {len(full_text)} chars, {token_count} tokens")
@@ -235,6 +252,18 @@ Do NOT return JSON. Just explain your synthesis in plain English. Do not repeat 
             
         except asyncio.CancelledError:
             log_warning(logger, "Preview cancelled (real response arrived)")
+            try:
+                # Inform UI that preview completed due to cancellation so it can annotate the bubble
+                await websocket.send_json({
+                    "type": "preview_complete",
+                    "phase": phase,
+                    "total_length": 0,
+                    "timestamp": int(time.time() * 1000),
+                    "thread_id": str(thread_id) if thread_id is not None else None,
+                    "canceled": True
+                })
+            except Exception:
+                pass
             log_function_exit(logger, "stream_preview", result="CANCELLED")
         except Exception as e:
             log_error(logger, "Preview streaming failed", e)
@@ -246,7 +275,9 @@ Do NOT return JSON. Just explain your synthesis in plain English. Do not repeat 
         llm_client: AsyncOpenAI,
         messages: List[Dict[str, Any]],
         websocket: Optional[WebSocket] = None,
-        phase: str = "thinking"
+        phase: str = "thinking",
+        thread_id: Optional[str] = None,
+        server_received_ms: Optional[int] = None
     ) -> Optional[asyncio.Task]:
         """
         Start preview streaming as a background task.
@@ -272,7 +303,7 @@ Do NOT return JSON. Just explain your synthesis in plain English. Do not repeat 
             log_step(logger, "Creating preview task")
             task = asyncio.create_task(
                 PreviewStreamer.stream_preview(
-                    llm_client, messages, websocket, phase
+                    llm_client, messages, websocket, phase, thread_id, server_received_ms
                 )
             )
             log_success(logger, "Preview task created successfully")

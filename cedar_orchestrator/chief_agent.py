@@ -18,6 +18,7 @@ from fastapi import WebSocket
 
 from .agents import AgentResult
 from .preview_streamer import PreviewStreamer, PreviewConfig
+from .step_controller import StepController
 from .logging_config import get_logger, log_function_entry, log_function_exit, log_step, log_success, log_error, log_warning
 
 logger = get_logger(__name__)
@@ -139,8 +140,10 @@ class ChiefAgent:
             if preview_enabled and has_ws:
                 phase = "thinking" if not agent_results else "synthesis"
                 log_step(logger, f"Starting preview task for {phase} phase")
+                # Pass thread_id and a server_received_ms based on the start of this review
+                server_received_ms = int(start_time * 1000)
                 preview_task = PreviewStreamer.start_preview_task(
-                    self.llm_client, messages, ws, phase
+                    self.llm_client, messages, ws, phase, str(thread_id) if thread_id is not None else None, server_received_ms
                 )
                 if preview_task:
                     log_success(logger, f"Preview task started for {phase} phase")
@@ -161,6 +164,11 @@ class ChiefAgent:
             
             # Cancel preview once real response arrives
             if preview_task:
+                # Release any preview step waits before cancellation
+                try:
+                    StepController.cancel(str(thread_id) if thread_id is not None else None)
+                except Exception:
+                    pass
                 log_step(logger, "Cancelling preview task")
                 await PreviewStreamer.cancel_preview(preview_task)
                 log_success(logger, "Preview task cancelled")

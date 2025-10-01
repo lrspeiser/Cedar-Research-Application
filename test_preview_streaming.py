@@ -37,11 +37,11 @@ async def test_preview_streaming():
             
             # Send a simple test query
             test_message = {
-                "message": "What is 2+2?",
-                "project_id": None
+                "type": "message",
+                "content": "What is 2+2?"
             }
             
-            logger.info(f"📤 Sending test message: {test_message['message']}")
+            logger.info(f"📤 Sending test message: {test_message['content']}")
             await websocket.send(json.dumps(test_message))
             
             # Track what we receive

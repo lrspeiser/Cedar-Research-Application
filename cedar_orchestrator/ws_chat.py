@@ -8,6 +8,7 @@ import logging
 import json
 import time
 import traceback
+from cedar_orchestrator.step_controller import StepController
 from typing import Optional
 from fastapi import WebSocket, FastAPI
 from cedar_orchestrator.orchestrator import ThinkerOrchestrator
@@ -112,6 +113,34 @@ async def handle_ws_chat(
                 action = data.get("action")
                 log_step(logger, f"Message type: {message_type}, action: {action}")
                 
+                if message_type == "step_control":
+                    # Developer step-through controls for preview
+                    try:
+                        target = str(data.get("target") or "preview").lower()
+                        cmd = str(data.get("cmd") or "").lower().strip()
+                        t_id = data.get("thread_id")
+                        # Fallback to current chat number for correlation if thread_id missing
+                        t_id = str(t_id) if t_id is not None else (str(current_chat_number) if current_chat_number else None)
+                        if target == "preview":
+                            if cmd == "enable":
+                                StepController.enable(t_id)
+                            elif cmd == "disable":
+                                StepController.disable(t_id)
+                            elif cmd == "next":
+                                StepController.next(t_id)
+                            elif cmd in ("cont", "continue"):
+                                StepController.cont(t_id)
+                        await websocket.send_json({
+                            "type": "step_status",
+                            "target": target,
+                            "enabled": StepController._get(t_id).enabled,
+                            "continue_mode": StepController._get(t_id).continue_mode,
+                            "thread_id": t_id
+                        })
+                    except Exception as e:
+                        logger.error(f"[WebSocket] step_control handling failed: {e}")
+                    continue
+
                 if message_type == "message" or action == "chat":
                     content = data.get("content", "").strip()
                     branch_id = data.get("branch_id", 1)  # Default to branch 1
