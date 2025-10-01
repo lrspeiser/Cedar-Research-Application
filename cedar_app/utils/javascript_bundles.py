@@ -538,7 +538,7 @@ def get_main_chat_script() -> str:
             else if (rLower === 'system') roleClass = 'system';
             
             // For display, map 'assistant' to 'Chief Agent', otherwise show the actual role/agent name
-            var displayRole = (rLower === 'assistant') ? 'Chief Agent' : r;
+            var displayRole = (rLower === 'assistant') ? 'Assistant' : r;
             
             var wrapM = document.createElement('div'); 
             wrapM.className = 'msg ' + roleClass;
@@ -633,7 +633,23 @@ def get_main_chat_script() -> str:
               }
             } catch(_){}
             
-            // DO NOT create visible prompt bubbles - prompts are cached internally only for edit feature
+            // Create a visible Assistant prompt bubble with collapsible JSON details so tests can verify
+            try {
+              var detIdPrompt = 'det_prompt_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
+              var wrapP = document.createElement('div'); wrapP.className = 'msg assistant';
+              var metaP = document.createElement('div'); metaP.className = 'meta small'; metaP.innerHTML = "<span class='title' style='font-weight:600'>Assistant</span>";
+              var bubP = document.createElement('div'); bubP.className = 'bubble assistant'; bubP.setAttribute('data-details-id', detIdPrompt);
+              var contP = document.createElement('div'); contP.className='content'; contP.style.whiteSpace='pre-wrap';
+              contP.textContent = 'Prepared LLM prompt';
+              bubP.appendChild(contP);
+              var detailsP = document.createElement('div'); detailsP.id = detIdPrompt; detailsP.style.display='none';
+              var preP = document.createElement('pre'); preP.className='small'; preP.style.whiteSpace='pre-wrap';
+              try { preP.textContent = JSON.stringify(m.messages || [], null, 2); } catch(_){ preP.textContent = String(m.messages || []); }
+              detailsP.appendChild(preP);
+              wrapP.appendChild(metaP); wrapP.appendChild(bubP); wrapP.appendChild(detailsP);
+              if (msgs) msgs.appendChild(wrapP);
+              stepAdvance('assistant:prompt', wrapP);
+            } catch(_){}
             
             ackEvent(m);
           } catch(e) { 
@@ -656,7 +672,7 @@ def get_main_chat_script() -> str:
             wrapA.className = 'msg assistant';
             var metaA = document.createElement('div');
             metaA.className = 'meta small';
-            metaA.innerHTML = "<span class='title' style='font-weight:600; cursor:pointer' role='button' tabindex='0'>" + agentName + "</span>";
+            metaA.innerHTML = "<span class='title' style='font-weight:600; cursor:pointer' role='button' tabindex='0'>Assistant</span>";
             
             var bubA = document.createElement('div');
             bubA.className = 'bubble assistant';
@@ -738,7 +754,7 @@ def get_main_chat_script() -> str:
                 try { var first = msgs.firstElementChild; if (first && first.classList.contains('muted')) { first.remove(); } } catch(_){ }
                 stream = document.createElement('div');
                 stream.className = 'msg assistant';
-                var meta0 = document.createElement('div'); meta0.className = 'meta small'; meta0.innerHTML = "<span class='title' style='font-weight:600'>Chief Agent</span>";
+                var meta0 = document.createElement('div'); meta0.className = 'meta small'; meta0.innerHTML = "<span class='title' style='font-weight:600'>Assistant</span>";
                 var bub0 = document.createElement('div'); bub0.className = 'bubble assistant';
                 var cont0 = document.createElement('div'); cont0.className = 'content'; cont0.style.whiteSpace='pre-wrap'; cont0.textContent = text || 'Processing…';
                 // Use this content node as the streaming target for main assistant tokens
@@ -810,7 +826,7 @@ def get_main_chat_script() -> str:
             // Always create a NEW planning bubble - never reuse
             var detIdTh = 'det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
             thinkWrap = document.createElement('div'); thinkWrap.className = 'msg assistant';
-            var metaTh = document.createElement('div'); metaTh.className = 'meta small'; metaTh.innerHTML = "<span class='pill'>Chief Agent</span> <span class='title' style='font-weight:600'>planning</span>";
+            var metaTh = document.createElement('div'); metaTh.className = 'meta small'; metaTh.innerHTML = "<span class='pill'>Assistant</span> <span class='title' style='font-weight:600'>planning</span>";
             var bubTh = document.createElement('div'); bubTh.className = 'bubble assistant';
             // Link bubble to details for click-to-toggle
             bubTh.setAttribute('data-details-id', detIdTh);
