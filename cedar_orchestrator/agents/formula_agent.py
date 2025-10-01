@@ -71,7 +71,6 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
             completion_params = {
                 "model": model,
                 "messages": [
-{
                     {
                         "role": "system",
                         "content": build_agent_system_prompt(
@@ -102,7 +101,7 @@ Example response:
   "assumptions": ["a ≠ 0", "coefficients are real numbers"],
   "summary": "Derived quadratic formula from first principles"
 }"""
-                    )
+                        )
                     },
                     {"role": "user", "content": f"Derive from first principles: {task}"}
                 ]
