@@ -75,12 +75,12 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
             completion_params = {
                 "model": model,
                 "messages": [
-{
-                    "role": "system", 
-                    "content": build_agent_system_prompt(
-                        "CodeAgent",
-                        AGENT_ROLES.get("CodeAgent", "to write and execute Python code"),
-                        """You are a Python code generator.
+                    {
+                        "role": "system",
+                        "content": build_agent_system_prompt(
+                            "CodeAgent",
+                            AGENT_ROLES.get("CodeAgent", "to write and execute Python code"),
+                            """You are a Python code generator.
 
 You MUST respond with VALID JSON in this EXACT format:
 {
@@ -104,8 +104,8 @@ Example response:
   "code": "result = 2 + 2\nprint(f'Result: {result}')",
   "summary": "Calculated 2+2"
 }"""
-                    )
-                    }
+                        )
+                    },
                     {"role": "user", "content": task}
                 ]
             }
