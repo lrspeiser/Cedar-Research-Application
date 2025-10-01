@@ -73,7 +73,6 @@ class ShellAgent:
             completion_params = {
                 "model": model,
                 "messages": [
-{
                     {
                         "role": "system",
                         "content": build_agent_system_prompt(
@@ -105,7 +104,7 @@ Example response:
   "expected_output": "List of Python file paths",
   "summary": "Find all Python files"
 }"""
-                    )
+                        )
                     },
                     {"role": "user", "content": task}
                 ]
