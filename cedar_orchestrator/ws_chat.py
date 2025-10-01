@@ -213,6 +213,15 @@ async def handle_ws_chat(
                     except Exception as e:
                         logger.warning(f"[WebSocket] Failed to emit generic processing ack: {e}")
                     
+                    # Emit server-side stage marker so UI (and tests) see 'submitted'
+                    try:
+                        await websocket.send_json({
+                            "type": "info",
+                            "stage": "submitted"
+                        })
+                    except Exception as e:
+                        logger.warning(f"[WebSocket] Failed to emit 'submitted' info stage: {e}")
+                    
                     log_step(logger, f"Initiating orchestration")
                     orchestration_start = time.time()
                     
