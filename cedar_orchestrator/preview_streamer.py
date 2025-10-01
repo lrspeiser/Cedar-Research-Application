@@ -68,7 +68,7 @@ class PreviewStreamer:
             # instead of returning JSON
             preview_messages = []
             
-# Override the system prompt to request thinking out loud
+            # Override the system prompt to request thinking out loud
             # Different prompts for planning vs synthesis
             cedar_intro = get_cedar_product_preamble()
             if phase == "thinking":

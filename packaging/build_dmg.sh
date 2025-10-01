@@ -25,6 +25,42 @@ DMG_NAME="${APP_NAME}-macOS.dmg"
 
 mkdir -p "$DIST" "$BUILD"
 
+# Run test suite before DMG packaging (similar to main build script)
+run_test_suite() {
+  echo "[test] Running core test suite before packaging..."
+  # Use python3 directly since we're in dev mode anyway
+  export CEDARPY_DATA_DIR="$(mktemp -d)"
+  export CEDARPY_SHELL_API_ENABLED="1"
+  export CEDARPY_SHELL_API_TOKEN="testtoken"
+  
+  # If we detect API keys, enable LLM tests
+  if [ -z "${CEDARPY_TEST_LLM_READY:-}" ]; then
+    if [ -n "${OPENAI_API_KEY:-${CEDARPY_OPENAI_API_KEY:-}}" ] || grep -qE '^(OPENAI_API_KEY|CEDARPY_OPENAI_API_KEY)=' "$HOME/CedarPyData/.env" 2>/dev/null; then
+      export CEDARPY_TEST_LLM_READY=1
+    fi
+  fi
+
+  # Add --timeout only if supported by installed pytest plugins
+  EXTRA_TIMEOUT=""
+  if python3 -m pytest --help 2>/dev/null | grep -q -- "--timeout="; then
+    EXTRA_TIMEOUT="--timeout=120"
+  fi
+
+  ( cd "$ROOT_DIR" && \
+    python3 -m pytest -xvs tests/ \
+      -k "not (ui or websocket or playwright)" \
+      --tb=short \
+      ${EXTRA_TIMEOUT} ) || {
+    echo "[test] ERROR: Test suite failed. Build aborted." >&2
+    exit 2
+  }
+  
+  echo "[test] Test suite passed. Proceeding with build."
+  rm -rf "$CEDARPY_DATA_DIR" 2>/dev/null || true
+}
+
+run_test_suite
+
 if [ ! -x "$PY" ]; then
   echo "Creating venv at $VENV"
   python3 -m venv "$VENV"

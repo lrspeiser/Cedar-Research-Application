@@ -642,7 +642,8 @@ async def ws_health(websocket: WebSocket):
 
 @router.websocket("/ws/sql/{project_id}")
 async def ws_sql(websocket: WebSocket, project_id: int):
-    await handle_sql_websocket(websocket, project_id)
+    # Delegate to extracted SQL WebSocket implementation
+    await _ws_sqlx_impl(websocket, project_id)
 
 # WebSocket SQL with undo and branch context
 # Message format:
