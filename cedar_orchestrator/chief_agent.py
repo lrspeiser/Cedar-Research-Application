@@ -17,6 +17,7 @@ from openai import AsyncOpenAI
 from fastapi import WebSocket
 
 from .agents import AgentResult
+from .preview_streamer import PreviewStreamer, PreviewConfig
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +109,15 @@ class ChiefAgent:
             # Add the main user query
             messages.append({"role": "user", "content": f"User Query: {user_query}"})
             
-            # Call LLM
+            # Start preview streaming in parallel (non-blocking)
+            preview_task = None
+            if PreviewConfig.is_enabled() and ws:
+                phase = "thinking" if not agent_results else "synthesis"
+                preview_task = PreviewStreamer.start_preview_task(
+                    self.llm_client, messages, ws, phase
+                )
+            
+            # Call LLM (real model)
             logger.info(f"[ChiefAgent] Calling LLM with {len(messages)} messages")
             # Note: gpt-5 only supports temperature=1 (default), don't set it
             response = await self.llm_client.chat.completions.create(
@@ -116,6 +125,10 @@ class ChiefAgent:
                 messages=messages,
                 max_completion_tokens=50000
             )
+            
+            # Cancel preview once real response arrives
+            if preview_task:
+                await PreviewStreamer.cancel_preview(preview_task)
             
             raw_content = response.choices[0].message.content
             logger.info(f"[ChiefAgent] Got response: {len(raw_content)} chars")
