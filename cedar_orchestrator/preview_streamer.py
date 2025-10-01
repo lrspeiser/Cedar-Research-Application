@@ -162,22 +162,38 @@ Do NOT return JSON. Just explain your thought process in plain English as if you
             token_count = 0
             
             # responses.create returns ResponseTextDeltaEvent objects with delta field
+            event_count = 0
+            delta_count = 0
             async for event in stream:
+                event_count += 1
+                if event_count == 1:
+                    logger.debug(f"First event received: type={type(event)}")
+                
                 # Handle different event types from responses API
                 if hasattr(event, 'type'):
                     event_type = event.type
+                    
+                    # Log all event types for first few events
+                    if event_count <= 5:
+                        logger.debug(f"Event {event_count}: type={event_type}")
                     
                     # Only process text delta events
                     if event_type != 'response.output_text.delta':
                         continue
                     
+                    delta_count += 1
+                    if delta_count == 1:
+                        logger.debug("First delta event received")
+                    
                     # Extract text content from delta field
                     if not hasattr(event, 'delta'):
+                        logger.debug("Delta event missing delta field")
                         continue
                     
                     content = event.delta
                     
                     if not content:
+                        logger.debug("Delta event has empty content")
                         continue
                     
                     full_text += content
@@ -197,6 +213,8 @@ Do NOT return JSON. Just explain your thought process in plain English as if you
                     
                     # Small delay for readability (streaming effect)
                     await asyncio.sleep(0.01)
+            
+            log_step(logger, f"Stream ended: {event_count} events, {delta_count} deltas, {token_count} tokens sent")
             
             # Send any remaining text
             if word_buffer:
