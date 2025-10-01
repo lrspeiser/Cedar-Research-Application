@@ -33,6 +33,7 @@ from openai import AsyncOpenAI
 from .agent_result import AgentResult
 
 # Configure logging
+logger = logging.getLogger(__name__)
 
 class StrategyAgent:
     """Agent that creates detailed strategic plans for addressing queries"""

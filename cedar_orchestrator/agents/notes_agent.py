@@ -33,6 +33,7 @@ from openai import AsyncOpenAI
 from .agent_result import AgentResult
 
 # Configure logging
+logger = logging.getLogger(__name__)
 
 class NotesAgent:
     """Agent that creates and manages structured notes from findings"""

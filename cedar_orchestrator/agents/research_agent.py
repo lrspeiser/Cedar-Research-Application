@@ -33,6 +33,7 @@ from openai import AsyncOpenAI
 from .agent_result import AgentResult
 
 # Configure logging
+logger = logging.getLogger(__name__)
 
 class ResearchAgent:
     """Agent that performs web searches using GPT's web search capabilities"""
