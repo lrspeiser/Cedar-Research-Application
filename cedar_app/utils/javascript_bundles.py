@@ -1514,6 +1514,13 @@ Details:
             var ft = document.querySelector(".tabs .tab[data-target='main-files']");
             if (ft) ft.classList.add('active');
           }
+          // Ensure the newly uploaded file is visible in the Files list
+          try {
+            var fidU = spU.get('file_id');
+            var sel = fidU ? "#main-files [data-file-id='" + String(fidU) + "']" : null;
+            var link = sel ? document.querySelector(sel) : null;
+            if (link && link.scrollIntoView) { link.scrollIntoView({block:'center'}); }
+          } catch(_) {}
         }
       } catch(_) {}
 
