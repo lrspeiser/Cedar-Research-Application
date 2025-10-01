@@ -142,22 +142,14 @@ Do NOT return JSON. Just explain your synthesis in plain English. Do not repeat 
             # Start streaming response
             log_step(logger, "Calling OpenAI API for preview streaming")
             
-            # Convert messages format for responses API
-            # responses.create expects "input" with role/content structure
-            input_messages = []
-            for msg in preview_messages:
-                input_messages.append({
-                    "role": msg["role"],
-                    "content": msg["content"]
-                })
-            
-            # Use responses.create for gpt-5 (nano by default)
-            # Only include required fields per API docs
-            log_step(logger, f"Using responses.create API for {preview_model}")
-            stream = await llm_client.responses.create(
+            # Use chat.completions for instant streaming (no reasoning delay)
+            # responses API takes 3-5 seconds before first token due to reasoning
+            log_step(logger, f"Using chat.completions.create API for {preview_model}")
+            stream = await llm_client.chat.completions.create(
                 model=preview_model,
-                input=input_messages,
-                stream=True
+                messages=preview_messages,
+                stream=True,
+                max_completion_tokens=2000  # Limit preview length
             )
             log_success(logger, "Preview stream initiated")
             
@@ -178,40 +170,27 @@ Do NOT return JSON. Just explain your synthesis in plain English. Do not repeat 
             word_buffer = ""
             token_count = 0
             
-            # responses.create returns ResponseTextDeltaEvent objects with delta field
-            event_count = 0
+            # chat.completions.create returns chunks with delta.content
+            chunk_count = 0
             delta_count = 0
-            async for event in stream:
-                event_count += 1
-                if event_count == 1:
-                    logger.debug(f"First event received: type={type(event)}")
+            async for chunk in stream:
+                chunk_count += 1
+                if chunk_count == 1:
+                    logger.debug(f"First chunk received: type={type(chunk)}")
                 
-                # Handle different event types from responses API
-                if hasattr(event, 'type'):
-                    event_type = event.type
-                    
-                    # Log all event types for first few events
-                    if event_count <= 5:
-                        logger.debug(f"Event {event_count}: type={event_type}")
-                    
-                    # Only process text delta events
-                    if event_type != 'response.output_text.delta':
-                        continue
-                    
-                    delta_count += 1
-                    if delta_count == 1:
-                        logger.debug("First delta event received")
-                    
-                    # Extract text content from delta field
-                    if not hasattr(event, 'delta'):
-                        logger.debug("Delta event missing delta field")
-                        continue
-                    
-                    content = event.delta
-                    
-                    if not content:
-                        logger.debug("Delta event has empty content")
-                        continue
+                # Handle chat completions format
+                if not chunk.choices:
+                    continue
+                
+                delta = chunk.choices[0].delta
+                if not delta.content:
+                    continue
+                
+                delta_count += 1
+                if delta_count == 1:
+                    logger.debug(f"First delta content received after {chunk_count} chunks")
+                
+                content = delta.content
                     
                     full_text += content
                     word_buffer += content
@@ -231,7 +210,7 @@ Do NOT return JSON. Just explain your synthesis in plain English. Do not repeat 
                     # Small delay for readability (streaming effect)
                     await asyncio.sleep(0.01)
             
-            log_step(logger, f"Stream ended: {event_count} events, {delta_count} deltas, {token_count} tokens sent")
+            log_step(logger, f"Stream ended: {chunk_count} chunks, {delta_count} deltas, {token_count} tokens sent")
             
             # Send any remaining text
             if word_buffer:
