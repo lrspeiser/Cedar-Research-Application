@@ -450,6 +450,15 @@ Please provide this information so I can better assist you."""
         # First, stop all spinners
         await StopHandler.send_stop_signals(websocket)
         
+        # Emit an info stage so the UI shows progress transitioning to final
+        try:
+            await websocket.send_json({
+                "type": "info",
+                "stage": "finalizing"
+            })
+        except Exception:
+            pass
+        
         final_answer = decision.get('final_answer', '')
         selected_agent = decision.get('selected_agent', 'The Chief Agent')
         reasoning = decision.get('reasoning', '')
