@@ -59,7 +59,34 @@ class ChiefAgent:
             model = os.getenv("CEDARPY_OPENAI_MODEL") or os.getenv("OPENAI_API_KEY_MODEL") or "gpt-5"
             log_step(logger, f"Using LLM model: {model}")
             
-            # Stream thinking start to UI
+            # Import prompt templates
+            from .prompts.chief_prompts import get_system_prompt, get_validation_schema
+            
+            # Get the system prompt (includes all routing guidance)
+            system_prompt = get_system_prompt(
+                iteration=iteration,
+                max_iterations=max_iterations,
+                remaining_loops=remaining_loops,
+                has_agent_results=bool(agent_results)
+            )
+            
+            # Build messages for Chief Agent up-front so we can emit the prompt before thinking_start
+            messages = [{"role": "system", "content": system_prompt}]
+            
+            # Send prompt JSON to UI early so it appears before thinking bubble
+            try:
+                if ws is not None:
+                    await ws.send_json({
+                        "type": "prompt",
+                        "thread_id": str(thread_id) if thread_id is not None else None,
+                        "stage": ("synthesis" if agent_results else "planning"),
+                        "iteration": iteration + 1,
+                        "messages": messages
+                    })
+            except Exception:
+                pass
+            
+            # Stream thinking start to UI (after prompt so prompt pre appears first)
             # Differentiate between planning (no results) and synthesis (has results)
             log_step(logger, "Sending thinking/synthesis start event to UI")
             try:
@@ -80,19 +107,7 @@ class ChiefAgent:
             except Exception as e:
                 log_error(logger, "Failed to send WebSocket event", e)
             
-            # Import prompt templates
-            from .prompts.chief_prompts import get_system_prompt, get_validation_schema
-            
-            # Get the system prompt (includes all routing guidance)
-            system_prompt = get_system_prompt(
-                iteration=iteration,
-                max_iterations=max_iterations,
-                remaining_loops=remaining_loops,
-                has_agent_results=bool(agent_results)
-            )
-            
-            # Build messages for Chief Agent
-            messages = [{"role": "system", "content": system_prompt}]
+            # messages already initialized above
             
             # Add conversation history if available
             if conversation_history:
@@ -152,19 +167,6 @@ class ChiefAgent:
             else:
                 log_warning(logger, f"Preview NOT started", f"enabled={preview_enabled}, ws={has_ws}")
             
-            # Send prompt JSON to UI so it can be inspected in a collapsible bubble
-            try:
-                if ws is not None:
-                    await ws.send_json({
-                        "type": "prompt",
-                        "thread_id": str(thread_id) if thread_id is not None else None,
-                        "stage": ("synthesis" if agent_results else "planning"),
-                        "iteration": iteration + 1,
-                        "messages": messages
-                    })
-            except Exception:
-                pass
-
             # Call LLM (real model)
             log_step(logger, f"Calling LLM with {len(messages)} messages")
             # Note: gpt-5 only supports temperature=1 (default), don't set it
