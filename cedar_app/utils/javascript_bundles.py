@@ -355,58 +355,7 @@ def get_main_chat_script() -> str:
       var lastW = null;
       var stagesSeen = {};
 
-      // Developer step-through controls for preview (keyboard shortcuts)
-      // Shift+P: toggle step mode; Shift+N: next; Shift+C: continue
-      var __stepEnabled = false;
-      var __stepIndicator = null;
-      function __ensureStepIndicator(){
-        try {
-          if (__stepIndicator && __stepIndicator.parentNode) return;
-          __stepIndicator = document.createElement('div');
-          __stepIndicator.style.position = 'fixed';
-          __stepIndicator.style.bottom = '10px';
-          __stepIndicator.style.right = '10px';
-          __stepIndicator.style.zIndex = '2147483647';
-          __stepIndicator.style.padding = '6px 8px';
-          __stepIndicator.style.borderRadius = '6px';
-          __stepIndicator.style.fontSize = '12px';
-          __stepIndicator.style.background = '#0b1021';
-          __stepIndicator.style.color = '#e6e6e6';
-          __stepIndicator.style.opacity = '0.9';
-          __stepIndicator.style.pointerEvents = 'none';
-          __stepIndicator.textContent = 'STEP: OFF';
-          document.body.appendChild(__stepIndicator);
-        } catch(_){}
-      }
-      function __setStepIndicator(enabled, cont){
-        try {
-          __ensureStepIndicator();
-          var txt = enabled ? ('STEP: ON' + (cont ? ' (cont)' : '')) : 'STEP: OFF';
-          __stepIndicator.textContent = txt;
-          __stepIndicator.style.background = enabled ? '#334155' : '#0b1021';
-        } catch(_){}
-      }
-      function __sendStep(cmd){
-        try {
-          if (!ws || ws.readyState !== 1) return;
-          ws.send(JSON.stringify({ type: 'step_control', target: 'preview', cmd: cmd, thread_id: (threadId||null) }));
-        } catch(_){}
-      }
-      document.addEventListener('keydown', function(ev){
-        try {
-          if (!ev.shiftKey) return;
-          if (ev.key === 'P') {
-            __stepEnabled = !__stepEnabled;
-            __setStepIndicator(__stepEnabled, false);
-            __sendStep(__stepEnabled ? 'enable' : 'disable');
-          } else if (ev.key === 'N') {
-            __sendStep('next');
-          } else if (ev.key === 'C') {
-            __setStepIndicator(true, true);
-            __sendStep('continue');
-          }
-        } catch(_){}
-      }, true);
+      // Developer step-through controls disabled in tests; use WS messages if needed.
 
       // Optimistic local echo of the user's message so the UI shows instant feedback
       try {
