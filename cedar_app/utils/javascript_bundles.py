@@ -1521,6 +1521,21 @@ Details:
             var link = sel ? document.querySelector(sel) : null;
             if (link && link.scrollIntoView) { link.scrollIntoView({block:'center'}); }
           } catch(_) {}
+          // Add a visible banner in the Files panel showing the uploaded filename
+          try {
+            var filesPanel = document.getElementById('main-files');
+            if (filesPanel && !filesPanel.getAttribute('data-upload-banner-added')) {
+              filesPanel.setAttribute('data-upload-banner-added','1');
+              var fnameU = '(file)';
+              try { var detObj = JSON.parse(FILE_DETAILS_JSON||''); if (detObj && detObj.name) fnameU = String(detObj.name); } catch(_){ }
+              var card = filesPanel.querySelector('.card');
+              var banner = document.createElement('div');
+              banner.className = 'small';
+              banner.style.margin = '6px 0';
+              banner.textContent = 'Uploaded ' + fnameU;
+              if (card && card.firstChild) { card.insertBefore(banner, card.firstChild.nextSibling); } else if (card) { card.appendChild(banner); }
+            }
+          } catch(_) {}
         }
       } catch(_) {}
 
