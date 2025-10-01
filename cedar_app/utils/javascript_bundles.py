@@ -782,28 +782,26 @@ def get_main_chat_script() -> str:
           } catch(_){ }
         } else if (m.type === 'thinking_start') { ackEvent(m);
           try {
-            // Create a live planning bubble if not already present
-            if (!thinkWrap) {
-              var detIdTh = 'det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
-              thinkWrap = document.createElement('div'); thinkWrap.className = 'msg assistant';
-              var metaTh = document.createElement('div'); metaTh.className = 'meta small'; metaTh.innerHTML = "<span class='pill'>Chief Agent</span> <span class='title' style='font-weight:600'>planning</span>";
-              var bubTh = document.createElement('div'); bubTh.className = 'bubble assistant';
-              // Link bubble to details for click-to-toggle
-              bubTh.setAttribute('data-details-id', detIdTh);
-              var contTh = document.createElement('div'); contTh.className = 'content'; contTh.style.whiteSpace='pre-wrap'; contTh.textContent = 'Planning…';
-              // Spinner during planning
-              thinkSpin = document.createElement('span'); thinkSpin.className = 'spinner'; thinkSpin.style.marginLeft = '6px'; contTh.appendChild(thinkSpin);
-              thinkText = contTh;
-              // Details area for planner metadata
-              var detailsTh = document.createElement('div'); detailsTh.id = detIdTh; detailsTh.style.display='none';
-              var preTh = document.createElement('pre'); preTh.className='small'; preTh.style.whiteSpace='pre-wrap'; preTh.style.background='#f8fafc'; preTh.style.padding='8px'; preTh.style.borderRadius='6px';
-              try { preTh.textContent = JSON.stringify({ model: m.model || '' }, null, 2); } catch(_) { preTh.textContent = String(m.model||''); }
-              detailsTh.appendChild(preTh);
-              bubTh.appendChild(contTh);
-              thinkWrap.appendChild(metaTh); thinkWrap.appendChild(bubTh); thinkWrap.appendChild(detailsTh);
-              if (msgs) msgs.appendChild(thinkWrap);
-              stepAdvance('assistant:thinking', thinkWrap);
-            }
+            // Always create a NEW planning bubble - never reuse
+            var detIdTh = 'det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
+            thinkWrap = document.createElement('div'); thinkWrap.className = 'msg assistant';
+            var metaTh = document.createElement('div'); metaTh.className = 'meta small'; metaTh.innerHTML = "<span class='pill'>Chief Agent</span> <span class='title' style='font-weight:600'>planning</span>";
+            var bubTh = document.createElement('div'); bubTh.className = 'bubble assistant';
+            // Link bubble to details for click-to-toggle
+            bubTh.setAttribute('data-details-id', detIdTh);
+            var contTh = document.createElement('div'); contTh.className = 'content'; contTh.style.whiteSpace='pre-wrap'; contTh.textContent = 'Planning…';
+            // Spinner during planning
+            thinkSpin = document.createElement('span'); thinkSpin.className = 'spinner'; thinkSpin.style.marginLeft = '6px'; contTh.appendChild(thinkSpin);
+            thinkText = contTh;
+            // Details area for planner metadata
+            var detailsTh = document.createElement('div'); detailsTh.id = detIdTh; detailsTh.style.display='none';
+            var preTh = document.createElement('pre'); preTh.className='small'; preTh.style.whiteSpace='pre-wrap'; preTh.style.background='#f8fafc'; preTh.style.padding='8px'; preTh.style.borderRadius='6px';
+            try { preTh.textContent = JSON.stringify({ model: m.model || '' }, null, 2); } catch(_) { preTh.textContent = String(m.model||''); }
+            detailsTh.appendChild(preTh);
+            bubTh.appendChild(contTh);
+            thinkWrap.appendChild(metaTh); thinkWrap.appendChild(bubTh); thinkWrap.appendChild(detailsTh);
+            if (msgs) msgs.appendChild(thinkWrap);
+            stepAdvance('assistant:thinking', thinkWrap);
           } catch(_) {}
         } else if (m.type === 'thinking_token' && m.delta) {
           try {
@@ -813,7 +811,7 @@ def get_main_chat_script() -> str:
           } catch(_) {}
         } else if (m.type === 'thinking') { ackEvent(m);
           try {
-            // Ensure bubble exists
+            // Update existing bubble if it exists, otherwise create a new one
             if (!thinkWrap) {
               var detIdTh2 = 'det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
               thinkWrap = document.createElement('div'); thinkWrap.className = 'msg assistant';
@@ -843,6 +841,8 @@ def get_main_chat_script() -> str:
                 preEl.textContent = JSON.stringify(obj, null, 2);
               }
             } catch(_) {}
+            // Reset thinkWrap so next thinking_start creates a new bubble
+            thinkWrap = null; thinkText = null; thinkSpin = null;
           } catch(_) {}
         } else if (m.type === 'token' && m.word) {
           if (lastW !== m.word) {
