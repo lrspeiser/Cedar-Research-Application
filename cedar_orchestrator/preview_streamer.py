@@ -8,6 +8,7 @@ instant word-by-word streaming feedback while waiting for the real response.
 import os
 import asyncio
 import logging
+import time
 from typing import Optional, List, Dict, Any
 from openai import AsyncOpenAI
 from fastapi import WebSocket
@@ -72,7 +73,8 @@ class PreviewStreamer:
             event_data = {
                 "type": "preview_start",
                 "phase": phase,
-                "model": preview_model
+                "model": preview_model,
+                "timestamp": time.time() * 1000  # milliseconds since epoch
             }
             await websocket.send_json(event_data)
             log_success(logger, f"preview_start event sent: {event_data}")
@@ -124,7 +126,8 @@ class PreviewStreamer:
             await websocket.send_json({
                 "type": "preview_complete",
                 "phase": phase,
-                "total_length": len(full_text)
+                "total_length": len(full_text),
+                "timestamp": time.time() * 1000  # milliseconds since epoch
             })
             
             log_success(logger, f"Preview complete: {len(full_text)} chars, {token_count} tokens")

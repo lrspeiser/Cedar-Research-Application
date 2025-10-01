@@ -314,6 +314,24 @@ def get_main_chat_script() -> str:
       var thinkText = null; // planning text node to stream tokens into
       var thinkSpin = null; // spinner inside planning bubble
 
+      // Client-side logging to backend
+      function logToBackend(level, message, eventType, data) {
+        try {
+          fetch('/api/ui-log', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+              level: level || 'info',
+              message: message || '',
+              event_type: eventType || null,
+              timestamp_client: performance.now(),
+              timestamp_backend_sent: (data && data.timestamp) ? data.timestamp : null,
+              data: data || {}
+            })
+          }).catch(function(e){ console.debug('[logToBackend] failed:', e); });
+        } catch(e) { console.debug('[logToBackend] error:', e); }
+      }
+
       // Subscribe to client console logs while this WS session is active (appended to procPre when available)
       var logSub = function(pl){
         try {
@@ -328,6 +346,11 @@ def get_main_chat_script() -> str:
         } catch(_){}
       };
       try { if (window.subscribeCedarLogs) window.subscribeCedarLogs(logSub); } catch(_){}
+
+      // Preview streaming state
+      var previewWrap = null;  // preview bubble wrapper
+      var previewText = null;  // preview text node
+      var previewPhase = null; // 'thinking' or 'synthesis'
 
       var lastW = null;
       var stagesSeen = {};
@@ -809,6 +832,78 @@ def get_main_chat_script() -> str:
               thinkText.textContent = (thinkText.textContent ? thinkText.textContent : '') + String(m.delta);
             }
           } catch(_) {}
+        } else if (m.type === 'preview_start') {
+          // Preview streaming start (gpt-5-nano fast preview)
+          try {
+            var t0 = performance.now();
+            logToBackend('info', 'Received preview_start event', 'preview_start', {
+              phase: m.phase,
+              model: m.model,
+              timestamp: m.timestamp
+            });
+            
+            previewPhase = m.phase || 'thinking';
+            
+            // If thinking bubble exists, add preview indicator to it
+            if (thinkWrap && thinkText) {
+              // Clear the "Planning..." placeholder
+              thinkText.textContent = '';
+              // Add preview label
+              var previewLabel = document.createElement('span');
+              previewLabel.className = 'small muted';
+              previewLabel.style.fontStyle = 'italic';
+              previewLabel.textContent = '[Preview from ' + (m.model || 'gpt-5-nano') + '] ';
+              thinkText.appendChild(previewLabel);
+              // Create span for preview content
+              var previewContent = document.createElement('span');
+              thinkText.appendChild(previewContent);
+              previewText = previewContent;
+              previewWrap = thinkWrap;
+            }
+            
+            var t1 = performance.now();
+            logToBackend('debug', 'Rendered preview_start', 'preview_start', {
+              render_time_ms: (t1 - t0).toFixed(2)
+            });
+          } catch(e) {
+            console.error('[preview_start] error:', e);
+            logToBackend('error', 'Failed to handle preview_start: ' + e.message, 'preview_start', {});
+          }
+        } else if (m.type === 'preview_token') {
+          // Preview token streaming (word by word from gpt-5-nano)
+          try {
+            if (previewText && m.text) {
+              previewText.textContent = (previewText.textContent || '') + String(m.text);
+            }
+          } catch(e) {
+            console.error('[preview_token] error:', e);
+          }
+        } else if (m.type === 'preview_complete') {
+          // Preview streaming complete
+          try {
+            logToBackend('info', 'Received preview_complete event', 'preview_complete', {
+              phase: m.phase,
+              total_length: m.total_length,
+              timestamp: m.timestamp
+            });
+            
+            // Add completion indicator
+            if (previewWrap && thinkText) {
+              var completeLabel = document.createElement('div');
+              completeLabel.className = 'small muted';
+              completeLabel.style.fontStyle = 'italic';
+              completeLabel.style.marginTop = '4px';
+              completeLabel.textContent = '[Preview complete, waiting for final answer...]';
+              thinkText.appendChild(completeLabel);
+            }
+            
+            // Clear preview state (will be replaced by real response)
+            previewText = null;
+            previewPhase = null;
+          } catch(e) {
+            console.error('[preview_complete] error:', e);
+            logToBackend('error', 'Failed to handle preview_complete: ' + e.message, 'preview_complete', {});
+          }
         } else if (m.type === 'thinking') { ackEvent(m);
           try {
             // Update existing bubble if it exists, otherwise create a new one
