@@ -566,6 +566,14 @@ try:
 except Exception as e:
     print(f"[startup] Could not register chat API routes: {e}")
 
+# Register UI logging routes (for client-side logging)
+try:
+    from cedar_app.routes.ui_logging_routes import router as ui_logging_router
+    app.include_router(ui_logging_router)
+    print("[startup] UI logging routes registered (/api/ui-log, /api/ui-event)")
+except Exception as e:
+    print(f"[startup] Could not register UI logging routes: {e}")
+
 @app.on_event("startup")
 def _cedarpy_startup_llm_probe():
     try:
