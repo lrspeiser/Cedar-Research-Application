@@ -1465,11 +1465,13 @@ Details:
         if (UPLOAD_AUTOCHAT && !window.__uploadAutoChatStarted) {
           if (msg === 'File uploaded' && (tid0 || fid0)) {
             window.__uploadAutoChatStarted = true;
-            var initialUserMsg = __INITIAL_UPLOAD_USER_MESSAGE__;
+            // Build initial user message expected by tests: include details prefix and JSON
+            var detailsTxt = String(FILE_DETAILS_JSON||'');
+            var initialUserMsg = 'User uploaded a file with the following details:\n\n' + detailsTxt;
             console.log('[auto-chat] starting WS with initial message and context');
             // Render a compact "Uploaded <filename>" assistant bubble with details toggle containing metadata
             try {
-              var detailsTxt = String(FILE_DETAILS_JSON||'');
+              
               var fileName = '(file)';
               try { var _parsed = JSON.parse(detailsTxt||''); if (_parsed && _parsed.name) { fileName = String(_parsed.name); } } catch(_){ }
               var detIdUp = 'det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
