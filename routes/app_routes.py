@@ -1271,9 +1271,11 @@ def ask_endpoint(project_id: int, request: Request, query: str = Form(...), db: 
 
 @router.post("/project/{project_id}/threads/chat")
 def thread_chat_endpoint(project_id: int, request: Request, content: str = Form(...), thread_id: Optional[str] = Form(None), file_id: Optional[str] = Form(None), dataset_id: Optional[str] = Form(None), db: Session = Depends(get_project_db)):
-    """Endpoint for thread chat feature."""
-    from cedar_app.utils.thread_chat import thread_chat
-    return thread_chat(project_id, request, content, thread_id, file_id, dataset_id, db)
+    """HTTP chat has been disabled. Use WebSocket /ws/chat/{project_id} for streaming orchestrator.
+    This aligns with the single-transport policy (no fallbacks).
+    """
+    from fastapi import HTTPException
+    raise HTTPException(status_code=410, detail="HTTP chat disabled. Use WebSocket /ws/chat/{project_id}.")
 
 # ----------------------------------------------------------------------------------
 # WebSocket chat streaming endpoint (word-by-word)
