@@ -201,6 +201,18 @@ async def handle_ws_chat(
                         chat_manager.set_chat_status(project_id, branch_id, chat_number, "processing")
                         log_success(logger, "User message saved and status set to processing")
                     
+                    # Emit a generic processing acknowledgment so UI shows immediate feedback for all chats
+                    try:
+                        await websocket.send_json({
+                            "type": "action",
+                            "function": "processing",
+                            "text": "Processing…",
+                            "call": { "event": "submitted", "thread_id": str(chat_number) if chat_number is not None else None }
+                        })
+                        logger.info("[WebSocket] Emitted generic processing acknowledgment")
+                    except Exception as e:
+                        logger.warning(f"[WebSocket] Failed to emit generic processing ack: {e}")
+                    
                     log_step(logger, f"Initiating orchestration")
                     orchestration_start = time.time()
                     
