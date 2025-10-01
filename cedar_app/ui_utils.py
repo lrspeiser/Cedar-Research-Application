@@ -374,6 +374,24 @@ def layout(title: str, body: str, header_label: Optional[str] = None,
     # Client logging JavaScript
     client_log_js = get_client_log_js()
 
+    # Feature flags for UI internals (read from environment)
+    def _truthy(v: Optional[str]) -> bool:
+        try:
+            return str(v or "").strip().lower() not in {"", "0", "false", "no"}
+        except Exception:
+            return False
+    try:
+        _flag_preview = "true" if _truthy(env_get("CEDARPY_SHOW_PREVIEW")) else "false"
+        _flag_prompt = "true" if _truthy(env_get("CEDARPY_SHOW_PROMPT_BUBBLES")) else "false"
+        feature_flags_js = f"""
+  <script>
+    window.CEDAR_SHOW_PREVIEW = {_flag_preview};
+    window.CEDAR_SHOW_PROMPT_BUBBLES = {_flag_prompt};
+  </script>
+  """
+    except Exception:
+        feature_flags_js = "<script>window.CEDAR_SHOW_PREVIEW=false;window.CEDAR_SHOW_PROMPT_BUBBLES=false;</script>"
+
     # Build HTML document
     html_doc = f"""<!doctype html>
 <html lang="en">
@@ -414,8 +432,9 @@ def layout(title: str, body: str, header_label: Optional[str] = None,
     @media (max-width: 900px) {{ .two-col {{ grid-template-columns: 1fr; }} }}
   </style>
   {client_log_js}
+  {feature_flags_js}
   <script>
-  (function(){{
+  (function(){
     function activateTab(tab) {{
       try {{
         var pane = tab.closest('.pane') || document;

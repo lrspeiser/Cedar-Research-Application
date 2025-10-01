@@ -184,6 +184,9 @@ def get_main_chat_script() -> str:
   var BRANCH_ID = __BID__;
   var UPLOAD_AUTOCHAT = __UPLOAD_AUTOCHAT__;
   var SSE_ACTIVE = false;
+  // Feature flags injected from layout() via window; default to false if missing
+  var SHOW_PREVIEW = (typeof window.CEDAR_SHOW_PREVIEW !== 'undefined') ? !!window.CEDAR_SHOW_PREVIEW : true;
+  var SHOW_PROMPT_BUBBLES = (typeof window.CEDAR_SHOW_PROMPT_BUBBLES !== 'undefined') ? !!window.CEDAR_SHOW_PROMPT_BUBBLES : false;
   // File details JSON injected by server for upload auto-chat (stringified JSON)
   var FILE_DETAILS_JSON = __FILE_DETAILS_JSON__;
   async function ensureThreadId(tid, fid, dsid) {
@@ -633,23 +636,25 @@ def get_main_chat_script() -> str:
               }
             } catch(_){}
             
-            // Create a visible Assistant prompt bubble with collapsible JSON details so tests can verify
-            try {
-              var detIdPrompt = 'det_prompt_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
-              var wrapP = document.createElement('div'); wrapP.className = 'msg assistant';
-              var metaP = document.createElement('div'); metaP.className = 'meta small'; metaP.innerHTML = "<span class='title' style='font-weight:600'>Assistant</span>";
-              var bubP = document.createElement('div'); bubP.className = 'bubble assistant'; bubP.setAttribute('data-details-id', detIdPrompt);
-              var contP = document.createElement('div'); contP.className='content'; contP.style.whiteSpace='pre-wrap';
-              contP.textContent = 'Prepared LLM prompt';
-              bubP.appendChild(contP);
-              var detailsP = document.createElement('div'); detailsP.id = detIdPrompt; detailsP.style.display='none';
-              var preP = document.createElement('pre'); preP.className='small'; preP.style.whiteSpace='pre-wrap';
-              try { preP.textContent = JSON.stringify(m.messages || [], null, 2); } catch(_){ preP.textContent = String(m.messages || []); }
-              detailsP.appendChild(preP);
-              wrapP.appendChild(metaP); wrapP.appendChild(bubP); wrapP.appendChild(detailsP);
-              if (msgs) msgs.appendChild(wrapP);
-              stepAdvance('assistant:prompt', wrapP);
-            } catch(_){}
+            // Create a visible Assistant prompt bubble with collapsible JSON details so tests can verify (behind flag)
+            if (SHOW_PROMPT_BUBBLES) {
+              try {
+                var detIdPrompt = 'det_prompt_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
+                var wrapP = document.createElement('div'); wrapP.className = 'msg assistant';
+                var metaP = document.createElement('div'); metaP.className = 'meta small'; metaP.innerHTML = "<span class='title' style='font-weight:600'>Assistant</span>";
+                var bubP = document.createElement('div'); bubP.className = 'bubble assistant'; bubP.setAttribute('data-details-id', detIdPrompt);
+                var contP = document.createElement('div'); contP.className='content'; contP.style.whiteSpace='pre-wrap';
+                contP.textContent = 'Prepared LLM prompt';
+                bubP.appendChild(contP);
+                var detailsP = document.createElement('div'); detailsP.id = detIdPrompt; detailsP.style.display='none';
+                var preP = document.createElement('pre'); preP.className='small'; preP.style.whiteSpace='pre-wrap';
+                try { preP.textContent = JSON.stringify(m.messages || [], null, 2); } catch(_){ preP.textContent = String(m.messages || []); }
+                detailsP.appendChild(preP);
+                wrapP.appendChild(metaP); wrapP.appendChild(bubP); wrapP.appendChild(detailsP);
+                if (msgs) msgs.appendChild(wrapP);
+                stepAdvance('assistant:prompt', wrapP);
+              } catch(_){}
+            }
             
             ackEvent(m);
           } catch(e) { 
@@ -854,6 +859,7 @@ def get_main_chat_script() -> str:
           // Preview streaming start (gpt-5-nano fast preview)
           // ALWAYS create a NEW bubble - never modify existing ones
           try {
+            if (!SHOW_PREVIEW) { ackEvent(m); return; }
             var t0 = performance.now();
             logToBackend('info', 'Received preview_start event', 'preview_start', {
               phase: m.phase,
@@ -870,7 +876,8 @@ def get_main_chat_script() -> str:
             var metaPrev = document.createElement('div'); 
             metaPrev.className = 'meta small'; 
             var phaseLabel = (m.phase === 'synthesis') ? 'synthesizing' : 'planning';
-            metaPrev.innerHTML = "<span class='pill'>Preview</span> <span class='title' style='font-weight:600'>" + phaseLabel + " (" + (m.model || 'gpt-5-nano') + ")</span>";
+            // Label preview as Chief Agent to match final bubble, while still streaming early thinking
+            metaPrev.innerHTML = "<span class='pill'>Chief Agent</span> <span class='title' style='font-weight:600'>" + phaseLabel + "</span>";
             var bubPrev = document.createElement('div'); 
             bubPrev.className = 'bubble assistant';
             bubPrev.style.opacity = '0.85'; // Slightly transparent to indicate preview
@@ -910,6 +917,7 @@ def get_main_chat_script() -> str:
         } else if (m.type === 'preview_token') {
           // Preview token streaming (word by word from gpt-5-nano)
           try {
+            if (!SHOW_PREVIEW) { return; }
             if (previewText && m.text) {
               previewText.textContent = (previewText.textContent || '') + String(m.text);
             }
@@ -919,6 +927,7 @@ def get_main_chat_script() -> str:
         } else if (m.type === 'preview_complete') {
           // Preview streaming complete
           try {
+            if (!SHOW_PREVIEW) { return; }
             logToBackend('info', 'Received preview_complete event', 'preview_complete', {
               phase: m.phase,
               total_length: m.total_length,
