@@ -449,7 +449,7 @@ def upload_file(project_id: int, request: Request, file: UploadFile = File(...),
     _loc = f"/project/{project.id}?branch_id={branch.id}&file_id={record.id}&thread_id={thr.id}&msg=File+uploaded"
     if _qt_harness:
         try:
-            print("[upload-api] qt_harness=1: deferring post-processing to background; responding early")
+            print("[upload-api] qt_harness=1: deferring post-processing to background; redirecting to project page")
         except Exception:
             pass
         # Kick off background post-processing (classification + indexing + tabular import)
@@ -461,21 +461,8 @@ def upload_file(project_id: int, request: Request, file: UploadFile = File(...),
                 print(f"[upload-api] qt_harness bg error {type(ebg).__name__}: {ebg}")
             except Exception:
                 pass
-        # Stable 200 OK with explicit Connection: close and Content-Length
-        try:
-            from starlette.responses import Response as _Resp  # type: ignore
-        except Exception:
-            _Resp = None  # type: ignore
-        body = f"""
-        <!doctype html><html><head><meta charset='utf-8'><title>Uploaded</title></head>
-        <body><p>File uploaded. <a href='{_loc}'>Continue</a></p></body></html>
-        """
-        data = body.encode('utf-8')
-        if _Resp is not None:
-            return _Resp(content=data, status_code=200, media_type='text/html; charset=utf-8', headers={"Connection": "close", "Content-Length": str(len(data))})
-        else:
-            from starlette.responses import HTMLResponse as _HTML  # type: ignore
-            return _HTML(content=body, status_code=200)
+        # For consistency with browser tests, always redirect after upload in harness mode as well
+        return RedirectResponse(_loc, status_code=303)
 
     # LLM classification with content extraction (best-effort, no fallbacks). See README for details.
     ai_result = None

@@ -39,7 +39,7 @@ data, create or update our database with it.
 1. File is uploaded and saved to disk
 2. FileEntry record created
 3. Thread created
-4. HTTP 200 response returned immediately
+4. HTTP 303 redirect to the project page with `?msg=File+uploaded` (background processing continues)
 5. Background worker started:
    - **NEW: User instruction message added**
    - LLM classification
