@@ -129,14 +129,16 @@ class ChiefAgent:
             messages.append({"role": "user", "content": f"User Query: {user_query}"})
             
             # Start preview streaming in parallel (non-blocking)
+            # Only enable preview for synthesis phase - thinking phase takes too long with gpt-5 reasoning
             log_step(logger, "Checking preview streaming configuration")
             preview_task = None
             preview_enabled = PreviewConfig.is_enabled()
             has_ws = ws is not None
-            log_step(logger, f"Preview enabled: {preview_enabled}, WebSocket: {has_ws}")
+            is_synthesis = bool(agent_results)
+            log_step(logger, f"Preview enabled: {preview_enabled}, WebSocket: {has_ws}, synthesis: {is_synthesis}")
             
-            if preview_enabled and has_ws:
-                phase = "thinking" if not agent_results else "synthesis"
+            if preview_enabled and has_ws and is_synthesis:
+                phase = "synthesis"
                 log_step(logger, f"Starting preview task for {phase} phase")
                 preview_task = PreviewStreamer.start_preview_task(
                     self.llm_client, messages, ws, phase
@@ -146,7 +148,7 @@ class ChiefAgent:
                 else:
                     log_warning(logger, "Preview task creation returned None")
             else:
-                log_warning(logger, f"Preview NOT started", f"enabled={preview_enabled}, ws={has_ws}")
+                log_warning(logger, f"Preview NOT started", f"enabled={preview_enabled}, ws={has_ws}, synthesis={is_synthesis}")
             
             # Call LLM (real model)
             log_step(logger, f"Calling LLM with {len(messages)} messages")
