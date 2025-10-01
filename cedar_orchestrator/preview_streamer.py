@@ -12,7 +12,9 @@ from typing import Optional, List, Dict, Any
 from openai import AsyncOpenAI
 from fastapi import WebSocket
 
-logger = logging.getLogger(__name__)
+from .logging_config import get_logger, log_function_entry, log_function_exit, log_step, log_success, log_error, log_warning
+
+logger = get_logger(__name__)
 
 
 class PreviewStreamer:
@@ -36,38 +38,50 @@ class PreviewStreamer:
             websocket: WebSocket for streaming
             phase: "thinking" or "synthesis" for UI labeling
         """
+        log_function_entry(logger, "stream_preview", 
+                          phase=phase,
+                          has_websocket=websocket is not None,
+                          has_client=llm_client is not None,
+                          message_count=len(messages) if messages else 0)
+        
         if not websocket or not llm_client:
+            log_warning(logger, "Missing websocket or client, aborting preview", 
+                       f"ws={websocket is not None}, client={llm_client is not None}")
             return
         
         try:
-            logger.info(f"[PreviewStreamer] Starting preview stream ({phase})")
-            logger.info(f"[PreviewStreamer] WebSocket: {websocket is not None}")
-            logger.info(f"[PreviewStreamer] Messages count: {len(messages)}")
+            log_step(logger, f"Starting preview stream for {phase} phase")
+            log_step(logger, f"Messages to send: {len(messages)}")
             
             # Use gpt-5-nano for fast preview
             preview_model = os.getenv("CEDARPY_PREVIEW_MODEL", "gpt-5-nano")
-            logger.info(f"[PreviewStreamer] Using model: {preview_model}")
+            log_step(logger, f"Using preview model: {preview_model}")
             
             # Start streaming response
+            log_step(logger, "Calling OpenAI API for preview streaming")
             stream = await llm_client.chat.completions.create(
                 model=preview_model,
                 messages=messages,
                 stream=True,
                 max_completion_tokens=2000  # Limit preview length
             )
+            log_success(logger, "Preview stream initiated")
             
             # Send preview start event
-            logger.info(f"[PreviewStreamer] Sending preview_start event")
-            await websocket.send_json({
+            log_step(logger, "Sending preview_start event to WebSocket")
+            event_data = {
                 "type": "preview_start",
                 "phase": phase,
                 "model": preview_model
-            })
-            logger.info(f"[PreviewStreamer] preview_start event sent")
+            }
+            await websocket.send_json(event_data)
+            log_success(logger, f"preview_start event sent: {event_data}")
             
             # Stream word by word
+            log_step(logger, "Starting token streaming loop")
             full_text = ""
             word_buffer = ""
+            token_count = 0
             
             async for chunk in stream:
                 if not chunk.choices:
@@ -83,7 +97,9 @@ class PreviewStreamer:
                 
                 # Send complete words (split on spaces)
                 if ' ' in word_buffer or '\n' in word_buffer:
-                    logger.debug(f"[PreviewStreamer] Sending token: {word_buffer[:20]}...")
+                    token_count += 1
+                    if token_count % 10 == 0:  # Log every 10 tokens
+                        logger.debug(f"Streamed {token_count} tokens, {len(full_text)} chars total")
                     await websocket.send_json({
                         "type": "preview_token",
                         "text": word_buffer,
@@ -96,6 +112,7 @@ class PreviewStreamer:
             
             # Send any remaining text
             if word_buffer:
+                log_step(logger, "Sending remaining buffer text")
                 await websocket.send_json({
                     "type": "preview_token",
                     "text": word_buffer,
@@ -103,18 +120,22 @@ class PreviewStreamer:
                 })
             
             # Send preview complete
+            log_step(logger, "Sending preview_complete event")
             await websocket.send_json({
                 "type": "preview_complete",
                 "phase": phase,
                 "total_length": len(full_text)
             })
             
-            logger.info(f"[PreviewStreamer] Preview complete ({len(full_text)} chars)")
+            log_success(logger, f"Preview complete: {len(full_text)} chars, {token_count} tokens")
+            log_function_exit(logger, "stream_preview")
             
         except asyncio.CancelledError:
-            logger.info("[PreviewStreamer] Preview cancelled (real response arrived)")
+            log_warning(logger, "Preview cancelled (real response arrived)")
+            log_function_exit(logger, "stream_preview", result="CANCELLED")
         except Exception as e:
-            logger.warning(f"[PreviewStreamer] Preview streaming failed: {e}")
+            log_error(logger, "Preview streaming failed", e)
+            log_function_exit(logger, "stream_preview", result="ERROR")
             # Don't raise - this is just a preview, failure is OK
     
     @staticmethod
@@ -129,36 +150,53 @@ class PreviewStreamer:
         
         Returns the task so it can be cancelled if real response arrives quickly.
         """
+        log_function_entry(logger, "start_preview_task",
+                          phase=phase,
+                          has_websocket=websocket is not None,
+                          has_client=llm_client is not None)
+        
         if not websocket:
-            logger.info("[PreviewStreamer] No WebSocket, skipping preview")
+            log_warning(logger, "No WebSocket, skipping preview")
+            log_function_exit(logger, "start_preview_task", result=None)
             return None
         
         if not llm_client:
-            logger.info("[PreviewStreamer] No LLM client, skipping preview")
+            log_warning(logger, "No LLM client, skipping preview")
+            log_function_exit(logger, "start_preview_task", result=None)
             return None
         
         try:
+            log_step(logger, "Creating preview task")
             task = asyncio.create_task(
                 PreviewStreamer.stream_preview(
                     llm_client, messages, websocket, phase
                 )
             )
-            logger.info("[PreviewStreamer] Preview task started")
+            log_success(logger, "Preview task created successfully")
+            log_function_exit(logger, "start_preview_task", result="TASK_CREATED")
             return task
         except Exception as e:
-            logger.warning(f"[PreviewStreamer] Failed to start preview task: {e}")
+            log_error(logger, "Failed to start preview task", e)
+            log_function_exit(logger, "start_preview_task", result=None)
             return None
     
     @staticmethod
     async def cancel_preview(task: Optional[asyncio.Task]) -> None:
         """Cancel preview task if it's still running"""
+        log_function_entry(logger, "cancel_preview", task_present=task is not None)
+        
         if task and not task.done():
+            log_step(logger, "Cancelling preview task")
             task.cancel()
             try:
                 await task
             except asyncio.CancelledError:
                 pass
-            logger.info("[PreviewStreamer] Preview task cancelled")
+            log_success(logger, "Preview task cancelled successfully")
+        else:
+            log_step(logger, "Preview task already done or None, no cancellation needed")
+        
+        log_function_exit(logger, "cancel_preview")
 
 
 class PreviewConfig:

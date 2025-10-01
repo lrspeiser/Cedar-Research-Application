@@ -11,13 +11,9 @@ import traceback
 from typing import Optional
 from fastapi import WebSocket, FastAPI
 from cedar_orchestrator.orchestrator import ThinkerOrchestrator
+from cedar_orchestrator.logging_config import get_logger, log_function_entry, log_function_exit, log_step, log_success, log_error, log_warning
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class WSDeps:
     """Dependencies container for WebSocket chat"""
@@ -34,21 +30,26 @@ def register_ws_chat(app: FastAPI, deps: WSDeps, route_path: str = "/ws/chat/{pr
         deps: Dependencies container
         route_path: WebSocket route path pattern
     """
+    log_function_entry(logger, "register_ws_chat", route_path=route_path)
     
     # Get API key from environment
     api_key = os.getenv("OPENAI_API_KEY") or os.getenv("CEDARPY_OPENAI_API_KEY") or ""
     
     if not api_key:
-        logger.warning("No OpenAI API key found. Some features will be limited.")
+        log_warning(logger, "No OpenAI API key found", "Some features will be limited")
         print("[startup] WARNING: No OpenAI API key configured. LLM features will be limited.")
     else:
+        log_success(logger, "OpenAI API key configured", "Full orchestration enabled")
         print("[startup] OpenAI API key configured. Full orchestration enabled.")
     
     # Create the advanced orchestrator
+    log_step(logger, "Creating ThinkerOrchestrator instance")
     orchestrator = ThinkerOrchestrator(api_key)
+    log_success(logger, "ThinkerOrchestrator created")
     
     # Register route WITH project_id for compatibility
     if "{project_id}" in route_path:
+        log_step(logger, f"Registering WebSocket route: {route_path}")
         @app.websocket(route_path)
         async def ws_chat_with_project(websocket: WebSocket, project_id: int):
             """WebSocket endpoint with project context"""
@@ -56,15 +57,17 @@ def register_ws_chat(app: FastAPI, deps: WSDeps, route_path: str = "/ws/chat/{pr
     
     # Also register a simple route WITHOUT project_id
     simple_path = "/ws/chat"
+    log_step(logger, f"Registering WebSocket route: {simple_path}")
     @app.websocket(simple_path)
     async def ws_chat_simple(websocket: WebSocket):
         """WebSocket endpoint without project context"""
         await handle_ws_chat(websocket, orchestrator, None, deps)
     
-    logger.info(f"Registered advanced WebSocket routes: {route_path} and {simple_path}")
+    log_success(logger, f"WebSocket routes registered: {route_path} and {simple_path}")
     print(f"[startup] Advanced thinker-orchestrator WebSocket routes registered")
     print(f"[startup]   - {route_path} (with project context)")
     print(f"[startup]   - {simple_path} (general chat)")
+    log_function_exit(logger, "register_ws_chat")
 
 async def handle_ws_chat(
     websocket: WebSocket, 
@@ -81,25 +84,33 @@ async def handle_ws_chat(
         project_id: Optional project ID for context
         deps: Dependencies container
     """
+    log_function_entry(logger, "handle_ws_chat", project_id=project_id)
+    
     try:
+        log_step(logger, "Accepting WebSocket connection")
         await websocket.accept()
+        log_success(logger, "WebSocket connection accepted")
         
         # Import chat manager for persistence
+        log_step(logger, "Initializing chat manager")
         from cedar_app.utils.chat_persistence import get_chat_manager
         chat_manager = get_chat_manager()
         current_chat_number = None
-        
-        logger.info(f"WebSocket connected: project_id={project_id}")
+        log_success(logger, f"Chat manager initialized, project_id={project_id}")
         
         # Main message loop
+        log_step(logger, "Entering WebSocket message loop")
         while True:
             try:
                 # Receive message from client
+                log_step(logger, "Waiting for message from client")
                 data = await websocket.receive_json()
+                log_success(logger, "Message received from client", f"data keys: {list(data.keys())}")
                 
                 # Support both formats: {"type": "message"} and {"action": "chat"}
                 message_type = data.get("type")
                 action = data.get("action")
+                log_step(logger, f"Message type: {message_type}, action: {action}")
                 
                 if message_type == "message" or action == "chat":
                     content = data.get("content", "").strip()
@@ -107,6 +118,7 @@ async def handle_ws_chat(
                     chat_number = data.get("chat_number", current_chat_number)
                     file_id = data.get("file_id")
                     dataset_id = data.get("dataset_id")
+                    log_step(logger, f"Processing chat message", f"content_length={len(content)}, chat_number={chat_number}")
                     
                     # Create or get chat
                     if not chat_number and project_id:
@@ -130,24 +142,26 @@ async def handle_ws_chat(
                         current_chat_number = chat_number
                         logger.info(f"[WebSocket] Using existing chat #{chat_number}")
                     
-                    logger.info("*"*80)
-                    logger.info(f"[WebSocket] New message received from client")
-                    logger.info(f"[WebSocket] Project ID: {project_id}, Chat #{chat_number}")
-                    logger.info(f"[WebSocket] Message content: {content}")
-                    logger.info(f"[WebSocket] Message length: {len(content)} characters")
-                    logger.info("*"*80)
+                    logger.info("="*80)
+                    log_step(logger, "Processing new user message")
+                    log_step(logger, f"Project ID: {project_id}, Chat #{chat_number}")
+                    log_step(logger, f"Message: {content[:200]}..." if len(content) > 200 else f"Message: {content}")
+                    log_step(logger, f"Length: {len(content)} characters")
+                    logger.info("="*80)
                     
                     if not content:
-                        logger.warning("[WebSocket] Empty message received, sending error")
+                        log_warning(logger, "Empty message received")
                         await websocket.send_json({
                             "type": "error",
                             "error": "Empty message received",
                             "content": "Empty message received"  # Keep both for backward compatibility
                         })
+                        log_step(logger, "Error event sent to client")
                         continue
                     
                     # Save user message to chat
                     if project_id and chat_number:
+                        log_step(logger, "Saving user message to chat")
                         chat_manager.add_message(
                             project_id=project_id,
                             branch_id=branch_id,
@@ -156,8 +170,9 @@ async def handle_ws_chat(
                             content=content
                         )
                         chat_manager.set_chat_status(project_id, branch_id, chat_number, "processing")
+                        log_success(logger, "User message saved and status set to processing")
                     
-                    logger.info(f"[WebSocket] Initiating orchestration for: {content[:100]}...")
+                    log_step(logger, f"Initiating orchestration")
                     orchestration_start = time.time()
                     
                     # Create a wrapper to capture messages sent to WebSocket

@@ -18,47 +18,66 @@ from fastapi import WebSocket
 
 from .agents import AgentResult
 from .preview_streamer import PreviewStreamer, PreviewConfig
+from .logging_config import get_logger, log_function_entry, log_function_exit, log_step, log_success, log_error, log_warning
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class ChiefAgent:
     """Chief Agent that reviews all sub-agent responses and makes final decisions"""
     
     def __init__(self, llm_client: Optional[AsyncOpenAI]):
+        log_function_entry(logger, "ChiefAgent.__init__", llm_client_present=llm_client is not None)
         self.llm_client = llm_client
+        log_success(logger, "ChiefAgent initialized", f"LLM client: {'present' if llm_client else 'MISSING'}")
+        log_function_exit(logger, "ChiefAgent.__init__")
         
         
     async def review_and_decide(self, user_query: str, agent_results: List[AgentResult], iteration: int = 0, max_iterations: int = 10, previous_context: str = "", resources: Optional[Dict[str, Any]] = None, conversation_history: Optional[str] = None, ws: Optional[WebSocket] = None, run_logs: Optional[List[str]] = None, thread_id: Optional[int] = None) -> Dict[str, Any]:
         """Review all agent results and make the final decision on what to do next.
         resources: Optional index of project assets (files, code, databases, notes, images).
         thread_id: Thread ID for WebSocket event correlation (will be converted to string for caching)."""
+        log_function_entry(logger, "review_and_decide", 
+                          query=user_query[:100],
+                          agent_results_count=len(agent_results),
+                          iteration=iteration,
+                          max_iterations=max_iterations,
+                          has_websocket=ws is not None,
+                          thread_id=thread_id)
+        
         start_time = time.time()
         remaining_loops = max_iterations - iteration - 1
-        logger.info(f"[ChiefAgent] Starting review of {len(agent_results)} agent results (iteration {iteration}/{max_iterations}, {remaining_loops} loops remaining)")
+        log_step(logger, f"Starting review (iteration {iteration}/{max_iterations}, {remaining_loops} loops remaining)")
         
         if not self.llm_client:
+            log_error(logger, "No LLM client available")
             raise RuntimeError("ChiefAgent requires LLM client - cannot operate without it")
         
         try:
             # Get model from environment
             model = os.getenv("CEDARPY_OPENAI_MODEL") or os.getenv("OPENAI_API_KEY_MODEL") or "gpt-5"
-            logger.info(f"[ChiefAgent] Using LLM for decision making with model: {model}")
+            log_step(logger, f"Using LLM model: {model}")
             
             # Stream thinking start to UI
             # Differentiate between planning (no results) and synthesis (has results)
+            log_step(logger, "Sending thinking/synthesis start event to UI")
             try:
                 if ws is not None:
                     event_type = "thinking_start" if not agent_results else "synthesis_start"
                     phase = "Planning" if not agent_results else "Synthesis"
-                    await ws.send_json({
+                    event_data = {
                         "type": event_type,
                         "phase": phase,
                         "model": model,
                         "iteration": iteration + 1
-                    })
-            except Exception:
-                pass
+                    }
+                    log_step(logger, f"Sending WebSocket event: {event_type}", f"phase={phase}")
+                    await ws.send_json(event_data)
+                    log_success(logger, "WebSocket event sent successfully")
+                else:
+                    log_warning(logger, "No WebSocket available, skipping UI event")
+            except Exception as e:
+                log_error(logger, "Failed to send WebSocket event", e)
             
             # Import prompt templates
             from .prompts.chief_prompts import get_system_prompt, get_validation_schema
@@ -110,34 +129,44 @@ class ChiefAgent:
             messages.append({"role": "user", "content": f"User Query: {user_query}"})
             
             # Start preview streaming in parallel (non-blocking)
+            log_step(logger, "Checking preview streaming configuration")
             preview_task = None
-            logger.info(f"[ChiefAgent] Preview enabled: {PreviewConfig.is_enabled()}, WS: {ws is not None}")
-            if PreviewConfig.is_enabled() and ws:
+            preview_enabled = PreviewConfig.is_enabled()
+            has_ws = ws is not None
+            log_step(logger, f"Preview enabled: {preview_enabled}, WebSocket: {has_ws}")
+            
+            if preview_enabled and has_ws:
                 phase = "thinking" if not agent_results else "synthesis"
-                logger.info(f"[ChiefAgent] Starting preview task for {phase} phase")
+                log_step(logger, f"Starting preview task for {phase} phase")
                 preview_task = PreviewStreamer.start_preview_task(
                     self.llm_client, messages, ws, phase
                 )
-                logger.info(f"[ChiefAgent] Preview task created: {preview_task is not None}")
+                if preview_task:
+                    log_success(logger, f"Preview task started for {phase} phase")
+                else:
+                    log_warning(logger, "Preview task creation returned None")
             else:
-                logger.info(f"[ChiefAgent] Preview NOT started - enabled: {PreviewConfig.is_enabled()}, ws: {ws is not None}")
+                log_warning(logger, f"Preview NOT started", f"enabled={preview_enabled}, ws={has_ws}")
             
             # Call LLM (real model)
-            logger.info(f"[ChiefAgent] Calling LLM with {len(messages)} messages")
+            log_step(logger, f"Calling LLM with {len(messages)} messages")
             # Note: gpt-5 only supports temperature=1 (default), don't set it
             response = await self.llm_client.chat.completions.create(
                 model=model,
                 messages=messages,
                 max_completion_tokens=50000
             )
+            log_success(logger, "LLM response received")
             
             # Cancel preview once real response arrives
             if preview_task:
+                log_step(logger, "Cancelling preview task")
                 await PreviewStreamer.cancel_preview(preview_task)
+                log_success(logger, "Preview task cancelled")
             
             raw_content = response.choices[0].message.content
-            logger.info(f"[ChiefAgent] Got response: {len(raw_content)} chars")
-            logger.info(f"[ChiefAgent] Raw JSON response:\n{raw_content}")
+            log_step(logger, f"Got response: {len(raw_content)} chars")
+            logger.debug(f"Raw JSON response:\n{raw_content[:500]}...")
             
             # Try to parse JSON
             def _validate_and_normalize(data: dict) -> dict:
