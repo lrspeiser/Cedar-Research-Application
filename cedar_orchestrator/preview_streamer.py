@@ -191,24 +191,24 @@ Do NOT return JSON. Just explain your synthesis in plain English. Do not repeat 
                     logger.debug(f"First delta content received after {chunk_count} chunks")
                 
                 content = delta.content
-                    
-                    full_text += content
-                    word_buffer += content
-                    
-                    # Send complete words (split on spaces)
-                    if ' ' in word_buffer or '\n' in word_buffer:
-                        token_count += 1
-                        if token_count % 10 == 0:  # Log every 10 tokens
-                            logger.debug(f"Streamed {token_count} tokens, {len(full_text)} chars total")
-                        await websocket.send_json({
-                            "type": "preview_token",
-                            "text": word_buffer,
-                            "phase": phase
-                        })
-                        word_buffer = ""
-                    
-                    # Small delay for readability (streaming effect)
-                    await asyncio.sleep(0.01)
+                
+                full_text += content
+                word_buffer += content
+                
+                # Send complete words (split on spaces)
+                if ' ' in word_buffer or '\n' in word_buffer:
+                    token_count += 1
+                    if token_count % 10 == 0:  # Log every 10 tokens
+                        logger.debug(f"Streamed {token_count} tokens, {len(full_text)} chars total")
+                    await websocket.send_json({
+                        "type": "preview_token",
+                        "text": word_buffer,
+                        "phase": phase
+                    })
+                    word_buffer = ""
+                
+                # Small delay for readability (streaming effect)
+                await asyncio.sleep(0.01)
             
             log_step(logger, f"Stream ended: {chunk_count} chunks, {delta_count} deltas, {token_count} tokens sent")
             
