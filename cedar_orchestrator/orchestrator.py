@@ -155,7 +155,7 @@ class ThinkerOrchestrator:
                 await self._send_clarification(websocket, planning_decision)
                 return
         
-        # Phase 2: Agent Execution (iteration 0) or use previous results (iteration 1+)
+        # Phase 2: Agent Execution
         valid_results = []
         had_errors = False
         
@@ -163,36 +163,47 @@ class ThinkerOrchestrator:
         if thread_id and StopHandler.should_stop(thread_id):
             logger.info(f"[ORCHESTRATOR] User stop detected before Phase 2")
             chief_decision = await StopHandler.handle_user_stop(
-                thread_id, message, [], run_logs, websocket
+                thread_id, message, previous_results or [], run_logs, websocket
             )
-            await self._send_final_answer(websocket, chief_decision, [], iteration, orchestration_start)
+            await self._send_final_answer(websocket, chief_decision, previous_results or [], iteration, orchestration_start)
             StopHandler.clear_stop(thread_id)
             return
         
+        # Determine which agents to execute
+        agent_tasks_list = []
+        
         if iteration == 0:
-            logger.info("[ORCHESTRATOR] PHASE 2: Agent Execution")
-            
-            # Parse agent tasks from Chief Agent
+            # First iteration: use planning decision from Phase 1
+            logger.info("[ORCHESTRATOR] PHASE 2: Agent Execution (from planning)")
             agent_tasks_list = planning_decision.get('agent_tasks', []) if isinstance(planning_decision.get('agent_tasks'), list) else []
-            
-            if agent_tasks_list:
-                # Select and dispatch agents
-                agents, agent_task_map = AgentDispatcher.select_agents(agent_tasks_list, self)
-                
-                if agents:
-                    results = await AgentDispatcher.dispatch_agents(
-                        agents, agent_task_map, message, iteration,
-                        project_id, branch_id, file_id, db_session
-                    )
-                    
-                    # Process results
-                    valid_results, had_errors = await AgentResultProcessor.process_results(
-                        results, agents, message, websocket, run_logs,
-                        db_session, project_id, branch_id
-                    )
         else:
-            logger.info(f"[ORCHESTRATOR] PHASE 2 SKIPPED: Using previous results (iteration {iteration})")
-            valid_results = previous_results or []
+            # Subsequent iterations: previous_results contains the agent_tasks from the loop decision
+            # These are stored in the special __loop_agent_tasks__ attribute
+            logger.info(f"[ORCHESTRATOR] PHASE 2: Agent Execution (from loop iteration {iteration})")
+            if previous_results and hasattr(previous_results, '__loop_agent_tasks__'):
+                agent_tasks_list = getattr(previous_results, '__loop_agent_tasks__', [])
+                logger.info(f"[ORCHESTRATOR] Found {len(agent_tasks_list)} agent tasks from loop decision")
+            else:
+                # No new agents to execute - just pass through previous results to synthesis
+                logger.info(f"[ORCHESTRATOR] No new agents to execute, using previous results")
+                valid_results = previous_results or []
+        
+        # Execute agents if we have tasks to dispatch
+        if agent_tasks_list:
+            # Select and dispatch agents
+            agents, agent_task_map = AgentDispatcher.select_agents(agent_tasks_list, self)
+            
+            if agents:
+                results = await AgentDispatcher.dispatch_agents(
+                    agents, agent_task_map, message, iteration,
+                    project_id, branch_id, file_id, db_session
+                )
+                
+                # Process results
+                valid_results, had_errors = await AgentResultProcessor.process_results(
+                    results, agents, message, websocket, run_logs,
+                    db_session, project_id, branch_id
+                )
         
         # Phase 3: Chief Agent Synthesis
         logger.info("[ORCHESTRATOR] PHASE 3: Chief Agent Synthesis")
@@ -243,6 +254,8 @@ class ThinkerOrchestrator:
         
         # Handle iteration request
         allowed_loops = 3 if had_errors else self.MAX_ITERATIONS
+        
+        # Check if Chief Agent wants to loop AND we have iterations remaining
         if chief_decision.get('decision') == 'loop' and iteration < allowed_loops - 1:
             await self._handle_iteration(
                 websocket, chief_decision, iteration, message,
@@ -250,6 +263,43 @@ class ThinkerOrchestrator:
                 db_session, conversation_history, file_id, dataset_id
             )
             return
+        
+        # If Chief Agent wanted to loop but we're at the limit, explain that
+        if chief_decision.get('decision') == 'loop' and iteration >= allowed_loops - 1:
+            logger.info(f"[ORCHESTRATOR] Loop requested but at iteration limit ({iteration+1}/{allowed_loops})")
+            # Override the decision to provide a finalization message
+            agent_tasks = chief_decision.get('agent_tasks', [])
+            additional_guidance = chief_decision.get('additional_guidance', '')
+            
+            # Build a finalization message that includes what still needs to be done
+            finalization_parts = []
+            finalization_parts.append("**⚠️ Iteration Limit Reached**\n\n")
+            finalization_parts.append(f"I've completed {iteration + 1} iteration(s) but need more to fully finish your request.\n\n")
+            
+            # Show what was accomplished
+            finalization_parts.append("**What I've Accomplished:**\n")
+            for i, result in enumerate(valid_results, 1):
+                agent_name = getattr(result, 'display_name', 'Unknown Agent')
+                summary = getattr(result, 'summary', 'Completed analysis')
+                finalization_parts.append(f"{i}. {agent_name}: {summary}\n")
+            
+            # Show what still needs to be done
+            if agent_tasks or additional_guidance:
+                finalization_parts.append("\n**What Still Needs to Be Done:**\n")
+                if additional_guidance:
+                    finalization_parts.append(f"{additional_guidance}\n\n")
+                if agent_tasks:
+                    for task in agent_tasks:
+                        agent = task.get('agent', 'Unknown')
+                        task_desc = task.get('task', 'Additional work')
+                        finalization_parts.append(f"- **{agent}**: {task_desc[:200]}{'...' if len(task_desc) > 200 else ''}\n")
+            
+            finalization_parts.append("\n**Next Steps:**\n")
+            finalization_parts.append("- Reply with 'continue' to proceed with the remaining work\n")
+            finalization_parts.append("- Or, review the results above and let me know if you'd like to adjust the approach\n")
+            
+            # Override the final_answer with our finalization message
+            chief_decision['final_answer'] = "".join(finalization_parts)
         
         # Send final answer
         await self._send_final_answer(
@@ -262,15 +312,57 @@ class ThinkerOrchestrator:
             StopHandler.clear_stop(thread_id)
     
     async def _send_max_iterations_message(self, websocket: WebSocket, previous_results: List[AgentResult]):
-        """Send message when max iterations reached"""
+        """Send message when max iterations reached with progress summary"""
         # Stop all spinners
         await StopHandler.send_stop_signals(websocket)
         
-        text = f"**Note:** Maximum iterations ({self.MAX_ITERATIONS}) reached.\n\n"
+        # Build comprehensive summary of what was accomplished
+        summary_parts = []
+        summary_parts.append(f"**⚠️ Maximum Iterations Reached ({self.MAX_ITERATIONS}/{self.MAX_ITERATIONS})**\n")
+        summary_parts.append("I've reached the iteration limit while working on your request. Here's what was accomplished:\n")
+        
         if previous_results:
-            text += previous_results[0].result if previous_results else 'Processing limit reached.'
+            summary_parts.append("\n**Completed Work:**\n")
+            for i, result in enumerate(previous_results, 1):
+                agent_name = getattr(result, 'display_name', 'Unknown Agent')
+                confidence = getattr(result, 'confidence', 0.0)
+                summary = getattr(result, 'summary', 'No summary available')
+                summary_parts.append(f"{i}. **{agent_name}** (confidence: {confidence:.2f})")
+                summary_parts.append(f"   {summary}\n")
+            
+            # Include the most recent result content
+            summary_parts.append("\n**Latest Result:**\n")
+            latest_result = previous_results[-1] if previous_results else None
+            if latest_result:
+                result_text = getattr(latest_result, 'result', '')
+                # Truncate if too long
+                if len(result_text) > 1000:
+                    result_text = result_text[:1000] + "...\n\n_(truncated for brevity)_"
+                summary_parts.append(result_text)
         else:
-            text += 'Processing limit reached. Please try a more specific request.'
+            summary_parts.append("\nNo agents completed before reaching the iteration limit.")
+        
+        summary_parts.append("\n\n**What Still Needs to Be Done:**\n")
+        # Check if there are pending agent tasks
+        if previous_results and hasattr(previous_results, '__loop_agent_tasks__'):
+            pending_tasks = getattr(previous_results, '__loop_agent_tasks__', [])
+            if pending_tasks:
+                summary_parts.append("The following agent tasks were planned but not executed:\n")
+                for task in pending_tasks:
+                    agent = task.get('agent', 'Unknown')
+                    task_desc = task.get('task', 'No description')
+                    summary_parts.append(f"- **{agent}**: {task_desc[:200]}{'...' if len(task_desc) > 200 else ''}\n")
+            else:
+                summary_parts.append("All planned tasks were attempted, but more refinement may be needed.\n")
+        else:
+            summary_parts.append("Additional iteration(s) may have been needed to fully complete the request.\n")
+        
+        summary_parts.append("\n**Next Steps:**\n")
+        summary_parts.append("- Review the work completed above\n")
+        summary_parts.append("- If you'd like me to continue, reply with 'continue' or ask me to proceed with the next steps\n")
+        summary_parts.append("- Or, refine your request and I'll start fresh with a more targeted approach\n")
+        
+        text = "".join(summary_parts)
         
         await websocket.send_json({
             "type": "message",
@@ -310,8 +402,10 @@ Please provide this information so I can better assist you."""
         """Handle iteration loop request"""
         guidance = decision.get('additional_guidance', '').strip()
         thinking = decision.get('thinking_process', 'Analyzing how to improve...')
+        agent_tasks = decision.get('agent_tasks', [])
         
         logger.info(f"[ORCHESTRATOR] Chief Agent requesting iteration {iteration + 1}")
+        logger.info(f"[ORCHESTRATOR] Loop decision includes {len(agent_tasks)} agent tasks")
         
         await websocket.send_json({
             "type": "agent_result",
@@ -329,9 +423,21 @@ Please provide this information so I can better assist you."""
         
         await asyncio.sleep(0.3)
         
-        # Recurse with guidance
+        # CRITICAL: Pass the new agent_tasks from the loop decision to the next iteration
+        # We attach them to valid_results as a special attribute so Phase 2 can find them
+        if agent_tasks:
+            # Create a list-like object that holds both the results and the new agent tasks
+            results_with_tasks = valid_results if isinstance(valid_results, list) else []
+            # Attach the agent_tasks as a special attribute
+            setattr(results_with_tasks, '__loop_agent_tasks__', agent_tasks)
+            logger.info(f"[ORCHESTRATOR] Attached {len(agent_tasks)} agent tasks to results for next iteration")
+            next_results = results_with_tasks
+        else:
+            next_results = valid_results
+        
+        # Recurse with guidance and new agent tasks
         await self.orchestrate(
-            message, websocket, iteration + 1, valid_results,
+            message, websocket, iteration + 1, next_results,
             project_id, branch_id, thread_id, db_session,
             conversation_history, file_id, dataset_id
         )
