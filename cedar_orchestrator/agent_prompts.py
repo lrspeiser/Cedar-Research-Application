@@ -82,116 +82,88 @@ def extract_prompt_from_agent(file_path: str, class_name: str, method_name: str 
 
 
 def get_chief_agent_prompt() -> str:
-    """Extract Chief Agent prompt from orchestrator.py
-    ChiefAgent builds prompt from multiple parts: system_header + sample_json + examples + agent_guide
+    """Build Chief Agent prompt from the live prompt module (no hardcoded copies)
+    Uses cedar_orchestrator.prompts.chief_prompts to assemble the same content the runtime uses.
     """
-    file_path = ORCHESTRATOR_DIR / "orchestrator.py"
-    
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-        
-        # Find ChiefAgent class
-        class_match = re.search(r'class ChiefAgent[:\(]', content)
-        if not class_match:
-            return "[Could not find ChiefAgent class]"
-        
-        class_start = class_match.start()
-        
-        # Extract system_header
-        system_header_pattern = r'system_header\s*=\s*f?(""".*?""")'
-        header_match = re.search(system_header_pattern, content[class_start:], re.DOTALL)
-        system_header = ""
-        if header_match:
-            system_header = header_match.group(1).strip('"""').strip()
-        
-        # Extract sample_json (there are two versions, show both)
-        sample_json_pattern = r'sample_json\s*=\s*(""".*?""")'
-        json_matches = list(re.finditer(sample_json_pattern, content[class_start:], re.DOTALL))
-        sample_jsons = []
-        for match in json_matches:
-            sample_jsons.append(match.group(1).strip('"""').strip())
-        
-        # Extract examples
-        examples_pattern = r'examples\s*=\s*(""".*?""")'
-        examples_match = re.search(examples_pattern, content[class_start:], re.DOTALL)
-        examples = ""
-        if examples_match:
-            examples = examples_match.group(1).strip('"""').strip()
-        
-        # Extract agent_guide
-        agent_guide_pattern = r'agent_guide\s*=\s*(""".*?""")'
-        guide_match = re.search(agent_guide_pattern, content[class_start:], re.DOTALL)
-        agent_guide = ""
-        if guide_match:
-            agent_guide = guide_match.group(1).strip('"""').strip()
-        
-        # Concatenate all parts (showing both JSON schema versions)
-        full_prompt = system_header
-        if sample_jsons:
-            full_prompt += "\n\n[JSON SCHEMA - SYNTHESIS PHASE (with agent results):]\n" + sample_jsons[0]
-            if len(sample_jsons) > 1:
-                full_prompt += "\n\n[JSON SCHEMA - PLANNING PHASE (no agent results yet):]\n" + sample_jsons[1]
+        # Import lazily to avoid circular imports at module load time
+        from cedar_orchestrator.prompts.chief_prompts import (
+            get_system_header,
+            get_planning_schema,
+            get_synthesis_schema,
+            get_routing_examples,
+            get_agent_capabilities,
+        )
+
+        # Use representative values for iteration context shown in the Agents page
+        header = get_system_header(iteration=0, max_iterations=10, remaining_loops=9)
+        planning = get_planning_schema()
+        synthesis = get_synthesis_schema()
+        examples = get_routing_examples()
+        capabilities = get_agent_capabilities()
+
+        # Combine header + both schemas + examples + capabilities
+        full_prompt = header
+        full_prompt += "\n\n[JSON SCHEMA - PLANNING PHASE (no agent results yet):]\n" + planning
+        full_prompt += "\n\n[JSON SCHEMA - SYNTHESIS PHASE (with agent results):]\n" + synthesis
         full_prompt += "\n" + examples
-        full_prompt += "\n" + agent_guide
-        
+        full_prompt += "\n" + capabilities
         return full_prompt
-        
     except Exception as e:
         return f"[Error extracting ChiefAgent prompt: {e}]"
 
 
 def get_code_agent_prompt() -> str:
-    """Extract CodeAgent prompt from execution_agents.py"""
-    file_path = ORCHESTRATOR_DIR / "execution_agents.py"
+    """Extract CodeAgent prompt from agents/code_agent.py"""
+    file_path = ORCHESTRATOR_DIR / "agents" / "code_agent.py"
     return extract_prompt_from_agent(str(file_path), "CodeAgent", "process")
 
 
 def get_shell_agent_prompt() -> str:
-    """Extract ShellAgent prompt from execution_agents.py"""
-    file_path = ORCHESTRATOR_DIR / "execution_agents.py"
+    """Extract ShellAgent prompt from agents/shell_agent.py"""
+    file_path = ORCHESTRATOR_DIR / "agents" / "shell_agent.py"
     return extract_prompt_from_agent(str(file_path), "ShellAgent", "process")
 
 
 def get_sql_agent_prompt() -> str:
-    """Extract SQLAgent prompt from execution_agents.py"""
-    file_path = ORCHESTRATOR_DIR / "execution_agents.py"
+    """Extract SQLAgent prompt from agents/sql_agent.py"""
+    file_path = ORCHESTRATOR_DIR / "agents" / "sql_agent.py"
     return extract_prompt_from_agent(str(file_path), "SQLAgent", "process")
 
 
 def get_formula_agent_prompt() -> str:
-    """Extract FormulaAgent prompt from specialized_agents.py"""
-    file_path = ORCHESTRATOR_DIR / "specialized_agents.py"
+    """Extract FormulaAgent prompt from agents/formula_agent.py"""
+    file_path = ORCHESTRATOR_DIR / "agents" / "formula_agent.py"
     return extract_prompt_from_agent(str(file_path), "FormulaAgent", "process")
 
 
 def get_research_agent_prompt() -> str:
-    """Extract ResearchAgent prompt from specialized_agents.py"""
-    file_path = ORCHESTRATOR_DIR / "specialized_agents.py"
+    """Extract ResearchAgent prompt from agents/research_agent.py"""
+    file_path = ORCHESTRATOR_DIR / "agents" / "research_agent.py"
     return extract_prompt_from_agent(str(file_path), "ResearchAgent", "process")
 
 
 def get_strategy_agent_prompt() -> str:
-    """Extract StrategyAgent prompt from specialized_agents.py"""
-    file_path = ORCHESTRATOR_DIR / "specialized_agents.py"
+    """Extract StrategyAgent prompt from agents/strategy_agent.py"""
+    file_path = ORCHESTRATOR_DIR / "agents" / "strategy_agent.py"
     return extract_prompt_from_agent(str(file_path), "StrategyAgent", "process")
 
 
 def get_data_agent_prompt() -> str:
-    """Extract DataAgent prompt from specialized_agents.py"""
-    file_path = ORCHESTRATOR_DIR / "specialized_agents.py"
+    """Extract DataAgent prompt from agents/data_agent.py"""
+    file_path = ORCHESTRATOR_DIR / "agents" / "data_agent.py"
     return extract_prompt_from_agent(str(file_path), "DataAgent", "process")
 
 
 def get_notes_agent_prompt() -> str:
-    """Extract NotesAgent prompt from specialized_agents.py"""
-    file_path = ORCHESTRATOR_DIR / "specialized_agents.py"
+    """Extract NotesAgent prompt from agents/notes_agent.py"""
+    file_path = ORCHESTRATOR_DIR / "agents" / "notes_agent.py"
     return extract_prompt_from_agent(str(file_path), "NotesAgent", "process")
 
 
 def get_file_agent_prompt() -> str:
-    """Extract FileAgent prompt from specialized_agents.py"""
-    file_path = ORCHESTRATOR_DIR / "specialized_agents.py"
+    """Extract FileAgent prompt from agents/file_agent.py"""
+    file_path = ORCHESTRATOR_DIR / "agents" / "file_agent.py"
     # FileAgent uses LLM for optional description generation
     prompt = extract_prompt_from_agent(str(file_path), "FileAgent", "process")
     if "[No system prompt found" in prompt:
@@ -206,8 +178,8 @@ def get_image_creation_agent_prompt() -> str:
 
 
 def get_image_analysis_agent_prompt() -> str:
-    """Extract ImageAnalysisAgent prompt from specialized_agents.py"""
-    file_path = ORCHESTRATOR_DIR / "specialized_agents.py"
+    """Extract ImageAnalysisAgent prompt from agents/image_analysis_agent.py"""
+    file_path = ORCHESTRATOR_DIR / "agents" / "image_analysis_agent.py"
     return extract_prompt_from_agent(str(file_path), "ImageAnalysisAgent", "process")
 
 
