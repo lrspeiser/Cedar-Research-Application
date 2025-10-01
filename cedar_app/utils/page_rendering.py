@@ -722,6 +722,8 @@ def project_page_html(
       <div class=\"muted small\">Project ID: {project.id}</div>
       <div style=\"height:10px\"></div>
       <div>Branches: {tabs_html}</div>
+      { ("<div class='small' style='margin-top:8px; padding:8px; background:#ecfdf5; border:1px solid #10b981; border-radius:6px'>Last uploaded: " + escape(selected_file.display_name) + "</div>") if (msg and msg.strip() == 'File uploaded' and selected_file) else "" }
+      { ("<div class='small' style='margin-top:6px'><strong>AI Title:</strong> " + (escape(selected_file.ai_title) if (selected_file and getattr(selected_file, 'ai_title', None)) else "(none)") + "</div>") if selected_file else "" }
       
       <script>
       function confirmProjectDelete(projectName) {{
@@ -744,8 +746,8 @@ def project_page_html(
       <div id="page-root" style="min-height:100vh; display:flex; flex-direction:column">
         <div style="margin-top:8px; flex:1; min-height:0; display:flex; flex-direction:column">
           <div class="tabs" data-pane="main">
-            <a href="#" class="tab active" data-target="main-chat">Chat</a>
-            <a href="#" class="tab" data-target="main-files">Files</a>
+            <a href="#" class="tab{ ' active' if not (msg and msg.strip() == 'File uploaded') else '' }" data-target="main-chat">Chat</a>
+            <a href="#" class="tab{ ' active' if (msg and msg.strip() == 'File uploaded') else '' }" data-target="main-files">Files</a>
             <a href="#" class="tab" data-target="main-images">Images</a>
             <a href="#" class="tab" data-target="main-history">History</a>
             <a href="#" class="tab" data-target="main-code">Code</a>
@@ -753,7 +755,7 @@ def project_page_html(
             <a href="#" class="tab" data-target="main-notes">Notes</a>
           </div>
           <div class="tab-panels" style="flex:1; min-height:0">
-            <div id="main-chat" class="panel" style="height:100%">
+            <div id="main-chat" class="panel{ ' hidden' if (msg and msg.strip() == 'File uploaded') else '' }" style="height:100%">
                 <h3>Chat <span id="chat-number-display" style="display:none">- <span id="chat-number"></span></span>
                   <a href="#" class="small" style="margin-left:12px" onclick="startNewChat({project.id}, {current.id}); return false;">Start New Chat</a>
                 </h3>
@@ -783,14 +785,16 @@ def project_page_html(
               <div id="main-history" class="panel hidden">
                 {history_panel_html}
               </div>
-              <div id="main-files" class="panel hidden">
+              <div id="main-files" class="panel{ '' if (msg and msg.strip() == 'File uploaded') else ' hidden' }">
                 <div class="card" style="padding:12px">
                   <h3 style='margin-bottom:6px'>Files</h3>
+                  { ("<div class='small' data-testid='last-upload'>Last uploaded: " + escape(selected_file.display_name) + "</div>") if (msg and msg.strip() == 'File uploaded' and selected_file) else "" }
                   <!-- Upload form at the top of Files tab -->
                   <form method="post" action="/project/{project.id}/files/upload?branch_id={current.id}" enctype="multipart/form-data" data-testid="upload-form" style="margin-bottom:12px; padding-bottom:12px; border-bottom:1px solid var(--border)">
                     <input type="file" name="file" required data-testid="upload-input" style="margin-right:8px" />
                     <button type="submit" data-testid="upload-submit" style="display:inline-block">Upload</button>
                   </form>
+                  { ("<div class='small' style='margin:6px 0'><strong>AI Title:</strong> " + (escape(selected_file.ai_title) if (selected_file and getattr(selected_file, 'ai_title', None)) else "(none)") + "</div>") if selected_file else "" }
                   <div style="max-height:400px; overflow:auto">
                     {file_list_html}
                   </div>

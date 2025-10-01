@@ -1,191 +1,235 @@
-"""
-JavaScript bundles for Cedar page rendering.
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Check Syntax</title>
+  <style>
+    :root { --fg: #111; --bg: #fff; --accent: #2563eb; --muted: #6b7280; --border: #e5e7eb; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Helvetica Neue", Arial, "Apple Color Emoji", "Segoe UI Emoji"; color: var(--fg); background: var(--bg); }
+    header { padding: 16px 20px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg); }
+    main { padding: 20px; margin: 0; width: 100%; }
+    h1, h2, h3 { margin: 0 0 12px; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .row { display: flex; gap: 16px; flex-wrap: wrap; }
+    .card { border: 1px solid var(--border); border-radius: 8px; padding: 16px; background: #fff; flex: 1 1 340px; }
+    .muted { color: var(--muted); }
+    .table { width: 100%; border-collapse: collapse; }
+    .table th, .table td { border-bottom: 1px solid var(--border); padding: 8px 6px; text-align: left; vertical-align: top; }
+    .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; background: #eef2ff; color: #3730a3; font-size: 12px; }
+    .small { font-size: 12px; }
+    .topbar { display:flex; align-items:center; gap:12px; }
+    .spinner { display:inline-block; width:12px; height:12px; border:2px solid #cbd5e1; border-top-color:#334155; border-radius:50%; animation: spin 1s linear infinite; }
+    @keyframes spin { from { transform: rotate(0deg);} to { transform: rotate(360deg);} }
 
-This module contains functions that generate JavaScript code for various
-client-side features in the Cedar application.
-
-Extracted from page_rendering.py as part of refactoring to keep files under 1000 lines.
-"""
-
-from typing import Optional
-import os
-
-
-def get_refresh_notes_script() -> str:
-    """
-    Generate JavaScript for handling refresh_notes URL parameter.
-    
-    Automatically switches to the Notes tab when refresh_notes=1 is present in URL.
-    
-    Returns:
-        str: Complete <script> tag with JavaScript code
-    """
-    return """
-<script>
-(function() {
-  const urlParams = new URLSearchParams(window.location.search);
-  if (urlParams.get('refresh_notes') === '1') {
-    // Remove the refresh_notes parameter from URL
-    urlParams.delete('refresh_notes');
-    const newUrl = window.location.pathname + (urlParams.toString() ? '?' + urlParams.toString() : '') + window.location.hash;
-    window.history.replaceState({}, '', newUrl);
-    
-    // Switch to Notes tab after page load
-    window.addEventListener('DOMContentLoaded', function() {
-      setTimeout(function() {
-        const notesTab = document.querySelector('.tab[data-target="main-notes"]');
-        if (notesTab) notesTab.click();
-      }, 100);
-    });
-  }
-})();
-</script>
-    """
-
-
-def get_code_to_chat_script() -> str:
-    """
-    Generate JavaScript for code-to-chat functionality.
-    
-    Handles clicking code snippets to open them in chat with full context.
-    Includes base64 decoding and code injection features.
-    
-    Returns:
-        str: Complete <script> tag with JavaScript code
-    """
-    return """
+    /* Two-column layout and tabs */
+    .two-col { display: grid; grid-template-columns: 1fr 420px; gap: 16px; align-items: start; }
+    .pane { display: flex; flex-direction: column; gap: 8px; }
+    .pane.right { display:flex; flex-direction:column; min-height:0; }
+    .pane.right .tab-panels { display:flex; flex-direction:column; flex:1; min-height:0; overflow:auto; }
+    .tabs { display: flex; gap: 6px; border-bottom: 1px solid var(--border); }
+    .tab { display:inline-block; padding:6px 10px; border:1px solid var(--border); border-bottom:none; border-radius:6px 6px 0 0; background:#f3f4f6; color:#111; cursor:pointer; user-select:none; }
+    .tab.active { background:#fff; font-weight:600; }
+    .tab-panels { border:1px solid var(--border); border-radius:0 6px 6px 6px; background:#fff; padding:12px; }
+    .panel.hidden { display:none !important; }
+    @media (max-width: 900px) { .two-col { grid-template-columns: 1fr; } }
+  </style>
+  
 <script>
 (function(){
-  var LOGP='[Code→Chat]';
-  function b64utf8(b){
-    try{
-      var bytes = Uint8Array.from(atob(b||''), function(c){ return c.charCodeAt(0); });
-      try { return new TextDecoder('utf-8').decode(bytes); } catch(e){
-        var s=''; for (var i=0;i<bytes.length;i++){ s += String.fromCharCode(bytes[i]); } return s;
-      }
-    }catch(e){ return ''; }
+  if (window.__cedarpyClientLogInitialized) return; window.__cedarpyClientLogInitialized = true;
+  const endpoint = '/api/client-log';
+  // Lightweight pub/sub for client logs so chat UI can mirror logs under the Processing line
+  window.__cedarLogSubscribers = window.__cedarLogSubscribers || [];
+  window.__cedarLogBuffer = window.__cedarLogBuffer || [];
+  function emitLog(payload){
+    try {
+      window.__cedarLogBuffer.push(payload);
+      if (window.__cedarLogBuffer.length > 2000) { window.__cedarLogBuffer.shift(); }
+      (window.__cedarLogSubscribers||[]).forEach(function(fn){ try { fn(payload); } catch(_){} });
+    } catch(_) {}
   }
-  function switchToChatTab(){
-    try{ var chatTab = document.querySelector('.tabs .tab[data-target="main-chat"]'); if (chatTab) { chatTab.click(); return true; } } catch(_){}
-    return false;
-  }
-  function renderCodeContextPanel(ds){
-    try{
-      var chatPanel = document.getElementById('main-chat');
-      var msgs = document.getElementById('msgs');
-      if (!chatPanel || !msgs) return;
-      var panel = document.getElementById('code-context-panel');
-      if (!panel){
-        panel = document.createElement('div');
-        panel.id = 'code-context-panel';
-        panel.className = 'card';
-        panel.style.marginBottom = '12px';
-        panel.style.padding = '12px';
-        panel.style.background = '#f8fafc';
-        panel.style.borderRadius = '8px';
-        msgs.parentNode.insertBefore(panel, msgs);
+  window.subscribeCedarLogs = function(fn){ try { (window.__cedarLogSubscribers||[]).push(fn); } catch(_){} };
+  window.unsubscribeCedarLogs = function(fn){ try { var a=window.__cedarLogSubscribers||[]; var i=a.indexOf(fn); if(i>=0) a.splice(i,1); } catch(_){} };
+
+  function post(payload){
+    try {
+      const body = JSON.stringify(payload);
+      if (navigator.sendBeacon) {
+        const blob = new Blob([body], {type: 'application/json'});
+        navigator.sendBeacon(endpoint, blob);
+      } else {
+        fetch(endpoint, {method: 'POST', headers: {'Content-Type': 'application/json'}, body, keepalive: true}).catch(function(){});
       }
-      panel.innerHTML='';
-      var h = document.createElement('h3'); h.textContent='Code Context'; panel.appendChild(h);
-      var tbl = document.createElement('table'); tbl.className='table';
-      var tbody = document.createElement('tbody');
-      [
-        ['Title', ds.title||''],
-        ['Language', ds.language||''],
-        ['Created', ds.created_at||''],
-        ['Thread', ds.thread_title||''],
-        ['mid', String(ds.mid||'')],
-        ['idx', String(ds.idx||'')]
-      ].forEach(function(kv){ var tr=document.createElement('tr'); var th=document.createElement('th'); th.textContent=kv[0]; var td=document.createElement('td'); td.textContent=kv[1]; tr.appendChild(th); tr.appendChild(td); tbody.appendChild(tr); });
-      tbl.appendChild(tbody); panel.appendChild(tbl);
-      var pre = document.createElement('pre'); pre.className='small'; pre.style.whiteSpace='pre-wrap'; pre.style.background='#f1f5f9'; pre.style.padding='8px'; pre.style.borderRadius='6px'; pre.style.maxHeight='260px'; pre.style.overflow='auto'; pre.textContent = ds.code_preview || ''; panel.appendChild(pre);
-      if ((ds.code_full||'') !== (ds.code_preview||'')) { var btn=document.createElement('button'); btn.className='secondary'; btn.textContent='Show full code'; btn.style.marginTop='6px'; btn.addEventListener('click', function(){ try{ pre.textContent=ds.code_full||''; btn.remove(); }catch(_){}}); panel.appendChild(btn); }
-    }catch(e){ try{ console.debug(LOGP,'render error',e); }catch(_){} }
+    } catch(e) {}
   }
-  window.__codeCtx = window.__codeCtx || { active:false, language:'text', fullCode:'' };
-  document.addEventListener('click', function(ev){
-    var a = ev.target && ev.target.closest ? ev.target.closest('a.js-open-code-chat') : null; if (!a) return;
-    try { ev.preventDefault(); } catch(_){}
-    try{
-      var ds = a.dataset || {};
-      var title = ds.title || '';
-      var language = ds.language || 'text';
-      var codePreview = b64utf8(ds.codePreviewB64 || '');
-      var codeFull = b64utf8(ds.codeB64 || '');
-      var createdAt = ds.createdAt || '';
-      var threadTitle = ds.threadTitle || '';
-      var mid = ds.mid || '';
-      var idx = ds.idx || '';
-      switchToChatTab();
-      try { if (window.startNewChat) window.startNewChat(PROJECT_ID, BRANCH_ID); } catch(_){ }
-      renderCodeContextPanel({ title:title, language:language, created_at:createdAt, thread_title:threadTitle, mid:mid, idx:idx, code_preview:codePreview, code_full:codeFull });
-      var t = document.getElementById('chatInput');
-      if (t) {
-        var template = 'Code Context\\n' +
-                       'title: ' + title + '\\n' +
-                       'language: ' + language + '\\n' +
-                       'created_at: ' + createdAt + '\\n' +
-                       'thread_title: ' + threadTitle + '\\n' +
-                       'mid: ' + mid + '\\n' +
-                       'idx: ' + idx + '\\n\\n' +
-                       '```' + language + '\\n' + codePreview + '\\n' + '```\\n\\n' +
-                       '---\\n\\n' +
-                       'Prompt:\\n';
-        t.value = template; try { t.focus(); } catch(_){}
-      }
-      window.__codeCtx.active = true; window.__codeCtx.language = language || 'text'; window.__codeCtx.fullCode = codeFull || '';
-    }catch(e){ try{ console.debug(LOGP,'click error',e); }catch(_){} }
+  function base(level, message, origin, extra){
+    var pl = Object.assign({
+      when: new Date().toISOString(),
+      level: String(level||'info'),
+      message: String(message||''),
+      url: String(location.href||''),
+      userAgent: navigator.userAgent || '',
+      origin: origin || 'console'
+    }, extra||{});
+    post(pl);
+    emitLog(pl);
+  }
+  var orig = { log: console.log, info: console.info, warn: console.warn, error: console.error };
+  console.log = function(){ try { base('info', Array.from(arguments).join(' '), 'console.log'); } catch(e){}; return orig.log.apply(console, arguments); };
+  console.info = function(){ try { base('info', Array.from(arguments).join(' '), 'console.info'); } catch(e){}; return orig.info.apply(console, arguments); };
+  console.warn = function(){ try { base('warn', Array.from(arguments).join(' '), 'console.warn'); } catch(e){}; return orig.warn.apply(console, arguments); };
+  console.error = function(){ try { base('error', Array.from(arguments).join(' '), 'console.error', { stack: (arguments && arguments[0] && arguments[0].stack) ? String(arguments[0].stack) : null }); } catch(e){}; return orig.error.apply(console, arguments); };
+  window.addEventListener('error', function(ev){
+    try { base('error', ev.message || 'window.onerror', 'window.onerror', { line: ev.lineno||null, column: ev.colno||null, stack: ev.error && ev.error.stack ? String(ev.error.stack) : null }); } catch(e){}
   }, true);
-  document.addEventListener('submit', function(ev){
-    var form = ev.target && ev.target.closest ? ev.target.closest('#chatForm') : null; if (!form) return;
-    try{
-      if (window.__codeCtx && window.__codeCtx.active){
-        var t = document.getElementById('chatInput'); if (t){
-          var txt = String(t.value||''); var lang = window.__codeCtx.language || 'text'; var full = window.__codeCtx.fullCode || '';
-          if (full){ var re = /```([a-zA-Z0-9_-]*)[\\s\\S]*?```/; var rep = '```' + lang + '\\n' + full + '\\n```'; if (re.test(txt)) { txt = txt.replace(re, rep); } else { txt += '\\n\\n' + rep + '\\n'; } t.value = txt; }
+  window.addEventListener('unhandledrejection', function(ev){
+    try { var r = ev && ev.reason; base('error', (r && (r.message || r.toString())) || 'unhandledrejection', 'unhandledrejection', { stack: r && r.stack ? String(r.stack) : null }); } catch(e){}
+  });
+  document.addEventListener('DOMContentLoaded', function(){ try { console.log('[ui] page ready'); } catch(e){} }, { once: true });
+  // Auto-restore last thread on cold open of '/' (fresh launch). Bypass with ?home=1.
+  try {
+    if ((location.pathname === '/' || location.pathname === '') && document.referrer === '') {
+      var _sp = new URLSearchParams(location.search || '');
+      if (!_sp.has('home')) {
+        var _lp = null, _lb = null, _lt = null;
+        try { _lp = localStorage.getItem('cedar:lastProject'); } catch(_){}
+        try { _lb = localStorage.getItem('cedar:lastBranch'); } catch(_){}
+        try { _lt = localStorage.getItem('cedar:lastThread'); } catch(_){}
+        if (_lp && _lb && _lt) {
+          var _dest = '/project/' + encodeURIComponent(String(_lp)) + '?branch_id=' + encodeURIComponent(String(_lb)) + '&thread_id=' + encodeURIComponent(String(_lt));
+          location.replace(_dest);
         }
-        window.__codeCtx.active = false;
       }
-    }catch(e){ try{ console.debug(LOGP,'submit error',e); }catch(_){} }
-  }, true);
+    }
+  } catch(_){ }
 })();
 </script>
-    """
 
+  <script>
+  (function(){
+    function activateTab(tab) {
+      try {
+        var pane = tab.closest('.pane') || document;
+        var tabs = tab.parentElement.querySelectorAll('.tab');
+        tabs.forEach(function(t){ t.classList.remove('active'); });
+        tab.classList.add('active');
+        var target = tab.getAttribute('data-target');
+        if (!target) return;
+        var panelsRoot = pane.querySelector('.tab-panels');
+        if (!panelsRoot) return;
+        panelsRoot.querySelectorAll('.panel').forEach(function(p){ p.classList.add('hidden'); });
+        var el = pane.querySelector('#' + target);
+        if (el) el.classList.remove('hidden');
+      } catch(e) { try { console.error('[ui] tab error', e); } catch(_) {} }
+    }
+    function initTabs(){
+      document.querySelectorAll('.tabs .tab').forEach(function(tab){
+        tab.addEventListener('click', function(ev){ ev.preventDefault(); activateTab(tab); });
+      });
+    }
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', initTabs, { once: true });
+    } else {
+      initTabs();
+    }
+  })();
+  </script>
+</head>
+<body>
+  <header>
+    <div class="topbar">
+      <div><strong>Cedar</strong> <span class='muted'>•</span> <a href='/project/8?branch_id=1' style='font-weight:600'>Check Syntax</a></div>
+      <div style="margin-left:auto"><a href='/'>&#8203;Projects</a> | <a href='/agents'>Agents</a> | <a href='/merge?project_id=8&branch_id=1'>Merge</a> | <a href='/log?project_id=8&branch_id=1' target='_blank' rel='noopener'>Log</a> | <a href='/settings'>Settings</a> <a href='/settings' class='pill' style='background:#fef2f2; color:#991b1b' title='LLM unavailable — click to paste your key'>LLM unavailable (AttributeError)</a></div>
+    </div>
+  </header>
+  <main>
+    
+      <h1>Check Syntax</h1>
+      <div class="muted small">Project ID: 8</div>
+      <div style="height:10px"></div>
+      <div>Branches: <a style='font-weight:600' href='/project/8?branch_id=1' class='pill'>Main</a>
+      <form id='branchCreateForm' method='post' action='/project/8/branches/create' class='inline' style='display:none; margin-left:8px'>
+        <input type='text' name='name' placeholder='experiment-1' required style='width:160px; padding:6px; border:1px solid var(--border); border-radius:6px' />
+        <button type='submit' class='secondary'>Create</button>
+      </form>
+      <a href='#' class='pill' title='New branch' onclick="var f=document.getElementById('branchCreateForm'); if(f){f.style.display=(f.style.display==='none'?'inline-block':'none'); var i=f.querySelector('input[name=name]'); if(i){i.focus();}} return false;">+</a>
+    </div>
+      
+      <script>
+      function confirmProjectDelete(projectName) {
+        // First confirmation
+        if (!confirm('Are you sure you want to delete project "' + projectName + '"?')) {
+          return false;
+        }
+        // Second confirmation for safety
+        var secondConfirm = confirm('⚠️ WARNING: This will permanently delete:\n\n' +
+          '• All files in this project\n' +
+          '• All chat history\n' + 
+          '• All databases\n' +
+          '• All code snippets\n' +
+          '• All notes\n\n' +
+          'This action CANNOT be undone. Click OK to permanently delete everything.');
+        return secondConfirm;
+      }
+      </script>
 
-def get_main_chat_script() -> str:
-    """
-    Generate the main WebSocket chat script.
-    
-    This is the primary client-side JavaScript for handling chat functionality including:
-    - WebSocket connection management
-    - Message streaming
-    - Agent result display
-    - File upload auto-chat
-    - Chat history management
-    - Thread creation and management
-    
-    Returns:
-        str: Complete <script> tag with main chat JavaScript
+      <div id="page-root" style="min-height:100vh; display:flex; flex-direction:column">
+        <div style="margin-top:8px; flex:1; min-height:0; display:flex; flex-direction:column">
+          <div class="tabs" data-pane="main">
+            <a href="#" class="tab active" data-target="main-chat">Chat</a>
+            <a href="#" class="tab" data-target="main-files">Files</a>
+            <a href="#" class="tab" data-target="main-images">Images</a>
+            <a href="#" class="tab" data-target="main-history">History</a>
+            <a href="#" class="tab" data-target="main-code">Code</a>
+            <a href="#" class="tab" data-target="main-dbs">Databases</a>
+            <a href="#" class="tab" data-target="main-notes">Notes</a>
+          </div>
+          <div class="tab-panels" style="flex:1; min-height:0">
+            <div id="main-chat" class="panel" style="height:100%">
+                <h3>Chat <span id="chat-number-display" style="display:none">- <span id="chat-number"></span></span>
+                  <a href="#" class="small" style="margin-left:12px" onclick="startNewChat(8, 1); return false;">Start New Chat</a>
+                </h3>
+                <style>
+                /* Chat area grows to fill viewport; input stays at bottom regardless of window size */
+                  #main-chat { display:flex; flex-direction:column; flex:1; min-height:0; height:100%; }
+                  #main-chat .chat-log { flex:1; display:flex; flex-direction:column; gap:8px; overflow-y:auto; padding-bottom:80px; }
+                  #main-chat .chat-input { position: sticky; bottom: 0; margin-top:auto; padding-top:6px; background:#fff; border-top:1px solid var(--border); }
+                  .msg { display:flex; flex-direction:column; max-width:80%; }
+                  .msg.user { align-self:flex-end; }
+                  .msg.assistant { align-self:flex-start; }
+                  .msg.system { align-self:flex-start; }
+                  .msg .meta { display:flex; gap:8px; align-items:center; margin-bottom:4px; }
+                  .bubble { border:1px solid var(--border); border-radius:18px; padding:12px 14px; font-size:14px; line-height:1.45; box-shadow: 0 1px 1px rgba(0,0,0,0.04); }
+                  .bubble.user { background:#d9fdd3; border-color:#b2e59a; }
+                  .bubble.assistant { background:#ffffff; border-color:#e6e6e6; }
+                  .bubble.system { background:#e7f3ff; border-color:#cfe8ff; }
+                </style>
+                
+                <div id='msgs' class='chat-log'><div class='muted small'>(No messages yet)</div></div>
+                <div class='chat-input'>
+      <form id='chatForm' data-project-id='8' data-branch-id='1' data-thread-id='' data-file-id='' data-file-name='' data-dataset-id='' method='post' action='/project/8/threads/chat?branch_id=1' style='margin-top:8px'>
         
-    Note:
-        This script contains placeholder variables that are replaced with actual values:
-        - __PID__, __BID__: For PROJECT_ID, BRANCH_ID (replaced by caller)
-        - __UPLOAD_AUTOCHAT__: Boolean flag (replaced by caller)
-        - __WS_TIMEOUT_MS__: Timeout value (replaced by caller)
-        - __INITIAL_UPLOAD_USER_MESSAGE__: Upload message (replaced by caller)
-        - __FILE_DETAILS_JSON__: File metadata (replaced by caller)
-    """
-    return """
+        <textarea id='chatInput' name='content' rows='3' placeholder='Ask a question about this file/context...' style='width:100%; font-family: ui-monospace, Menlo, monospace;'></textarea>
+        <div style='height:6px'></div>
+        <div style='display:flex; gap:8px; align-items:center'>
+          <button type='submit'>Submit</button>
+          <button type='button' id='stopChatBtn' class='secondary' style='display:none'>Stop</button>
+        </div>
+      </form>
+    </div>
+                
 <script>
 (function(){
   // Initial auto-chat message for uploads (injected from server as a string)
-  var PROJECT_ID = __PID__;
-  var BRANCH_ID = __BID__;
-  var UPLOAD_AUTOCHAT = __UPLOAD_AUTOCHAT__;
+  var PROJECT_ID = 8;
+  var BRANCH_ID = 1;
+  var UPLOAD_AUTOCHAT = true;
   var SSE_ACTIVE = false;
   // File details JSON injected by server for upload auto-chat (stringified JSON)
-  var FILE_DETAILS_JSON = __FILE_DETAILS_JSON__;
+  var FILE_DETAILS_JSON = "";
   async function ensureThreadId(tid, fid, dsid) {
     if (tid) return tid;
     try {
@@ -339,7 +383,7 @@ def get_main_chat_script() -> str:
           var line = '[' + (pl.level||'INFO') + '] ' + (pl.message||'');
           var when = (pl.when||'').replace('T',' ').replace('Z','')
           if (when) line = when + ' ' + line;
-          procPre.textContent += (procPre.textContent ? '\\n' : '') + line;
+          procPre.textContent += (procPre.textContent ? '\n' : '') + line;
           if (procPre.textContent.length > 8000) {
             procPre.textContent = procPre.textContent.slice(-8000);
           }
@@ -422,7 +466,7 @@ def get_main_chat_script() -> str:
       };
 
       // Client-side watchdog to ensure the user always sees progress or a timeout
-      var timeoutMs = __WS_TIMEOUT_MS__; // mirrors server CEDARPY_CHAT_TIMEOUT_SECONDS
+      var timeoutMs = 300000; // mirrors server CEDARPY_CHAT_TIMEOUT_SECONDS
       var finalOrError = false;
       var timedOut = false;
       var timeoutId = null;
@@ -561,9 +605,9 @@ def get_main_chat_script() -> str:
             // Convert **text** to bold for better display
             if (textContent.includes('**')) {
               contM.innerHTML = textContent
-                .replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>')
+                .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
                 .replace(/_([^_]+)_/g, '<em>$1</em>')
-                .replace(/\\n/g, '<br>');
+                .replace(/\n/g, '<br>');
             } else {
               contM.textContent = textContent;
             }
@@ -662,8 +706,8 @@ def get_main_chat_script() -> str:
             var fullText = m.text || '';
             
             // Extract just the Answer part for collapsed view
-            var answerMatch = fullText.match(/Answer:\\s*([^\\n]+(?:\\n(?!\\n|Why:|Potential Issues:|Suggested Next Steps:)[^\\n]+)*)/);
-            var collapsedText = answerMatch ? answerMatch[1].trim() : fullText.split('\\n')[0];
+            var answerMatch = fullText.match(/Answer:\s*([^\n]+(?:\n(?!\n|Why:|Potential Issues:|Suggested Next Steps:)[^\n]+)*)/);
+            var collapsedText = answerMatch ? answerMatch[1].trim() : fullText.split('\n')[0];
             
             // Create unique ID for collapsible details
             var detailId = 'agent_det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
@@ -800,8 +844,8 @@ def get_main_chat_script() -> str:
             var cont = document.createElement('div'); cont.className='content'; cont.style.whiteSpace='pre-wrap';
             if (fn === 'plan' && m.call && m.call.steps && Array.isArray(m.call.steps)) {
               try {
-                var rows = m.call.steps.map(function(st){ var f=String(st.function||''); var ti=String(st.title||''); var de=String(st.description||''); var stS=String(st.status||'in queue'); return "- ["+stS+"] "+f+": "+ti+ (de? (" — "+de):''); }).join('\\\\n');
-                cont.textContent = 'Plan:\\\\n' + rows;
+                var rows = m.call.steps.map(function(st){ var f=String(st.function||''); var ti=String(st.title||''); var de=String(st.description||''); var stS=String(st.status||'in queue'); return "- ["+stS+"] "+f+": "+ti+ (de? (" — "+de):''); }).join('\\n');
+                cont.textContent = 'Plan:\\n' + rows;
               } catch(_){ }
             } else if (fn === 'submit_step' || fn === 'tool_result') {
               cont.textContent = text;
@@ -1081,7 +1125,12 @@ Details:
                     bar.appendChild(runBtn); bar.appendChild(cancelBtn); bar.appendChild(copyBtnM); bar.appendChild(restoreBtn); pane.appendChild(bar);
                     // Schema hint
                     var hint = document.createElement('pre'); hint.className='small'; hint.style.whiteSpace='pre-wrap'; hint.style.background='#f8fafc'; hint.style.padding='8px'; hint.style.borderRadius='6px'; hint.style.marginTop='8px';
-                    hint.textContent = `Messages JSON schema (simplified):\n[\n  { "role": "system|user|assistant", "content": "string" },\n  ...\n]\nYou may add multiple user entries (Resources/History/Context/examples) followed by the current user message.`;
+                    hint.textContent = `Messages JSON schema (simplified):
+[
+  { "role": "system|user|assistant", "content": "string" },
+  ...
+]
+You may add multiple user entries (Resources/History/Context/examples) followed by the current user message.`;
                     pane.appendChild(hint);
                     overlay.appendChild(pane);
                     document.body.appendChild(overlay);
@@ -1162,8 +1211,8 @@ Details:
               contE.title = 'Click to view full error details';
               contE.addEventListener('click', function() {
                 var details = '';
-                if (m.details) details += 'Details: ' + m.details + '\\n\\n';
-                if (m.stack) details += 'Stack:\\n' + m.stack;
+                if (m.details) details += 'Details: ' + m.details + '\n\n';
+                if (m.stack) details += 'Stack:\n' + m.stack;
                 
                 // Create a modal with copyable text instead of alert
                 var modal = document.createElement('div');
@@ -1457,7 +1506,7 @@ Details:
       // Auto-start chat once after upload redirect so user sees processing in Chat
       try {
         var sp = new URLSearchParams(location.search || '');
-        var msg = (sp.get('msg')||'').replace(/\\+/g,' ');
+        var msg = (sp.get('msg')||'').replace(/\+/g,' ');
         var tid0 = sp.get('thread_id') || (chatForm && chatForm.getAttribute('data-thread-id')) || null;
         var fid0 = sp.get('file_id') || (chatForm && chatForm.getAttribute('data-file-id')) || null;
         var dsid0 = sp.get('dataset_id') || (chatForm && chatForm.getAttribute('data-dataset-id')) || null;
@@ -1467,7 +1516,9 @@ Details:
             window.__uploadAutoChatStarted = true;
             // Build initial user message expected by tests: include details prefix and JSON
             var detailsTxt = String(FILE_DETAILS_JSON||'');
-            var initialUserMsg = `User uploaded a file with the following details:\n\n${detailsTxt}`;
+            var initialUserMsg = `User uploaded a file with the following details:
+
+${detailsTxt}`;
             console.log('[auto-chat] starting WS with initial message and context');
             // Render a compact "Uploaded <filename>" assistant bubble with details toggle containing metadata
             try {
@@ -1707,18 +1758,18 @@ Details:
               try {
                 var t = document.getElementById('chatInput');
                 if (t) {
-                  var template = 'Image Context\\n' +
-                                 'title: ' + (a.getAttribute('data-ai-title')||a.getAttribute('data-display-name')||'') + '\\n' +
-                                 'file_id: ' + String(fid||'') + '\\n' +
-                                 'image_url: ' + (a.getAttribute('data-image-url')||'') + '\\n' +
-                                 'mime_type: ' + (a.getAttribute('data-mime-type')||'') + '\\n' +
-                                 'file_type: ' + (a.getAttribute('data-file-type')||'') + '\\n' +
-                                 'size_bytes: ' + (a.getAttribute('data-size')||'') + '\\n' +
-                                 'created_at: ' + (a.getAttribute('data-created-at')||'') + '\\n' +
-                                 'ai_category: ' + (a.getAttribute('data-ai-category')||'') + '\\n' +
-                                 'ai_description: ' + (function(){ try { var b=a.getAttribute('data-ai-desc-b64')||''; return b ? (new TextDecoder('utf-8')).decode(Uint8Array.from(atob(b), c=>c.charCodeAt(0))) : ''; } catch(_){ return ''; } })() + '\\n\\n' +
-                                 '---\\n\\n' +
-                                 'Prompt:\\n';
+                  var template = 'Image Context\n' +
+                                 'title: ' + (a.getAttribute('data-ai-title')||a.getAttribute('data-display-name')||'') + '\n' +
+                                 'file_id: ' + String(fid||'') + '\n' +
+                                 'image_url: ' + (a.getAttribute('data-image-url')||'') + '\n' +
+                                 'mime_type: ' + (a.getAttribute('data-mime-type')||'') + '\n' +
+                                 'file_type: ' + (a.getAttribute('data-file-type')||'') + '\n' +
+                                 'size_bytes: ' + (a.getAttribute('data-size')||'') + '\n' +
+                                 'created_at: ' + (a.getAttribute('data-created-at')||'') + '\n' +
+                                 'ai_category: ' + (a.getAttribute('data-ai-category')||'') + '\n' +
+                                 'ai_description: ' + (function(){ try { var b=a.getAttribute('data-ai-desc-b64')||''; return b ? (new TextDecoder('utf-8')).decode(Uint8Array.from(atob(b), c=>c.charCodeAt(0))) : ''; } catch(_){ return ''; } })() + '\n\n' +
+                                 '---\n\n' +
+                                 'Prompt:\n';
                   t.value = template; try { t.focus(); } catch(_){ }
                 }
               } catch(_){ }
@@ -1766,4 +1817,218 @@ Details:
   }, { once: true });
 })();
 </script>
-"""
+
+                
+<script>
+(function(){
+  var LOGP='[Code→Chat]';
+  function b64utf8(b){
+    try{
+      var bytes = Uint8Array.from(atob(b||''), function(c){ return c.charCodeAt(0); });
+      try { return new TextDecoder('utf-8').decode(bytes); } catch(e){
+        var s=''; for (var i=0;i<bytes.length;i++){ s += String.fromCharCode(bytes[i]); } return s;
+      }
+    }catch(e){ return ''; }
+  }
+  function switchToChatTab(){
+    try{ var chatTab = document.querySelector('.tabs .tab[data-target="main-chat"]'); if (chatTab) { chatTab.click(); return true; } } catch(_){}
+    return false;
+  }
+  function renderCodeContextPanel(ds){
+    try{
+      var chatPanel = document.getElementById('main-chat');
+      var msgs = document.getElementById('msgs');
+      if (!chatPanel || !msgs) return;
+      var panel = document.getElementById('code-context-panel');
+      if (!panel){
+        panel = document.createElement('div');
+        panel.id = 'code-context-panel';
+        panel.className = 'card';
+        panel.style.marginBottom = '12px';
+        panel.style.padding = '12px';
+        panel.style.background = '#f8fafc';
+        panel.style.borderRadius = '8px';
+        msgs.parentNode.insertBefore(panel, msgs);
+      }
+      panel.innerHTML='';
+      var h = document.createElement('h3'); h.textContent='Code Context'; panel.appendChild(h);
+      var tbl = document.createElement('table'); tbl.className='table';
+      var tbody = document.createElement('tbody');
+      [
+        ['Title', ds.title||''],
+        ['Language', ds.language||''],
+        ['Created', ds.created_at||''],
+        ['Thread', ds.thread_title||''],
+        ['mid', String(ds.mid||'')],
+        ['idx', String(ds.idx||'')]
+      ].forEach(function(kv){ var tr=document.createElement('tr'); var th=document.createElement('th'); th.textContent=kv[0]; var td=document.createElement('td'); td.textContent=kv[1]; tr.appendChild(th); tr.appendChild(td); tbody.appendChild(tr); });
+      tbl.appendChild(tbody); panel.appendChild(tbl);
+      var pre = document.createElement('pre'); pre.className='small'; pre.style.whiteSpace='pre-wrap'; pre.style.background='#f1f5f9'; pre.style.padding='8px'; pre.style.borderRadius='6px'; pre.style.maxHeight='260px'; pre.style.overflow='auto'; pre.textContent = ds.code_preview || ''; panel.appendChild(pre);
+      if ((ds.code_full||'') !== (ds.code_preview||'')) { var btn=document.createElement('button'); btn.className='secondary'; btn.textContent='Show full code'; btn.style.marginTop='6px'; btn.addEventListener('click', function(){ try{ pre.textContent=ds.code_full||''; btn.remove(); }catch(_){}}); panel.appendChild(btn); }
+    }catch(e){ try{ console.debug(LOGP,'render error',e); }catch(_){} }
+  }
+  window.__codeCtx = window.__codeCtx || { active:false, language:'text', fullCode:'' };
+  document.addEventListener('click', function(ev){
+    var a = ev.target && ev.target.closest ? ev.target.closest('a.js-open-code-chat') : null; if (!a) return;
+    try { ev.preventDefault(); } catch(_){}
+    try{
+      var ds = a.dataset || {};
+      var title = ds.title || '';
+      var language = ds.language || 'text';
+      var codePreview = b64utf8(ds.codePreviewB64 || '');
+      var codeFull = b64utf8(ds.codeB64 || '');
+      var createdAt = ds.createdAt || '';
+      var threadTitle = ds.threadTitle || '';
+      var mid = ds.mid || '';
+      var idx = ds.idx || '';
+      switchToChatTab();
+      try { if (window.startNewChat) window.startNewChat(PROJECT_ID, BRANCH_ID); } catch(_){ }
+      renderCodeContextPanel({ title:title, language:language, created_at:createdAt, thread_title:threadTitle, mid:mid, idx:idx, code_preview:codePreview, code_full:codeFull });
+      var t = document.getElementById('chatInput');
+      if (t) {
+        var template = 'Code Context\n' +
+                       'title: ' + title + '\n' +
+                       'language: ' + language + '\n' +
+                       'created_at: ' + createdAt + '\n' +
+                       'thread_title: ' + threadTitle + '\n' +
+                       'mid: ' + mid + '\n' +
+                       'idx: ' + idx + '\n\n' +
+                       '```' + language + '\n' + codePreview + '\n' + '```\n\n' +
+                       '---\n\n' +
+                       'Prompt:\n';
+        t.value = template; try { t.focus(); } catch(_){}
+      }
+      window.__codeCtx.active = true; window.__codeCtx.language = language || 'text'; window.__codeCtx.fullCode = codeFull || '';
+    }catch(e){ try{ console.debug(LOGP,'click error',e); }catch(_){} }
+  }, true);
+  document.addEventListener('submit', function(ev){
+    var form = ev.target && ev.target.closest ? ev.target.closest('#chatForm') : null; if (!form) return;
+    try{
+      if (window.__codeCtx && window.__codeCtx.active){
+        var t = document.getElementById('chatInput'); if (t){
+          var txt = String(t.value||''); var lang = window.__codeCtx.language || 'text'; var full = window.__codeCtx.fullCode || '';
+          if (full){ var re = /```([a-zA-Z0-9_-]*)[\s\S]*?```/; var rep = '```' + lang + '\n' + full + '\n```'; if (re.test(txt)) { txt = txt.replace(re, rep); } else { txt += '\n\n' + rep + '\n'; } t.value = txt; }
+        }
+        window.__codeCtx.active = false;
+      }
+    }catch(e){ try{ console.debug(LOGP,'submit error',e); }catch(_){} }
+  }, true);
+})();
+</script>
+    
+                
+                
+              </div>
+              <div id="main-history" class="panel hidden">
+                
+        <div class="card" style="padding:12px">
+            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px">
+                <h3 style="margin:0">Chat History</h3>
+                <button class="secondary" onclick="startNewChat(8, 1)">New Chat</button>
+            </div>
+            <div style="max-height:400px; overflow-y:auto">
+                <div class="muted small">No chat history yet. Click "New Chat" to start.</div>
+            </div>
+        </div>
+    
+              </div>
+              <div id="main-files" class="panel hidden">
+                <div class="card" style="padding:12px">
+                  <h3 style='margin-bottom:6px'>Files</h3>
+                  
+                  <!-- Upload form at the top of Files tab -->
+                  <form method="post" action="/project/8/files/upload?branch_id=1" enctype="multipart/form-data" data-testid="upload-form" style="margin-bottom:12px; padding-bottom:12px; border-bottom:1px solid var(--border)">
+                    <input type="file" name="file" required data-testid="upload-input" style="margin-right:8px" />
+                    <button type="submit" data-testid="upload-submit" style="display:inline-block">Upload</button>
+                  </form>
+                  <div style="max-height:400px; overflow:auto">
+                    <ul style='list-style:none; padding-left:0; margin:0'><li class='muted'>No files yet.</li></ul>
+                  </div>
+                </div>
+              </div>
+              <div id="main-images" class="panel hidden">
+                <div class="card" style="padding:12px">
+                  <h3 style='margin-bottom:6px'>Images</h3>
+                  <div style="max-height:600px; overflow:auto">
+                    <div class='muted small'>(No images yet)</div>
+                  </div>
+                </div>
+              </div>
+              <div id="main-code" class="panel hidden">
+                <div class="card" style="padding:12px">
+                  <h3 style='margin-bottom:6px'>Code</h3>
+                  <div style="max-height:600px; overflow:auto">
+                    <ul style='list-style:none; padding-left:0; margin:0'><li class='muted'>No code yet.</li></ul>
+                  </div>
+                </div>
+              </div>
+              <div id="main-dbs" class="panel hidden">
+                <div class="card" style="padding:12px">
+                  <h3>Databases</h3>
+                  <table class="table">
+                    <thead><tr><th>Name</th><th>Branch</th><th>Created</th></tr></thead>
+                    <tbody>
+               <tr style="background-color: #f0f9ff">
+                 <td><a href='/project/8/threads/new?branch_id=1&dataset_id=1' class='thread-create' data-dataset-id='1'>
+                    <strong>📝 Notes Database</strong>
+                 </a></td>
+                 <td>Main</td>
+                 <td class="small muted">1 notes • 2025-10-01 14:32:16 UTC</td>
+               </tr>
+            </tbody>
+                  </table>
+                </div>
+              </div>
+              <div id="main-notes" class="panel hidden">
+                <div class='card' style='padding:12px'>  <div style='display:flex; align-items:center; justify-content:space-between; margin-bottom:12px'>    <h3 style='margin:0'>📝 Notes</h3>    <div style='display:flex; gap:8px'>      <button class='secondary' onclick='window.location.href="/project/8?branch_id=1&refresh_notes=1#main-notes"'>Refresh</button>    </div>  </div>
+        <table class='table' style='width:100%; table-layout:fixed'>
+            <thead>
+                <tr>
+                    <th style='width:160px'>Timestamp</th>
+                    <th>Content</th>
+                    <th style='width:200px'>Tags</th>
+                </tr>
+            </thead>
+            <tbody>
+                
+                <tr>
+                    <td class='small muted' style='white-space:nowrap'>2025-10-01 14:32:16</td>
+                    <td class='small' style='white-space:pre-wrap; max-width:600px'>Project started on October 01, 2025 at 02:32 PM UTC</td>
+                    <td class='small muted'>project-init, system</td>
+                </tr>
+            
+            </tbody>
+        </table>
+    </div>
+              </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    
+<script>
+(function() {
+  const urlParams = new URLSearchParams(window.location.search);
+  if (urlParams.get('refresh_notes') === '1') {
+    // Remove the refresh_notes parameter from URL
+    urlParams.delete('refresh_notes');
+    const newUrl = window.location.pathname + (urlParams.toString() ? '?' + urlParams.toString() : '') + window.location.hash;
+    window.history.replaceState({}, '', newUrl);
+    
+    // Switch to Notes tab after page load
+    window.addEventListener('DOMContentLoaded', function() {
+      setTimeout(function() {
+        const notesTab = document.querySelector('.tab[data-target="main-notes"]');
+        if (notesTab) notesTab.click();
+      }, 100);
+    });
+  }
+})();
+</script>
+    
+
+    
+  </main>
+</body>
+</html>
