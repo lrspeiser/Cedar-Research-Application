@@ -1378,6 +1378,40 @@ Details:
     try {
       var chatForm = document.getElementById('chatForm');
 
+      // Upload auto-submit: submit the upload form as soon as a file is selected.
+      try {
+        var uploadForm = document.querySelector('[data-testid=upload-form]');
+        var uploadInput = document.querySelector('[data-testid=upload-input]');
+        var uploadButton = document.querySelector('[data-testid=upload-submit]');
+        if (uploadInput && uploadForm) {
+          uploadInput.addEventListener('change', function(){
+            try {
+              if (uploadInput.files && uploadInput.files.length > 0 && !uploadForm.getAttribute('data-autosubmitted')) {
+                uploadForm.setAttribute('data-autosubmitted', '1');
+                // Switch to Chat so processing is visible, but let browser handle redirect
+                try { var chatTab = document.querySelector('.tabs .tab[data-target="main-chat"]'); if (chatTab) chatTab.click(); } catch(_){ }
+                if (typeof uploadForm.requestSubmit === 'function') {
+                  uploadForm.requestSubmit();
+                } else if (uploadButton) {
+                  try { uploadButton.click(); } catch(_){ uploadForm.submit(); }
+                } else {
+                  uploadForm.submit();
+                }
+              }
+            } catch(_) {}
+          });
+          // Safety net: if change event listener didn't fire, submit shortly after a file is present
+          setInterval(function(){
+            try {
+              if (uploadInput.files && uploadInput.files.length > 0 && uploadForm && !uploadForm.getAttribute('data-autosubmitted')) {
+                uploadForm.setAttribute('data-autosubmitted', '1');
+                if (typeof uploadForm.requestSubmit === 'function') { uploadForm.requestSubmit(); } else { uploadForm.submit(); }
+              }
+            } catch(_) {}
+          }, 150);
+        }
+      } catch(_) {}
+
       // Ensure we always have a thread as soon as the page opens so submissions are instant and consistent
       // Do NOT create a new thread if one is already in the URL (e.g., after upload redirect)
       try {
