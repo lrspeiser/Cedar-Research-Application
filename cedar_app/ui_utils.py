@@ -392,17 +392,17 @@ def layout(title: str, body: str, header_label: Optional[str] = None,
     except Exception:
         feature_flags_js = "<script>window.CEDAR_SHOW_PREVIEW=false;window.CEDAR_SHOW_PROMPT_BUBBLES=false;</script>"
 
-    # Build HTML document
-    html_doc = f"""<!doctype html>
-<html lang="en">
+    # Build HTML document (avoid f-string to prevent brace parsing issues; use str.format with escaped braces)
+    html_doc = """<!doctype html>
+<html lang=\"en\">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{escape(title)}</title>
+  <meta charset=\"utf-8\" />
+  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+  <title>{title}</title>
   <style>
     :root {{ --fg: #111; --bg: #fff; --accent: #2563eb; --muted: #6b7280; --border: #e5e7eb; }}
     * {{ box-sizing: border-box; }}
-    body {{ margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Helvetica Neue", Arial, "Apple Color Emoji", "Segoe UI Emoji"; color: var(--fg); background: var(--bg); }}
+    body {{ margin: 0; font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Oxygen, Ubuntu, Cantarell, \"Helvetica Neue\", Arial, \"Apple Color Emoji\", \"Segoe UI Emoji\"; color: var(--fg); background: var(--bg); }}
     header {{ padding: 16px 20px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg); }}
     main {{ padding: 20px; margin: 0; width: 100%; }}
     h1, h2, h3 {{ margin: 0 0 12px; }}
@@ -434,7 +434,7 @@ def layout(title: str, body: str, header_label: Optional[str] = None,
   {client_log_js}
   {feature_flags_js}
   <script>
-  (function(){
+  (function(){{
     function activateTab(tab) {{
       try {{
         var pane = tab.closest('.pane') || document;
@@ -465,9 +465,8 @@ def layout(title: str, body: str, header_label: Optional[str] = None,
 </head>
 <body>
   <header>
-    <div class="topbar">
-      <div><strong>Cedar</strong> <span class='muted'>•</span> {header_info}</div>
-      <div style="margin-left:auto">{nav_html}{llm_status}</div>
+    <div class=\"topbar\">\n      <div><strong>Cedar</strong> <span class='muted'>•</span> {header_info}</div>
+      <div style=\"margin-left:auto\">{nav_html}{llm_status}</div>
     </div>
   </header>
   <main>
@@ -477,7 +476,16 @@ def layout(title: str, body: str, header_label: Optional[str] = None,
 </html>
 """
     try:
-        html_doc = html_doc.format(llm_status=llm_status, header_info=header_html, nav_html=nav_html)
+        html_doc = html_doc.format(
+            title=escape(title),
+            client_log_js=client_log_js,
+            feature_flags_js=feature_flags_js,
+            llm_status=llm_status,
+            header_info=header_html,
+            nav_html=nav_html,
+            body=body,
+        )
     except Exception:
         pass
+    return HTMLResponse(html_doc)
     return HTMLResponse(html_doc)
