@@ -99,7 +99,6 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
             completion_params = {
                 "model": model,
                 "messages": [
-{
                     {
                         "role": "system",
                         "content": build_agent_system_prompt(
@@ -127,7 +126,7 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
                         }
                         
 Provide at least 1-3 concrete SQL queries that can be executed."""
-                    )
+                        )
                     },
                     {"role": "user", "content": f"Database Schema:\n{db_metadata}\n\nUser Query: {task}\n\nSuggest relevant SQL queries."}
                 ]
