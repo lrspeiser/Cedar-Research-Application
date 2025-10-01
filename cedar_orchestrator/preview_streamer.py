@@ -150,18 +150,12 @@ Do NOT return JSON. Just explain your synthesis in plain English. Do not repeat 
                 })
             
             # Use responses.create for gpt-5 (nano by default)
-            # Configure for fast preview: low reasoning effort
+            # Only include required fields per API docs
             log_step(logger, f"Using responses.create API for {preview_model}")
             stream = await llm_client.responses.create(
                 model=preview_model,
                 input=input_messages,
-                stream=True,
-                text={
-                    "verbosity": "low"  # Low verbosity for faster, more concise responses
-                },
-                reasoning={
-                    "effort": "low"  # Minimal reasoning for speed
-                }
+                stream=True
             )
             log_success(logger, "Preview stream initiated")
             
