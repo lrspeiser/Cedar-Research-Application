@@ -30,6 +30,7 @@ from .agent_dispatcher import AgentDispatcher
 from .agent_result_processor import AgentResultProcessor
 from .resource_indexer import ResourceIndexer
 from .notes_persistence import NotesPersistence
+from .stop_handler import StopHandler
 
 # File processing orchestrator
 try:
@@ -112,6 +113,16 @@ class ThinkerOrchestrator:
         orchestration_start = time.time()
         run_logs: List[str] = []
         
+        # Check for user stop request at the start of each iteration
+        if thread_id and StopHandler.should_stop(thread_id):
+            logger.info(f"[ORCHESTRATOR] User stop detected for thread {thread_id}")
+            chief_decision = await StopHandler.handle_user_stop(
+                thread_id, message, previous_results or [], run_logs, websocket
+            )
+            await self._send_final_answer(websocket, chief_decision, previous_results or [], iteration, orchestration_start)
+            StopHandler.clear_stop(thread_id)
+            return
+        
         logger.info("=" * 80)
         logger.info(f"[ORCHESTRATOR] Starting orchestration (iteration: {iteration})")
         logger.info(f"[ORCHESTRATOR] Message: {message[:200]}...")
@@ -148,6 +159,16 @@ class ThinkerOrchestrator:
         valid_results = []
         had_errors = False
         
+        # Check for stop before executing agents
+        if thread_id and StopHandler.should_stop(thread_id):
+            logger.info(f"[ORCHESTRATOR] User stop detected before Phase 2")
+            chief_decision = await StopHandler.handle_user_stop(
+                thread_id, message, [], run_logs, websocket
+            )
+            await self._send_final_answer(websocket, chief_decision, [], iteration, orchestration_start)
+            StopHandler.clear_stop(thread_id)
+            return
+        
         if iteration == 0:
             logger.info("[ORCHESTRATOR] PHASE 2: Agent Execution")
             
@@ -175,6 +196,16 @@ class ThinkerOrchestrator:
         
         # Phase 3: Chief Agent Synthesis
         logger.info("[ORCHESTRATOR] PHASE 3: Chief Agent Synthesis")
+        
+        # Check for stop before synthesis
+        if thread_id and StopHandler.should_stop(thread_id):
+            logger.info(f"[ORCHESTRATOR] User stop detected before Phase 3")
+            chief_decision = await StopHandler.handle_user_stop(
+                thread_id, message, valid_results, run_logs, websocket
+            )
+            await self._send_final_answer(websocket, chief_decision, valid_results, iteration, orchestration_start)
+            StopHandler.clear_stop(thread_id)
+            return
         
         # Build resource index
         resources_index = ResourceIndexer.build_resource_index(db_session, project_id, branch_id)
@@ -225,9 +256,16 @@ class ThinkerOrchestrator:
             websocket, chief_decision, valid_results,
             iteration, orchestration_start
         )
+        
+        # Clear stop flag when orchestration completes normally
+        if thread_id:
+            StopHandler.clear_stop(thread_id)
     
     async def _send_max_iterations_message(self, websocket: WebSocket, previous_results: List[AgentResult]):
         """Send message when max iterations reached"""
+        # Stop all spinners
+        await StopHandler.send_stop_signals(websocket)
+        
         text = f"**Note:** Maximum iterations ({self.MAX_ITERATIONS}) reached.\n\n"
         if previous_results:
             text += previous_results[0].result if previous_results else 'Processing limit reached.'
@@ -242,6 +280,9 @@ class ThinkerOrchestrator:
     
     async def _send_clarification(self, websocket: WebSocket, decision: Dict[str, Any]):
         """Send clarification request to user"""
+        # Stop all spinners
+        await StopHandler.send_stop_signals(websocket)
+        
         clarification_question = decision.get('clarification_question', 'Could you please provide more details?')
         thinking = decision.get('thinking_process', 'Need more information from user')
         reasoning = decision.get('reasoning', 'This will help me provide a better response.')
@@ -300,6 +341,9 @@ Please provide this information so I can better assist you."""
         valid_results: List[AgentResult], iteration: int, start_time: float
     ):
         """Send final synthesized answer"""
+        # First, stop all spinners
+        await StopHandler.send_stop_signals(websocket)
+        
         final_answer = decision.get('final_answer', '')
         selected_agent = decision.get('selected_agent', 'The Chief Agent')
         reasoning = decision.get('reasoning', '')
