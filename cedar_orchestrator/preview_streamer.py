@@ -41,9 +41,12 @@ class PreviewStreamer:
         
         try:
             logger.info(f"[PreviewStreamer] Starting preview stream ({phase})")
+            logger.info(f"[PreviewStreamer] WebSocket: {websocket is not None}")
+            logger.info(f"[PreviewStreamer] Messages count: {len(messages)}")
             
             # Use gpt-5-nano for fast preview
             preview_model = os.getenv("CEDARPY_PREVIEW_MODEL", "gpt-5-nano")
+            logger.info(f"[PreviewStreamer] Using model: {preview_model}")
             
             # Start streaming response
             stream = await llm_client.chat.completions.create(
@@ -54,11 +57,13 @@ class PreviewStreamer:
             )
             
             # Send preview start event
+            logger.info(f"[PreviewStreamer] Sending preview_start event")
             await websocket.send_json({
                 "type": "preview_start",
                 "phase": phase,
                 "model": preview_model
             })
+            logger.info(f"[PreviewStreamer] preview_start event sent")
             
             # Stream word by word
             full_text = ""
@@ -78,6 +83,7 @@ class PreviewStreamer:
                 
                 # Send complete words (split on spaces)
                 if ' ' in word_buffer or '\n' in word_buffer:
+                    logger.debug(f"[PreviewStreamer] Sending token: {word_buffer[:20]}...")
                     await websocket.send_json({
                         "type": "preview_token",
                         "text": word_buffer,
@@ -123,7 +129,12 @@ class PreviewStreamer:
         
         Returns the task so it can be cancelled if real response arrives quickly.
         """
-        if not websocket or not llm_client:
+        if not websocket:
+            logger.info("[PreviewStreamer] No WebSocket, skipping preview")
+            return None
+        
+        if not llm_client:
+            logger.info("[PreviewStreamer] No LLM client, skipping preview")
             return None
         
         try:

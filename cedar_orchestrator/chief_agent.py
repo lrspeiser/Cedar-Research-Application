@@ -111,11 +111,16 @@ class ChiefAgent:
             
             # Start preview streaming in parallel (non-blocking)
             preview_task = None
+            logger.info(f"[ChiefAgent] Preview enabled: {PreviewConfig.is_enabled()}, WS: {ws is not None}")
             if PreviewConfig.is_enabled() and ws:
                 phase = "thinking" if not agent_results else "synthesis"
+                logger.info(f"[ChiefAgent] Starting preview task for {phase} phase")
                 preview_task = PreviewStreamer.start_preview_task(
                     self.llm_client, messages, ws, phase
                 )
+                logger.info(f"[ChiefAgent] Preview task created: {preview_task is not None}")
+            else:
+                logger.info(f"[ChiefAgent] Preview NOT started - enabled: {PreviewConfig.is_enabled()}, ws: {ws is not None}")
             
             # Call LLM (real model)
             logger.info(f"[ChiefAgent] Calling LLM with {len(messages)} messages")
