@@ -935,7 +935,11 @@ def get_main_chat_script() -> str:
             var bubE = document.createElement('div'); bubE.className = 'bubble system';
             var contE = document.createElement('div'); contE.className = 'content'; contE.style.whiteSpace='pre-wrap';
             var txtE = String(m.error || m.content || 'Unknown error');
-            try { if (m.details) { txtE += "\n\nDetails:\n" + JSON.stringify(m.details, null, 2); } } catch(_){}
+            // Use a template literal to safely include newlines without breaking JS parsing
+            try { if (m.details) { txtE += `
+
+Details:
+` + JSON.stringify(m.details, null, 2); } } catch(_){ }
             contE.textContent = txtE; bubE.appendChild(contE);
             wrapE.appendChild(metaE); wrapE.appendChild(bubE);
             if (msgs) msgs.appendChild(wrapE);
