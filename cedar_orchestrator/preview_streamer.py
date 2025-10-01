@@ -54,17 +54,93 @@ class PreviewStreamer:
             log_step(logger, f"Starting preview stream for {phase} phase")
             log_step(logger, f"Messages to send: {len(messages)}")
             
-            # Use gpt-5-nano for fast preview
-            preview_model = os.getenv("CEDARPY_PREVIEW_MODEL", "gpt-5-nano")
+            # Use gpt-5 for fast nano preview
+            # Note: gpt-5 with responses.create uses nano by default for speed
+            preview_model = os.getenv("CEDARPY_PREVIEW_MODEL", "gpt-5")
             log_step(logger, f"Using preview model: {preview_model}")
+            
+            # Create a modified prompt for nano that asks it to think out loud
+            # instead of returning JSON
+            preview_messages = []
+            
+            # Import full agent capabilities glossary from chief prompts
+            from .prompts.chief_prompts import get_agent_capabilities
+            agent_glossary = get_agent_capabilities()
+            
+            # Override the system prompt to request thinking out loud
+            preview_system = f"""Think out loud how to solve this problem. Consider that you'll send this problem to the following agents to handle tasks for you and describe what they could do to help with this solution. Focus on the ones that would give you the fastest answer, then focus on the ones that would give you the most accurate answer. Suggest we start with the ones that meet both criteria first.
+
+We also provided notes, files and databases that your agents can use that might help.
+
+Available agents:
+
+{agent_glossary}
+
+Do NOT return JSON. Just explain your thought process in plain English as if you're talking through the problem. Do not repeat these instructions back to the user, just follow them."""
+            
+            preview_messages.append({"role": "system", "content": preview_system})
+            
+            # Extract notes/resources context from original messages
+            # Look for messages that contain project resources or notes
+            notes_context = ""
+            resources_context = ""
+            
+            for msg in messages:
+                if msg["role"] == "user":
+                    content = msg.get("content", "")
+                    # Check if this is a project resources message
+                    if "Project Resources Index" in content:
+                        resources_context = content
+                    # Check if this is conversation history (notes about the project)
+                    elif "Previous conversation context" in content:
+                        notes_context = content
+            
+            # Add notes context to preview system prompt if available
+            if notes_context:
+                preview_messages.append({
+                    "role": "user",
+                    "content": f"""The following are notes about what else the user has done in this project, to give you context on what they are trying to accomplish:
+
+{notes_context}"""
+                })
+            
+            # Add resources context if available
+            if resources_context:
+                preview_messages.append({"role": "user", "content": resources_context})
+            
+            # Add the actual user messages (skip system prompts and context we already extracted)
+            for msg in messages:
+                if msg["role"] != "system":
+                    content = msg.get("content", "")
+                    # Skip if we already added it as notes or resources context
+                    if content != notes_context and content != resources_context:
+                        preview_messages.append(msg)
+            
+            log_step(logger, f"Built preview messages: {len(preview_messages)} messages")
+            
+            # Debug: log first 500 chars of each message for troubleshooting
+            for i, msg in enumerate(preview_messages):
+                content_preview = str(msg.get('content', ''))[:500]
+                logger.debug(f"Preview message {i} ({msg.get('role')}): {content_preview}...")
             
             # Start streaming response
             log_step(logger, "Calling OpenAI API for preview streaming")
-            stream = await llm_client.chat.completions.create(
+            
+            # Convert messages format for responses API
+            # responses.create expects "input" with role/content structure
+            input_messages = []
+            for msg in preview_messages:
+                input_messages.append({
+                    "role": msg["role"],
+                    "content": msg["content"]
+                })
+            
+            # Use responses.create for gpt-5 (nano by default)
+            log_step(logger, f"Using responses.create API for {preview_model}")
+            stream = await llm_client.responses.create(
                 model=preview_model,
-                messages=messages,
-                stream=True,
-                max_completion_tokens=2000  # Limit preview length
+                input=input_messages,
+                stream=True
             )
             log_success(logger, "Preview stream initiated")
             
@@ -85,32 +161,42 @@ class PreviewStreamer:
             word_buffer = ""
             token_count = 0
             
-            async for chunk in stream:
-                if not chunk.choices:
-                    continue
-                
-                delta = chunk.choices[0].delta
-                if not delta.content:
-                    continue
-                
-                content = delta.content
-                full_text += content
-                word_buffer += content
-                
-                # Send complete words (split on spaces)
-                if ' ' in word_buffer or '\n' in word_buffer:
-                    token_count += 1
-                    if token_count % 10 == 0:  # Log every 10 tokens
-                        logger.debug(f"Streamed {token_count} tokens, {len(full_text)} chars total")
-                    await websocket.send_json({
-                        "type": "preview_token",
-                        "text": word_buffer,
-                        "phase": phase
-                    })
-                    word_buffer = ""
-                
-                # Small delay for readability (streaming effect)
-                await asyncio.sleep(0.01)
+            # responses.create returns ResponseTextDeltaEvent objects with delta field
+            async for event in stream:
+                # Handle different event types from responses API
+                if hasattr(event, 'type'):
+                    event_type = event.type
+                    
+                    # Only process text delta events
+                    if event_type != 'response.output_text.delta':
+                        continue
+                    
+                    # Extract text content from delta field
+                    if not hasattr(event, 'delta'):
+                        continue
+                    
+                    content = event.delta
+                    
+                    if not content:
+                        continue
+                    
+                    full_text += content
+                    word_buffer += content
+                    
+                    # Send complete words (split on spaces)
+                    if ' ' in word_buffer or '\n' in word_buffer:
+                        token_count += 1
+                        if token_count % 10 == 0:  # Log every 10 tokens
+                            logger.debug(f"Streamed {token_count} tokens, {len(full_text)} chars total")
+                        await websocket.send_json({
+                            "type": "preview_token",
+                            "text": word_buffer,
+                            "phase": phase
+                        })
+                        word_buffer = ""
+                    
+                    # Small delay for readability (streaming effect)
+                    await asyncio.sleep(0.01)
             
             # Send any remaining text
             if word_buffer:

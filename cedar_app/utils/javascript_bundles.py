@@ -834,6 +834,7 @@ def get_main_chat_script() -> str:
           } catch(_) {}
         } else if (m.type === 'preview_start') {
           // Preview streaming start (gpt-5-nano fast preview)
+          // ALWAYS create a NEW bubble - never modify existing ones
           try {
             var t0 = performance.now();
             logToBackend('info', 'Received preview_start event', 'preview_start', {
@@ -844,22 +845,41 @@ def get_main_chat_script() -> str:
             
             previewPhase = m.phase || 'thinking';
             
-            // If thinking bubble exists, add preview indicator to it
-            if (thinkWrap && thinkText) {
-              // Clear the "Planning..." placeholder
-              thinkText.textContent = '';
-              // Add preview label
-              var previewLabel = document.createElement('span');
-              previewLabel.className = 'small muted';
-              previewLabel.style.fontStyle = 'italic';
-              previewLabel.textContent = '[Preview from ' + (m.model || 'gpt-5-nano') + '] ';
-              thinkText.appendChild(previewLabel);
-              // Create span for preview content
-              var previewContent = document.createElement('span');
-              thinkText.appendChild(previewContent);
-              previewText = previewContent;
-              previewWrap = thinkWrap;
-            }
+            // Create a NEW preview bubble
+            var detIdPrev = 'det_preview_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
+            previewWrap = document.createElement('div'); 
+            previewWrap.className = 'msg assistant';
+            var metaPrev = document.createElement('div'); 
+            metaPrev.className = 'meta small'; 
+            var phaseLabel = (m.phase === 'synthesis') ? 'synthesizing' : 'planning';
+            metaPrev.innerHTML = "<span class='pill'>Preview</span> <span class='title' style='font-weight:600'>" + phaseLabel + " (" + (m.model || 'gpt-5-nano') + ")</span>";
+            var bubPrev = document.createElement('div'); 
+            bubPrev.className = 'bubble assistant';
+            bubPrev.style.opacity = '0.85'; // Slightly transparent to indicate preview
+            bubPrev.setAttribute('data-details-id', detIdPrev);
+            var contPrev = document.createElement('div'); 
+            contPrev.className = 'content'; 
+            contPrev.style.whiteSpace = 'pre-wrap';
+            contPrev.style.fontStyle = 'italic'; // Italic to indicate preview
+            contPrev.textContent = ''; // Start empty, will stream in
+            previewText = contPrev;
+            bubPrev.appendChild(contPrev);
+            var detailsPrev = document.createElement('div'); 
+            detailsPrev.id = detIdPrev; 
+            detailsPrev.style.display = 'none';
+            var prePrev = document.createElement('pre'); 
+            prePrev.className = 'small'; 
+            prePrev.style.whiteSpace = 'pre-wrap'; 
+            prePrev.style.background = '#f8fafc'; 
+            prePrev.style.padding = '8px'; 
+            prePrev.style.borderRadius = '6px';
+            try { prePrev.textContent = JSON.stringify({ model: m.model || 'gpt-5-nano', phase: m.phase }, null, 2); } catch(_) { prePrev.textContent = String(m.model || 'gpt-5-nano'); }
+            detailsPrev.appendChild(prePrev);
+            previewWrap.appendChild(metaPrev); 
+            previewWrap.appendChild(bubPrev); 
+            previewWrap.appendChild(detailsPrev);
+            if (msgs) msgs.appendChild(previewWrap);
+            stepAdvance('assistant:preview', previewWrap);
             
             var t1 = performance.now();
             logToBackend('debug', 'Rendered preview_start', 'preview_start', {
@@ -887,17 +907,18 @@ def get_main_chat_script() -> str:
               timestamp: m.timestamp
             });
             
-            // Add completion indicator
-            if (previewWrap && thinkText) {
+            // Add completion indicator to preview bubble
+            if (previewWrap && previewText) {
               var completeLabel = document.createElement('div');
               completeLabel.className = 'small muted';
               completeLabel.style.fontStyle = 'italic';
-              completeLabel.style.marginTop = '4px';
-              completeLabel.textContent = '[Preview complete, waiting for final answer...]';
-              thinkText.appendChild(completeLabel);
+              completeLabel.style.marginTop = '6px';
+              completeLabel.textContent = '(Preview complete - waiting for final answer from ' + ((previewPhase === 'synthesis') ? 'gpt-5' : 'gpt-5') + ')';
+              previewText.parentNode.appendChild(completeLabel);
             }
             
-            // Clear preview state (will be replaced by real response)
+            // Clear preview state - next will be the real response
+            previewWrap = null;
             previewText = null;
             previewPhase = null;
           } catch(e) {
