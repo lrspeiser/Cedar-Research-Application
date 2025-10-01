@@ -152,6 +152,19 @@ class ChiefAgent:
             else:
                 log_warning(logger, f"Preview NOT started", f"enabled={preview_enabled}, ws={has_ws}")
             
+            # Send prompt JSON to UI so it can be inspected in a collapsible bubble
+            try:
+                if ws is not None:
+                    await ws.send_json({
+                        "type": "prompt",
+                        "thread_id": str(thread_id) if thread_id is not None else None,
+                        "stage": ("synthesis" if agent_results else "planning"),
+                        "iteration": iteration + 1,
+                        "messages": messages
+                    })
+            except Exception:
+                pass
+
             # Call LLM (real model)
             log_step(logger, f"Calling LLM with {len(messages)} messages")
             # Note: gpt-5 only supports temperature=1 (default), don't set it
