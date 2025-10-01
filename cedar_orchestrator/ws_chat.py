@@ -256,6 +256,14 @@ async def handle_ws_chat(
                                         metadata={'type': 'final_answer'}
                                     )
                                     self.chat_mgr.set_chat_status(self.proj_id, self.br_id, self.chat_num, "complete")
+                                elif msg_type == 'agent_result':
+                                    # Persist agent result content for transparency and testing
+                                    self.chat_mgr.add_message(
+                                        self.proj_id, self.br_id, self.chat_num,
+                                        role=data.get('agent_name', 'Agent'),
+                                        content=data.get('text', ''),
+                                        metadata={'type': 'agent_result', 'agent': data.get('agent_name', '')}
+                                    )
                                 elif msg_type == 'error':
                                     self.chat_mgr.set_chat_status(self.proj_id, self.br_id, self.chat_num, "error")
                     
