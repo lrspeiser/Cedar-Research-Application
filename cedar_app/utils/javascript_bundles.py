@@ -808,26 +808,17 @@ def get_main_chat_script() -> str:
           } catch(_){ }
         } else if (m.type === 'thinking_start') { ackEvent(m);
           try {
-            // Always create a NEW planning bubble - never reuse
-            var detIdTh = 'det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
-            thinkWrap = document.createElement('div'); thinkWrap.className = 'msg assistant';
-            var metaTh = document.createElement('div'); metaTh.className = 'meta small'; metaTh.innerHTML = "<span class='pill'>Chief Agent</span> <span class='title' style='font-weight:600'>planning</span>";
-            var bubTh = document.createElement('div'); bubTh.className = 'bubble assistant';
-            // Link bubble to details for click-to-toggle
-            bubTh.setAttribute('data-details-id', detIdTh);
-            var contTh = document.createElement('div'); contTh.className = 'content'; contTh.style.whiteSpace='pre-wrap'; contTh.textContent = 'Planning…';
-            // Spinner during planning
-            thinkSpin = document.createElement('span'); thinkSpin.className = 'spinner'; thinkSpin.style.marginLeft = '6px'; contTh.appendChild(thinkSpin);
-            thinkText = contTh;
-            // Details area for planner metadata
-            var detailsTh = document.createElement('div'); detailsTh.id = detIdTh; detailsTh.style.display='none';
-            var preTh = document.createElement('pre'); preTh.className='small'; preTh.style.whiteSpace='pre-wrap'; preTh.style.background='#f8fafc'; preTh.style.padding='8px'; preTh.style.borderRadius='6px';
-            try { preTh.textContent = JSON.stringify({ model: m.model || '' }, null, 2); } catch(_) { preTh.textContent = String(m.model||''); }
-            detailsTh.appendChild(preTh);
-            bubTh.appendChild(contTh);
-            thinkWrap.appendChild(metaTh); thinkWrap.appendChild(bubTh); thinkWrap.appendChild(detailsTh);
-            if (msgs) msgs.appendChild(thinkWrap);
-            stepAdvance('assistant:thinking', thinkWrap);
+            // Do NOT show a bubble yet. Wait until we have actual text.
+            // Record start time and set a watchdog timer for debugging.
+            try { window.__thinkingStartTs = performance.now(); } catch(_){}
+            try {
+              if (window.__thinkingWaitTimer) { clearTimeout(window.__thinkingWaitTimer); }
+              window.__thinkingWaitTimer = setTimeout(function(){
+                try { logToBackend('warn', 'No thinking text after 15s (planning)', 'thinking_wait_timeout', { model: m.model||'', phase: 'planning' }); } catch(_){}
+              }, 15000);
+            } catch(_){}
+            // Advance step without creating DOM bubble
+            stepAdvance('assistant:thinking', null);
           } catch(_) {}
         } else if (m.type === 'thinking_token' && m.delta) {
           try {
@@ -837,59 +828,23 @@ def get_main_chat_script() -> str:
           } catch(_) {}
         } else if (m.type === 'preview_start') {
           // Preview streaming start (gpt-5-nano fast preview)
-          // ALWAYS create a NEW bubble - never modify existing ones
+          // Do NOT create a bubble yet; wait for the first preview_token.
           try {
-            
             var t0 = performance.now();
             logToBackend('info', 'Received preview_start event', 'preview_start', {
               phase: m.phase,
               model: m.model,
               timestamp: m.timestamp
             });
-            
             previewPhase = m.phase || 'thinking';
-            
-            // Create a NEW preview bubble
-            var detIdPrev = 'det_preview_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
-            previewWrap = document.createElement('div'); 
-            previewWrap.className = 'msg assistant';
-            var metaPrev = document.createElement('div'); 
-            metaPrev.className = 'meta small'; 
-            var phaseLabel = (m.phase === 'synthesis') ? 'synthesizing' : 'planning';
-            // Label preview as Chief Agent to match final bubble, while still streaming early thinking
-            metaPrev.innerHTML = "<span class='pill'>Chief Agent</span> <span class='title' style='font-weight:600'>" + phaseLabel + "</span>";
-            var bubPrev = document.createElement('div'); 
-            bubPrev.className = 'bubble assistant';
-            bubPrev.style.opacity = '0.85'; // Slightly transparent to indicate preview
-            bubPrev.setAttribute('data-details-id', detIdPrev);
-            var contPrev = document.createElement('div'); 
-            contPrev.className = 'content'; 
-            contPrev.style.whiteSpace = 'pre-wrap';
-            contPrev.style.fontStyle = 'italic'; // Italic to indicate preview
-            contPrev.textContent = ''; // Start empty, will stream in
-            previewText = contPrev;
-            bubPrev.appendChild(contPrev);
-            var detailsPrev = document.createElement('div'); 
-            detailsPrev.id = detIdPrev; 
-            detailsPrev.style.display = 'none';
-            var prePrev = document.createElement('pre'); 
-            prePrev.className = 'small'; 
-            prePrev.style.whiteSpace = 'pre-wrap'; 
-            prePrev.style.background = '#f8fafc'; 
-            prePrev.style.padding = '8px'; 
-            prePrev.style.borderRadius = '6px';
-            try { prePrev.textContent = JSON.stringify({ model: m.model || 'gpt-5-nano', phase: m.phase }, null, 2); } catch(_) { prePrev.textContent = String(m.model || 'gpt-5-nano'); }
-            detailsPrev.appendChild(prePrev);
-            previewWrap.appendChild(metaPrev); 
-            previewWrap.appendChild(bubPrev); 
-            previewWrap.appendChild(detailsPrev);
-            if (msgs) msgs.appendChild(previewWrap);
-            stepAdvance('assistant:preview', previewWrap);
-            
-            var t1 = performance.now();
-            logToBackend('debug', 'Rendered preview_start', 'preview_start', {
-              render_time_ms: (t1 - t0).toFixed(2)
-            });
+            try { window.__previewStartTs = performance.now(); } catch(_){}
+            try {
+              if (window.__previewWaitTimer) { clearTimeout(window.__previewWaitTimer); }
+              window.__previewWaitTimer = setTimeout(function(){
+                try { logToBackend('warn', 'No preview tokens after 10s', 'preview_wait_timeout', { phase: previewPhase, model: m.model||'' }); } catch(_){}
+              }, 10000);
+            } catch(_){}
+            stepAdvance('assistant:preview', null);
           } catch(e) {
             console.error('[preview_start] error:', e);
             logToBackend('error', 'Failed to handle preview_start: ' + e.message, 'preview_start', {});
@@ -897,6 +852,29 @@ def get_main_chat_script() -> str:
         } else if (m.type === 'preview_token') {
           // Preview token streaming (word by word from gpt-5-nano)
           try {
+            // If bubble doesn't exist yet, create it now on first token
+            if (!previewText) {
+              var detIdPrev2 = 'det_preview_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
+              previewWrap = document.createElement('div');
+              previewWrap.className = 'msg assistant';
+              var metaPrev2 = document.createElement('div'); metaPrev2.className = 'meta small';
+              var phaseLabel2 = (previewPhase === 'synthesis') ? 'synthesizing' : 'planning';
+              metaPrev2.innerHTML = "<span class='pill'>Chief Agent</span> <span class='title' style='font-weight:600'>" + phaseLabel2 + "</span>";
+              var bubPrev2 = document.createElement('div'); bubPrev2.className = 'bubble assistant';
+              bubPrev2.style.opacity = '0.85';
+              bubPrev2.setAttribute('data-details-id', detIdPrev2);
+              var contPrev2 = document.createElement('div'); contPrev2.className = 'content'; contPrev2.style.whiteSpace = 'pre-wrap'; contPrev2.style.fontStyle = 'italic';
+              contPrev2.textContent = '';
+              previewText = contPrev2;
+              bubPrev2.appendChild(contPrev2);
+              var detailsPrev2 = document.createElement('div'); detailsPrev2.id = detIdPrev2; detailsPrev2.style.display = 'none';
+              var prePrev2 = document.createElement('pre'); prePrev2.className='small'; prePrev2.style.whiteSpace='pre-wrap'; prePrev2.style.background='#f8fafc'; prePrev2.style.padding='8px'; prePrev2.style.borderRadius='6px';
+              try { prePrev2.textContent = JSON.stringify({ model: (m.model || 'gpt-5-nano'), phase: previewPhase }, null, 2); } catch(_) { prePrev2.textContent = String(m.model || 'gpt-5-nano'); }
+              detailsPrev2.appendChild(prePrev2);
+              previewWrap.appendChild(metaPrev2); previewWrap.appendChild(bubPrev2); previewWrap.appendChild(detailsPrev2);
+              if (msgs) msgs.appendChild(previewWrap);
+              try { if (window.__previewWaitTimer) { clearTimeout(window.__previewWaitTimer); window.__previewWaitTimer = null; } } catch(_){}
+            }
             if (previewText && m.text) {
               previewText.textContent = (previewText.textContent || '') + String(m.text);
             }
@@ -911,17 +889,16 @@ def get_main_chat_script() -> str:
               total_length: m.total_length,
               timestamp: m.timestamp
             });
-            
-            // Add completion indicator to preview bubble
+            try { if (window.__previewWaitTimer) { clearTimeout(window.__previewWaitTimer); window.__previewWaitTimer = null; } } catch(_){}
+            // Add completion indicator only if a bubble exists
             if (previewWrap && previewText) {
               var completeLabel = document.createElement('div');
               completeLabel.className = 'small muted';
               completeLabel.style.fontStyle = 'italic';
               completeLabel.style.marginTop = '6px';
-              completeLabel.textContent = '(Preview complete - waiting for final answer from ' + ((previewPhase === 'synthesis') ? 'gpt-5' : 'gpt-5') + ')';
+              completeLabel.textContent = '(Preview complete - waiting for final answer from gpt-5)';
               previewText.parentNode.appendChild(completeLabel);
             }
-            
             // Clear preview state - next will be the real response
             previewWrap = null;
             previewText = null;
@@ -956,7 +933,9 @@ Details:
           } catch(_) {}
         } else if (m.type === 'thinking') {
           try {
-            // Update existing bubble if it exists, otherwise create a new one
+            // Cancel wait timer for thinking
+            try { if (window.__thinkingWaitTimer) { clearTimeout(window.__thinkingWaitTimer); window.__thinkingWaitTimer = null; } } catch(_){}
+            // Create bubble on first text
             if (!thinkWrap) {
               var detIdTh2 = 'det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
               thinkWrap = document.createElement('div'); thinkWrap.className = 'msg assistant';
@@ -975,8 +954,7 @@ Details:
               stepAdvance('assistant:thinking', thinkWrap);
             }
             if (thinkText) { thinkText.textContent = String(m.text || ''); }
-            try { if (thinkSpin && thinkSpin.parentNode) thinkSpin.remove(); } catch(_) {}
-            // Update details with final planner output and metadata
+            // Update details with planner output and metadata
             try {
               var detEl = thinkWrap ? thinkWrap.querySelector('.bubble[data-details-id]') : null;
               var did = detEl ? detEl.getAttribute('data-details-id') : null;
