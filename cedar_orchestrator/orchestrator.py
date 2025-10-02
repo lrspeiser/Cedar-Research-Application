@@ -256,6 +256,21 @@ class ThinkerOrchestrator:
             db_session=db_session,
             websocket=websocket
         )
+
+        # Additionally, always run NotesAgent to review the thread summary and existing notes and persist a new note
+        try:
+            await NotesPersistence.run_notes_agent_on_decision(
+                notes_agent=self.notes_agent,
+                user_query=message,
+                chief_decision=chief_decision,
+                project_id=project_id,
+                branch_id=branch_id,
+                db_session=db_session,
+                websocket=websocket,
+                thread_summary=conversation_history
+            )
+        except Exception as e:
+            logger.warning(f"[ORCHESTRATOR] NotesAgent run failed (non-fatal): {e}")
         
         # Handle iteration request
         allowed_loops = 3 if had_errors else self.MAX_ITERATIONS

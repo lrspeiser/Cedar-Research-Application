@@ -143,16 +143,20 @@ class NotesPersistence:
         project_id: Optional[int],
         branch_id: Optional[int],
         db_session,
-        websocket: Optional[WebSocket] = None
-    ) -> Optional[Any]:
+        websocket: Optional[WebSocket] = None,
+        thread_summary: Optional[str] = None
+    ) -> Optional[int]:
         """
-        Optionally run NotesAgent to create summary of Chief Agent decision.
+        Run NotesAgent to create a summary note of the Chief Agent decision and persist it.
         
-        This is separate from save_orchestration_notes - it runs the NotesAgent
-        to create a summary, while save_orchestration_notes persists to DB.
+        Behavior:
+        - Reads existing notes for deduplication context
+        - Builds content from the Chief decision and (optionally) a thread summary
+        - Calls NotesAgent to produce a user-friendly note
+        - Saves the generated note into the project's notes table
         
         Returns:
-            AgentResult if successful, None otherwise
+            Note ID if saved successfully, None otherwise
         """
         if not notes_agent:
             return None
@@ -187,11 +191,20 @@ class NotesPersistence:
             if sel := (decision.get('selected_agent') or '').strip():
                 lines.append(f"Selected Agent: {sel}")
             
-            if atu := decision.get('agents_to_use'):
-                lines.append(f"Agents To Use: {', '.join(atu)}")
+            if atu := decision.get('agent_tasks'):
+                try:
+                    agent_names = [t.get('agent','') for t in atu if isinstance(t, dict)]
+                    lines.append(f"Agents To Use: {', '.join([a for a in agent_names if a])}")
+                except Exception:
+                    pass
             
             if rsn := (decision.get('reasoning') or '').strip():
                 lines.append(f"Reasoning:\n{rsn}")
+            
+            # Include thread summary (conversation history) if provided
+            if thread_summary:
+                short_hist = thread_summary if len(thread_summary) <= 2000 else (thread_summary[:2000] + "\n... (truncated)")
+                lines.append(f"Thread Summary:\n{short_hist}")
             
             content_to_note = "\n\n".join(lines) if lines else "Chief Agent summary"
             
@@ -201,6 +214,33 @@ class NotesPersistence:
                 content_to_note=content_to_note,
                 existing_notes=existing_notes_list
             )
+            
+            # Persist the generated note
+            note_id = None
+            try:
+                from main_models import Note
+                note = Note(
+                    project_id=int(project_id) if project_id is not None else None,
+                    branch_id=int(branch_id) if branch_id is not None else None,
+                    content=getattr(notes_result, 'result', '') or content_to_note,
+                    tags=["NotesAgent"],
+                    agent_name="NotesAgent",
+                    user_query=user_query,
+                    note_type="agent_finding",
+                    title=None
+                )
+                db_session.add(note)
+                db_session.commit()
+                db_session.refresh(note)
+                note_id = note.id
+                logger.info(f"[NotesPersistence] ✅ Saved NotesAgent note ID {note_id}")
+            except Exception as e:
+                logger.error(f"[NotesPersistence] Failed to save NotesAgent note: {e}")
+                try:
+                    db_session.rollback()
+                except Exception:
+                    pass
+                note_id = None
             
             # Send to WebSocket if available
             if websocket and hasattr(notes_result, 'display_name'):
@@ -212,15 +252,28 @@ class NotesPersistence:
                         "summary": getattr(notes_result, 'summary', None),
                         "metadata": {
                             "agent": "NotesAgent",
-                            "confidence": notes_result.confidence,
-                            "method": notes_result.method
+                            "confidence": getattr(notes_result, 'confidence', None),
+                            "method": getattr(notes_result, 'method', None)
                         }
                     })
                 except Exception as e:
                     logger.warning(f"[NotesPersistence] Failed to send NotesAgent result: {e}")
             
+            # Notify UI about saved note
+            if websocket and note_id:
+                try:
+                    await websocket.send_json({
+                        "type": "note_saved",
+                        "note_id": note_id,
+                        "iteration": decision.get('iteration') or None,
+                        "is_final": decision.get('decision') != 'loop',
+                        "message": "NotesAgent summary saved to Notes"
+                    })
+                except Exception:
+                    pass
+            
             logger.info("[NotesPersistence] NotesAgent completed successfully")
-            return notes_result
+            return note_id
             
         except Exception as e:
             logger.error(f"[NotesPersistence] NotesAgent processing failed: {e}")
