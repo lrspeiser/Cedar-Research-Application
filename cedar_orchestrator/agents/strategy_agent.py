@@ -77,53 +77,29 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
                         "content": build_agent_system_prompt(
                             "StrategyAgent",
                             AGENT_ROLES.get("StrategyAgent", "to create strategic plans and orchestrate agents"),
-                            """You are a strategic planning expert. Create detailed action plans that include:
-                        1. Breaking down the problem into manageable steps
-                        2. Identifying which specialized agents should be used
-                        3. Determining the sequence of operations
-                        4. Specifying how to gather source material
-                        5. How to analyze data and compile results
-                        6. How to write the final report
-                        
-                        Format as a numbered step-by-step plan with:
-                        - Step number and title
-                        - Agent(s) to use
-                        - Input/output for each step
-                        - Dependencies between steps
-                        
-                        # AVAILABLE AGENTS AND THEIR CAPABILITIES:
-                        
-                        **CodeAgent** (strongest): Python execution, calculations, simulations, data analysis (pandas/NumPy/ML), charts/plots (matplotlib), document extraction (CSV/PDF/HTML/OCR), can read/write databases, create/process images.
-                        
-                        **FormulaAgent**: Step-by-step derivations from first principles; formal proofs with assumptions.
-                        
-                        **ResearchAgent**: Web research with citations; use when external/current info needed.
-                        
-                        **StrategyAgent**: Multi-step planning (you can recursively suggest your own use for complex orchestration).
-                        
-                        **SQLAgent**: Executable SQL only (SQLite-compatible); creates/updates tables, indexes, constraints, runs queries.
-                        
-                        **DataAgent**: Schema analysis, query guidance; reads DB metadata, proposes SQL to answer questions.
-                        
-                        **NotesAgent**: Organized notes/summaries; turns bullets/JSON into clean notes with headings/tags/timestamps.
-                        
-                        **ShellAgent**: System commands (non-interactive); file searches, grep, disk usage, package installs.
-                        
-                        **FileAgent**: Downloads from URLs, manages files, records metadata; makes files available to other agents.
-                        
-                        **ImageCreationAgent**: Text-to-image generation; creates diagrams/mockups, saves to project.
-                        
-                        **ImageAnalysisAgent**: Image understanding/OCR; detects objects/tags/text, updates image metadata.
-                        
-                        # MULTI-AGENT PATTERNS:
-                        - Research-then-Analyze: ResearchAgent → CodeAgent (analyze/plot) → NotesAgent
-                        - Ingest-Transform-Report: FileAgent → CodeAgent (extract/clean) → SQLAgent/DataAgent → NotesAgent
-                        - Complex Orchestration: StrategyAgent (plan) → ChiefAgent (dispatch iteratively)
-                        
-                        # USING SUPPORTING ASSETS:
-                        - If PDFs/CSVs/images in project: CodeAgent (parse/analyze), ImageAnalysisAgent (OCR), SQLAgent/DataAgent (DB), NotesAgent (document)
-                        - Need new files: FileAgent (download first)
-                        - CodeAgent can write outputs (CSV/plots) back to project files and DB"""
+                            """You are a strategic planning expert.
+Respond ONLY with valid JSON in this exact schema:
+{
+  "plan": [
+    {
+      "step": 1,
+      "title": "short step title",
+      "agent": "CodeAgent|SQLAgent|ImageAnalysisAgent|ResearchAgent|DataAgent|ShellAgent|NotesAgent|FileAgent|StrategyAgent",
+      "task": "exact task string to pass to that agent",
+      "inputs": ["input 1", "input 2"],
+      "outputs": ["output 1", "output 2"],
+      "dependencies": [1, 2]
+    }
+  ],
+  "summary": "brief one-line summary"
+}
+
+Notes:
+- The 'plan' array must be ordered by execution sequence (step numbers ascending).
+- 'agent' must name exactly one agent per step.
+- 'task' must be a single, self-contained instruction string we can pass directly to the agent.
+- Keep it concise; do not include prose outside the JSON object.
+"""
                         )
                     },
                     {"role": "user", "content": f"Create a strategic plan to address: {task}"}
@@ -131,23 +107,44 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
             }
 
             response = await self.llm_client.chat.completions.create(**completion_params)
-            strategic_plan = response.choices[0].message.content
-            
-            logger.info(f"[StrategyAgent] Completed strategic planning in {time.time() - start_time:.3f}s")
-            
-            formatted_output = f"""Answer: Strategic Action Plan
+            raw = response.choices[0].message.content.strip()
 
-{strategic_plan}
+            # Parse JSON response - fail fast if invalid
+            try:
+                plan_data = json.loads(raw)
+            except json.JSONDecodeError as e:
+                logger.error(f"[StrategyAgent] Failed to parse JSON: {e}")
+                return AgentResult(
+                    agent_name="StrategyAgent",
+                    display_name="Strategy Agent",
+                    result=f"**JSON Parse Error:**\n\nStrategyAgent returned invalid JSON.\n\n**Error:** {e}\n\n**Raw Response (truncated):**\n```\n{raw[:800]}\n```",
+                    confidence=0.1,
+                    method="JSON parse error",
+                    explanation="StrategyAgent did not return valid JSON",
+                    summary="Failed to parse StrategyAgent JSON"
+                )
 
-Why: Created a comprehensive strategic plan with specific steps and agent assignments"""
-            
+            logger.info(f"[StrategyAgent] Completed plan in {time.time() - start_time:.3f}s")
+
+            # Build a readable summary for the bubble, but keep JSON in artifacts
+            steps = plan_data.get("plan", [])
+            lines = ["## Strategy Plan (summary)"]
+            for s in steps:
+                try:
+                    lines.append(f"{s.get('step')}. {s.get('title')} — {s.get('agent')}")
+                except Exception:
+                    pass
+            formatted_output = "\n".join(lines)
+
             return AgentResult(
                 agent_name="StrategyAgent",
                 display_name="Strategy Agent",
                 result=formatted_output,
                 confidence=0.80,
                 method="Strategic planning",
-                explanation="Developed detailed execution strategy"
+                explanation="Developed detailed execution strategy",
+                summary=plan_data.get("summary", "Strategy plan created"),
+                artifacts={"type": "json", "name": "strategy_plan", "source": plan_data}
             )
             
         except Exception as e:
