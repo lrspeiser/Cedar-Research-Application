@@ -374,27 +374,7 @@ def layout(title: str, body: str, header_label: Optional[str] = None,
     # Client logging JavaScript
     client_log_js = get_client_log_js()
 
-    # Feature flags for UI internals (read from environment)
-    def _truthy(v: Optional[str]) -> bool:
-        try:
-            return str(v or "").strip().lower() not in {"", "0", "false", "no"}
-        except Exception:
-            return False
-    try:
-        # Default behavior: preview ON unless explicitly disabled in .env
-        _env_prev = env_get("CEDARPY_SHOW_PREVIEW")
-        _flag_preview = "true" if (_env_prev is None or _truthy(_env_prev)) else "false"
-        # Default behavior: prompt bubbles OFF unless explicitly enabled in .env
-        _env_prompt = env_get("CEDARPY_SHOW_PROMPT_BUBBLES")
-        _flag_prompt = "true" if (_env_prompt is not None and _truthy(_env_prompt)) else "false"
-        feature_flags_js = f"""
-  <script>
-    window.CEDAR_SHOW_PREVIEW = {_flag_preview};
-    window.CEDAR_SHOW_PROMPT_BUBBLES = {_flag_prompt};
-  </script>
-  """
-    except Exception:
-        feature_flags_js = "<script>window.CEDAR_SHOW_PREVIEW=true;window.CEDAR_SHOW_PROMPT_BUBBLES=false;</script>"
+    # Preview is always enabled; prompt bubbles hidden by default — no flags injected
 
     # Build HTML document (avoid f-string to prevent brace parsing issues; use str.format with escaped braces)
     html_doc = """<!doctype html>
@@ -436,7 +416,6 @@ def layout(title: str, body: str, header_label: Optional[str] = None,
     @media (max-width: 900px) {{ .two-col {{ grid-template-columns: 1fr; }} }}
   </style>
   {client_log_js}
-  {feature_flags_js}
   <script>
   (function(){{
     function activateTab(tab) {{
@@ -483,7 +462,6 @@ def layout(title: str, body: str, header_label: Optional[str] = None,
         html_doc = html_doc.format(
             title=escape(title),
             client_log_js=client_log_js,
-            feature_flags_js=feature_flags_js,
             llm_status=llm_status,
             header_info=header_html,
             nav_html=nav_html,
@@ -491,5 +469,4 @@ def layout(title: str, body: str, header_label: Optional[str] = None,
         )
     except Exception:
         pass
-    return HTMLResponse(html_doc)
     return HTMLResponse(html_doc)
