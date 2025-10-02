@@ -1,0 +1,23 @@
+🔍 Checking for running uvicorn processes...
+🛑 Stopping existing server...
+✅ Server stopped
+🔒 Ensuring port 8000 is free...
+ℹ️  Port 8000 is already free
+🚀 Starting server...
+⏳ Waiting for server to start...
+✅ Server started successfully!
+📋 Process ID: 68968
+🌐 Server URL: http://127.0.0.1:8000
+📝 Logs: tail -f server.log
+
+Recent log output:
+  File "<frozen importlib._bootstrap_external>", line 1026, in exec_module
+  File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+  File "/Users/leonardspeiser/Projects/cedarpy/main.py", line 184, in <module>
+    from cedar_app.ui_utils import (
+    ...<8 lines>...
+    )
+  File "/Users/leonardspeiser/Projects/cedarpy/cedar_app/ui_utils.py", line 438
+    function activateTab(tab) {{
+    ^^^^^^^^^^^^^^^^^^^^^^^^^
+SyntaxError: invalid syntax. Perhaps you forgot a comma?

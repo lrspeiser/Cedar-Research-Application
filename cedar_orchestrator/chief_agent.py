@@ -89,20 +89,25 @@ class ChiefAgent:
             
             # Stream thinking start to UI (after prompt so prompt pre appears first)
             # Differentiate between planning (no results) and synthesis (has results)
+            # If preview is enabled for planning, we suppress the planning bubble and rely on the fast preview bubble instead.
             log_step(logger, "Sending thinking/synthesis start event to UI")
             try:
                 if ws is not None:
                     event_type = "thinking_start" if not agent_results else "synthesis_start"
                     phase = "Planning" if not agent_results else "Synthesis"
-                    event_data = {
-                        "type": event_type,
-                        "phase": phase,
-                        "model": model,
-                        "iteration": iteration + 1
-                    }
-                    log_step(logger, f"Sending WebSocket event: {event_type}", f"phase={phase}")
-                    await ws.send_json(event_data)
-                    log_success(logger, "WebSocket event sent successfully")
+                    # Suppress planning bubble if preview is enabled
+                    if not agent_results and preview_enabled:
+                        log_step(logger, "Preview enabled - skipping thinking_start bubble (planning)")
+                    else:
+                        event_data = {
+                            "type": event_type,
+                            "phase": phase,
+                            "model": model,
+                            "iteration": iteration + 1
+                        }
+                        log_step(logger, f"Sending WebSocket event: {event_type}", f"phase={phase}")
+                        await ws.send_json(event_data)
+                        log_success(logger, "WebSocket event sent successfully")
                 else:
                     log_warning(logger, "No WebSocket available, skipping UI event")
             except Exception as e:
@@ -314,17 +319,22 @@ class ChiefAgent:
             logger.info(f"[ChiefAgent] Agent Tasks Count: {len(decision_data.get('agent_tasks', []))}")
             logger.info(f"[ChiefAgent] Completed in {time.time() - start_time:.3f}s")
             
-            # Emit conversational thinking to UI (stream into the thinking bubble)
+            # Emit conversational thinking to UI (only when we need a user-facing question)
+            # Do NOT show Chief Agent planning text during first run or loops; rely on the fast preview bubble.
             try:
                 if ws is not None:
-                    user_msg = (decision_data.get('user_facing_message') or '').strip()
-                    if user_msg:
-                        await ws.send_json({
-                            "type": "thinking",
-                            "text": user_msg,
-                            "model": model,
-                            "elapsed_ms": int((time.time() - start_time) * 1000)
-                        })
+                    decision_kind = str(decision_data.get('decision', '')).lower().strip()
+                    if decision_kind == 'clarify':
+                        user_msg = (decision_data.get('user_facing_message') or '').strip()
+                        if user_msg:
+                            await ws.send_json({
+                                "type": "thinking",
+                                "text": user_msg,
+                                "model": model,
+                                "elapsed_ms": int((time.time() - start_time) * 1000)
+                            })
+                    else:
+                        log_step(logger, f"Skipping thinking text emission for decision='{decision_kind}' (preview handles user-facing text until Final/Question)")
             except Exception:
                 pass
             

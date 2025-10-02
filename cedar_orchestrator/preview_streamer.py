@@ -186,13 +186,20 @@ class PreviewStreamer:
                 chunk_count += 1
                 if chunk_count == 1:
                     logger.debug(f"First chunk received: type={type(chunk)}")
+                    logger.debug(f"Full first chunk: {chunk}")
                 
                 # Handle chat completions format
                 if not chunk.choices:
+                    logger.debug(f"Chunk {chunk_count} has no choices, skipping")
                     continue
                 
                 delta = chunk.choices[0].delta
+                if chunk_count <= 3:
+                    logger.debug(f"Chunk {chunk_count} delta: {delta}")
+                
                 if not delta.content:
+                    if chunk_count <= 3:
+                        logger.debug(f"Chunk {chunk_count} has no delta.content, skipping")
                     continue
                 
                 delta_count += 1
