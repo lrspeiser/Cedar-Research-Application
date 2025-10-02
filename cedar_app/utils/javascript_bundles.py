@@ -721,7 +721,17 @@ def get_main_chat_script() -> str:
               titleEl.addEventListener('click', toggleDetails);
             }
             
-            if (msgs) msgs.appendChild(wrapA);
+            // Insert agent result BEFORE Chief Agent bubble if it exists, otherwise append normally
+            try {
+              var chiefBubble = msgs ? msgs.querySelector('[data-chief-bubble="true"]') : null;
+              if (chiefBubble && msgs) {
+                msgs.insertBefore(wrapA, chiefBubble);
+              } else if (msgs) {
+                msgs.appendChild(wrapA);
+              }
+            } catch(_) {
+              if (msgs) msgs.appendChild(wrapA);
+            }
             stepAdvance('agent:' + agentName.toLowerCase(), wrapA);
             ackEvent(m);
           } catch(e) {
@@ -806,19 +816,41 @@ def get_main_chat_script() -> str:
 
             // Plan function - no longer updating a panel since Plan tab is removed
           } catch(_){ }
-        } else if (m.type === 'thinking_start') { ackEvent(m);
+        } else if (m.type === 'thinking_start' || m.type === 'synthesis_start') { ackEvent(m);
           try {
-            // Do NOT show a bubble yet. Wait until we have actual text.
-            // Record start time and set a watchdog timer for debugging.
-            try { window.__thinkingStartTs = performance.now(); } catch(_){}
+            // Record start time and set a watchdog timer for debugging
+            var phase = m.type === 'synthesis_start' ? 'synthesis' : 'planning';
+            var phaseLabel = m.type === 'synthesis_start' ? 'Synthesizing' : 'Planning';
+            try { window.__thinkingStartTs = performance.now(); window.__thinkingPhase = phase; } catch(_){}
             try {
               if (window.__thinkingWaitTimer) { clearTimeout(window.__thinkingWaitTimer); }
               window.__thinkingWaitTimer = setTimeout(function(){
-                try { logToBackend('warn', 'No thinking text after 15s (planning)', 'thinking_wait_timeout', { model: m.model||'', phase: 'planning' }); } catch(_){}
+                try { logToBackend('warn', 'No thinking text after 15s (' + phase + ')', 'thinking_wait_timeout', { model: m.model||'', phase: phase }); } catch(_){}
               }, 15000);
             } catch(_){}
-            // Advance step without creating DOM bubble
-            stepAdvance('assistant:thinking', null);
+            // Create Chief Agent bubble immediately with spinner
+            if (!thinkWrap) {
+              var detIdTh3 = 'det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
+              thinkWrap = document.createElement('div'); thinkWrap.className = 'msg assistant';
+              thinkWrap.setAttribute('data-chief-bubble', 'true'); // Mark as Chief Agent bubble
+              var metaTh3 = document.createElement('div'); metaTh3.className = 'meta small';
+              metaTh3.innerHTML = "<span class='pill'>Chief Agent</span> <span class='title' style='font-weight:600'>" + phaseLabel + "</span>";
+              var bubTh3 = document.createElement('div'); bubTh3.className = 'bubble assistant';
+              bubTh3.setAttribute('data-details-id', detIdTh3);
+              var contTh3 = document.createElement('div'); contTh3.className = 'content'; contTh3.style.whiteSpace='pre-wrap';
+              contTh3.textContent = phaseLabel + '…';
+              thinkText = contTh3;
+              // Spinner
+              thinkSpin = document.createElement('span'); thinkSpin.className = 'spinner'; thinkSpin.style.marginLeft = '6px';
+              contTh3.appendChild(thinkSpin);
+              bubTh3.appendChild(contTh3);
+              var detailsTh3 = document.createElement('div'); detailsTh3.id = detIdTh3; detailsTh3.style.display='none';
+              var preTh3 = document.createElement('pre'); preTh3.className='small'; preTh3.style.whiteSpace='pre-wrap'; preTh3.style.background='#f8fafc'; preTh3.style.padding='8px'; preTh3.style.borderRadius='6px';
+              detailsTh3.appendChild(preTh3);
+              thinkWrap.appendChild(metaTh3); thinkWrap.appendChild(bubTh3); thinkWrap.appendChild(detailsTh3);
+              if (msgs) msgs.appendChild(thinkWrap);
+              stepAdvance('assistant:' + phase, thinkWrap);
+            }
           } catch(_) {}
         } else if (m.type === 'thinking_token' && m.delta) {
           try {
