@@ -75,20 +75,22 @@ class PreviewStreamer:
                 # Planning phase: compressed, focused instruction
                 preview_system = (
                     cedar_intro + "\n\n" +
-                    "Think out loud about the user prompt. "
-                    "First, explain what the prompt or file is asking. "
-                    "Second, briefly list the data, files, or code you would need. "
-                    "Third, propose which agent(s) to use and why. "
-                    "You may reference any provided notes, files, or database context. "
-                    "Keep it short and actionable. Do NOT return JSON."
+                    "You are producing a user-facing preview message. "
+                    "Start with: 'I'll think out loud…' and then briefly: "
+                    "(1) explain the user's question/task or uploaded file goal, "
+                    "(2) list the data/files/code needed to answer it (if any), "
+                    "(3) propose which agent(s) should run and why. "
+                    "Important: This is displayed directly to the user. Keep it short, actionable, and conversational. "
+                    "Do NOT return JSON."
                 )
             else:
                 # Synthesis phase: concise follow-up
                 preview_system = (
                     cedar_intro + "\n\n" +
-                    "Think out loud about what the agent results show. "
-                    "What’s done, what’s missing, and which agent(s) should run next? "
-                    "Do NOT repeat planning guidance. Keep it concise. Do NOT return JSON."
+                    "You are producing a user-facing preview message. "
+                    "Start with: 'I'll think out loud…' and briefly summarize: what agent results show, what's still missing, and which agent(s) should run next and why. "
+                    "Important: This is displayed directly to the user. Keep it short, actionable, and conversational. "
+                    "Do NOT return JSON."
                 )
             
             
@@ -109,26 +111,25 @@ class PreviewStreamer:
                     elif "Previous conversation context" in content:
                         notes_context = content
             
-            # Add notes context to preview system prompt if available
+            # Add notes context to preview prompt if available (truncate for speed)
             if notes_context:
+                _notes_short = (notes_context[:1000] + "\n... (truncated)") if len(notes_context) > 1000 else notes_context
                 preview_messages.append({
                     "role": "user",
-                    "content": f"""The following are notes about what else the user has done in this project, to give you context on what they are trying to accomplish:
+                    "content": f"""Project notes (brief):
 
-{notes_context}"""
+{_notes_short}"""
                 })
             
-            # Add resources context if available
-            if resources_context:
-                preview_messages.append({"role": "user", "content": resources_context})
+            # Intentionally skip heavy Project Resources Index for preview to keep it fast
             
-            # Add the actual user messages (skip system prompts and context we already extracted)
+            # Add the latest user message only (skip system and prior assistant messages)
+            last_user = None
             for msg in messages:
-                if msg["role"] != "system":
-                    content = msg.get("content", "")
-                    # Skip if we already added it as notes or resources context
-                    if content != notes_context and content != resources_context:
-                        preview_messages.append(msg)
+                if msg.get("role") == "user":
+                    last_user = msg
+            if last_user:
+                preview_messages.append(last_user)
             
             log_step(logger, f"Built preview messages: {len(preview_messages)} messages")
             
