@@ -243,3 +243,83 @@ If you need to configure OpenAI keys or run the optional Redis/Node relay, see t
 - “Where to put your OpenAI key (.env) when packaged”
 - “Redis + Node relay (SSE) for reliable incremental updates”
 - “Shell window and API (WebSockets-only)”
+
+
+## 9) User story flows (end-to-end)
+
+Below are representative user flows and the steps CedarPy takes (planning → parallel agent execution → synthesis → optional loop):
+
+- Flow A: Quick calculation with code
+  - User: “What is the mean of [3, 10, 4, 9, 12]? Show the Python code.”
+  - Steps: Chief plans CodeAgent → CodeAgent returns JSON {answer, code, summary} → code executed → Chief synthesizes TLDR, recap, results, reasoning, next steps.
+
+- Flow B: Image upload → extract → persist → summarize
+  - Trigger: File upload creates auto chat with file_id.
+  - Steps: Chief → ImageAnalysisAgent (requires context.file_id) → Chief loops to SQLAgent → SQLRunner executes → Chief finalizes.
+
+- Flow C: Tabular import via upload
+  - Background: LLM codegen imports into per-project SQLite.
+  - Chat: Auto message suggests next steps; user can ask SQL questions; Chief routes to SQLAgent/SQLRunner or CodeAgent.
+
+- Flow D: Repo search and summary
+  - User asks to grep TODOs and summarize; Chief dispatches ShellAgent and CodeAgent in parallel; Chief synthesizes outputs.
+
+- Flow E: Download URL and analyze
+  - Chief dispatches FileAgent + CodeAgent in parallel; may loop with SQLAgent to persist; Chief summarizes with next steps.
+
+- Flow F: Create schema then query
+  - Chief uses SQLAgent to create/modify tables and insert; SQLRunner executes; Chief returns results and next steps.
+
+Notes on concurrency: The Agent Dispatcher (see cedar_orchestrator/agent_dispatcher.py) executes multiple agents concurrently via asyncio.gather and returns structured AgentResult objects used in synthesis.
+
+
+## 10) Agents and prompts (planning, routing, contracts)
+
+Chief Agent (orchestrator)
+- Planning vs. synthesis:
+  - Planning (no agent results yet): decision="loop", user_facing_message, agent_tasks[].
+  - Synthesis (with agent results): decision="final" | "loop" | "clarify", thinking_process, additional_guidance (if looping), final_answer, agent_tasks[].
+- Routing examples: Trigger word map guides which agent(s) to choose (e.g., calculate → CodeAgent, SELECT/CREATE → SQLAgent, grep/find → ShellAgent, analyze image → ImageAnalysisAgent, etc.).
+- Final answer format: TLDR → Recap of what was asked → What came back → Reasoning → Possible next steps.
+
+Key prompt sources
+- Chief prompt templates: cedar_orchestrator/prompts/chief_prompts.py
+  - get_system_header(iteration, max_iterations, remaining_loops)
+  - get_planning_schema() and get_synthesis_schema()
+  - get_routing_examples() and get_agent_capabilities()
+- Dynamic prompt extraction (for display/inspection): cedar_orchestrator/agent_prompts.py
+
+Execution agent JSON contracts (enforced by prompts)
+- CodeAgent (cedar_orchestrator/agents/code_agent.py)
+  - Must return JSON: { answer: markdown, code: python, summary: string, db_update?: {...} }
+  - Orchestrator executes the code and captures stdout/stderr; answer is displayed as-is.
+- SQLAgent (cedar_orchestrator/agents/sql_agent.py)
+  - Must return JSON: { answer: markdown, sql: text, operation_type: enum, summary: string }
+  - SQLRunner executes the sql; answer/summary used for display/logging.
+- ShellAgent (cedar_orchestrator/agents/shell_agent.py)
+  - Must return JSON: { answer: markdown, command: text, expected_output: text, summary: string }
+  - Non-interactive only; orchestrator executes exactly the provided command.
+- ImageAnalysisAgent
+  - Requires context.file_id; returns structured JSON per IMAGE_ANALYSIS_SCHEMA.md (axes, series, data_points, OCR, etc.).
+- FileAgent
+  - Downloads URLs, saves metadata to DB; may call LLM for a brief description JSON; integrates with per-project storage.
+- Other agents: ResearchAgent, StrategyAgent, DataAgent, NotesAgent, FormulaAgent have focused responsibilities and outputs as documented in their modules and capability map.
+
+Master → parallel → synthesis loop
+- Chief produces agent_tasks (planning) → Agent Dispatcher runs selected agents concurrently → Chief reviews AgentResult list (synthesis) and either (a) returns final_answer or (b) schedules a loop with additional_guidance and the next minimal agent_tasks.
+- Limits/timeouts: Agents run with timeouts; Chief enforces iteration limits and provides finalization guidance when limits are reached.
+
+
+## 11) Document index and source map
+
+This architecture document is now the overarching reference and incorporates content from other docs. For deeper dives and rationale, see:
+- USER_FLOWS_AND_AGENTS.md — Full user flows, orchestration internals, and prompt excerpts (kept as a standalone for focused reading; this section summarizes and inlines key points).
+- README.md — Operational run modes, keys, uploads, client logging, shell API, Redis/relay, embedded UI testing, troubleshooting, stale-lock fix.
+- COMPREHENSIVE_README.md — Broader background, directory map, and packaging/deployment context.
+- IMAGE_ANALYSIS_SCHEMA.md — Expected JSON schema for image analysis results.
+- CEDAR_AGENT_GUIDE.md, PROMPT_MANAGEMENT.md, PROMPT_IMPROVEMENT_GUIDE.md — Prompt patterns, management, and improvements.
+- ORCHESTRATOR_REFACTORING_PLAN.md, ORCHESTRATION_FLOW_ISSUES.md, AGENT_FLOW_IMPROVEMENTS.md — Refactor history and design decisions.
+- README_CHAT_HISTORY_SQL.md, README_NOTES_FEATURE.md — Chat history persistence and notes features.
+- .github/workflows/*.yml — CI, tests, and macOS DMG packaging/release automation.
+
+If anything drifts, this file should remain the canonical high-level entry point, with links pointing to the most detailed sources in the repo.
