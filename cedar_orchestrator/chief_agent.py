@@ -198,16 +198,15 @@ class ChiefAgent:
                     pass
                 return decision_data
             
-            # Cancel preview once real response arrives
+            # Do NOT cancel preview once real response arrives.
+            # Let the preview stream finish so the UI can show the fast think-out-loud text.
             if preview_task:
-                # Release any preview step waits before cancellation
                 try:
-                    StepController.cancel(str(thread_id) if thread_id is not None else None)
+                    # Ensure any step waits are released so preview can stream immediately
+                    StepController.cont(str(thread_id) if thread_id is not None else None)
                 except Exception:
                     pass
-                log_step(logger, "Cancelling preview task")
-                await PreviewStreamer.cancel_preview(preview_task)
-                log_success(logger, "Preview task cancelled")
+                log_step(logger, "Leaving preview task running to finish streaming (no cancellation)")
             
             raw_content = response.choices[0].message.content
             log_step(logger, f"Got response: {len(raw_content)} chars")
