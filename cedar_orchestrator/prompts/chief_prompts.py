@@ -30,6 +30,7 @@ Key Responsibilities:
 - Route tasks to the most appropriate agent(s).
 - Handle multi-agent patterns (e.g., ImageAnalysisAgent → SQLAgent → SQLRunner).
 - Format the final_answer for the user, summarizing agent findings concisely.
+- When giving a final answer, structure it as: TLDR (brief punchline) → Recap of what was asked → What came back from your explorations → Reasoning for the final answer → Possible next steps. Do not literally write the word "final" in the answer.
 
 File Handling:
 - Use FileAgent ONLY for downloading new files from URLs.
@@ -50,7 +51,7 @@ def get_synthesis_schema() -> str:
   "decision": "final" or "loop" or "clarify",
   "thinking_process": "Internal reasoning: What the agents found, what still needs to be done, which agents to use next",
   "additional_guidance": "Clear instructions for next iteration (if decision=loop). Example: 'Use SQLAgent to create chart_data table with columns: series, x_value, y_value. Insert the 3 data points extracted by ImageAnalysisAgent.'",
-  "final_answer": "Complete formatted text response with markdown. Include everything the user should see: answer, explanation, next steps, etc. YOU format it ALL - punchline first, then details.",
+  "final_answer": "Complete, user-facing response with markdown. Structure it exactly as: TLDR: <brief answer/punchline>\n\nRecap of what was asked:\n<one or two sentences>\n\nWhat came back from your explorations:\n<concise summary of agent findings/results>\n\nReasoning for the final answer:\n<deeper explanation connecting evidence to conclusions>\n\nPossible next steps:\n<bulleted next actions>. Do not literally write the word 'final' in the answer.",
   "agent_tasks": [
     {
       "agent": "AgentName",
@@ -65,8 +66,7 @@ IMPORTANT FOR SYNTHESIS:
 - If decision='loop': MUST populate agent_tasks AND additional_guidance with specific next steps
 - If decision='final': MUST populate final_answer with complete user-facing response
 - additional_guidance: Explicit instructions for what to do next (e.g., "Create tables X, Y, Z and insert data")
-- final_answer should be COMPLETE formatted text ready to display
-- Start with punchline/direct answer (1-2 sentences)
+- final_answer must be COMPLETE formatted text ready to display and should follow this section order: TLDR → Recap of what was asked → What came back from your explorations → Reasoning for the final answer → Possible next steps. Do not literally write the word "final" in the answer.
 - Format with markdown (bold, bullets, code blocks as appropriate)
 - Keep it CONCISE - don't repeat agent outputs verbatim
 - Our code will display final_answer AS-IS, no manipulation
@@ -159,7 +159,7 @@ Agent Task Input (agent_tasks entries):
 Chief Agent (orchestrator)
 - Primary Directive: ALWAYS delegate to specialized agents; NEVER answer directly except when aggregating agent results.
 - Core Logic: Planning (decision="loop") → Agent execution → Synthesis (decision="final" or "loop"). Plan one iteration at a time; when looping, include additional_guidance and only next agent_tasks.
-- Responsibilities: Route correctly, handle multi-agent patterns, and produce a concise final_answer for the user.
+- Responsibilities: Route correctly, handle multi-agent patterns, and produce a concise final_answer for the user using this structure: TLDR → Recap of what was asked → What came back from your explorations → Reasoning for the final answer → Possible next steps.
 
 2) CodeAgent
 - Core Function: Generate and execute Python code for calculations, analysis, plotting, and document extraction.
