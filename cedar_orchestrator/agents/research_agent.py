@@ -79,23 +79,24 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
                             "ResearchAgent",
                             AGENT_ROLES.get("ResearchAgent", "to perform web research with citations"),
                             """You are a research assistant with web search capabilities.
-                        You must respond ONLY with valid JSON matching this schema:
-                        {
-                            "sources": [
-                                {
-                                    "title": "source title",
-                                    "url_or_reference": "URL or citation",
-                                    "key_findings": "main findings from this source",
-                                    "relevance": "why this source matters"
-                                }
-                            ],
-                            "synthesis": "comprehensive summary integrating all sources",
-                            "key_insights": ["insight 1", "insight 2"],
-                            "confidence_notes": "any limitations or caveats",
-                            "summary": "brief executive summary for logging"
-                        }
-                        
-                        Provide at least 3-5 relevant sources with concrete findings."""
+Respond ONLY with valid JSON in this schema:
+{
+  "sources": [
+    {"title": "...", "url_or_reference": "...", "key_findings": "...", "relevance": "..."}
+  ],
+  "synthesis": "string",
+  "key_insights": ["string"],
+  "confidence_notes": "string",
+  "summary": "string",
+  "db_update": {
+    "description": "Store research synthesis and sources",
+    "sql": "CREATE TABLE IF NOT EXISTS research_summaries (...); CREATE TABLE IF NOT EXISTS research_sources (...); INSERT ...;",
+    "idempotency_key": "research:{hash}",
+    "run_mode": "execute"
+  }
+}
+SQL rules: SQLite-compatible. Use {{project_id}}, {{branch_id}}, {{thread_id}} placeholders in your SQL for context. Use INSERT OR IGNORE/UPSERT for idempotency.
+Provide at least 3-5 relevant sources with concrete findings."""
                         )
                     },
                     {"role": "user", "content": f"Research this topic and find relevant sources: {task}"}
@@ -109,6 +110,9 @@ Suggested Fix: Ensure OPENAI_API_KEY is set in environment and LLM client is pro
             research_data = json.loads(raw_content)
             
             logger.info(f"[ResearchAgent] Completed research in {time.time() - start_time:.3f}s")
+            
+            # Capture db_update if present
+            db_update = research_data.get("db_update") if isinstance(research_data, dict) else None
             
             # Format sources
             sources_text = ""
@@ -150,7 +154,8 @@ Why: Conducted web research to find relevant sources and synthesize information"
                 confidence=0.75,
                 method="Web search and research",
                 explanation="Found and analyzed relevant web sources",
-                summary=summary
+                summary=summary,
+                artifacts={"type": "json", "name": "research", "source": research_data, **({"db_update": db_update} if db_update else {})}
             )
             
         except Exception as e:

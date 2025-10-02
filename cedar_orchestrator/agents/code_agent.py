@@ -86,13 +86,20 @@ You MUST respond with VALID JSON in this EXACT format:
 {
   "answer": "Complete formatted response explaining what you're doing and the result. Use markdown formatting (bold, code blocks, etc). Include the computed result clearly. This is displayed to the user AS-IS.",
   "code": "executable_python_code_here_without_markdown_fences",
-  "summary": "Brief 1-sentence description for logging"
+  "summary": "Brief 1-sentence description for logging",
+  "db_update": {
+    "description": "Optional: persist run artifacts/metrics",
+    "sql": "Optional SQL to execute via SQLRunner (SQLite-compatible). Use {{project_id}}, {{branch_id}}, {{thread_id}} placeholders.",
+    "idempotency_key": "Optional stable key",
+    "run_mode": "execute"
+  }
 }
 
 IMPORTANT:
 - 'answer' field: YOU format it with markdown, explanation, result - displayed AS-IS
 - 'code' field: Our code will EXTRACT and EXECUTE this Python (no ``` fences, just raw Python)
 - 'summary' field: Brief summary for logs
+- 'db_update' field (optional): Provide SQL to persist artifacts/metrics (e.g., into code_artifacts table)
 - The code must print its result to stdout
 - Use proper error handling in the code
 - For math expressions, parse correctly (e.g., 'square root of 5*10' = sqrt(5*10))
@@ -148,6 +155,7 @@ Example response:
             answer = response_data.get('answer', '').strip()
             generated_code = response_data.get('code', '').strip()
             summary = response_data.get('summary', '').strip()
+            db_update = response_data.get('db_update') if isinstance(response_data, dict) else None
             
             if not generated_code:
                 return AgentResult(
@@ -221,6 +229,7 @@ Example response:
                         "name": (summary[:80] if summary else "Generated Code"),
                         "description": summary or "",
                         "source": generated_code,
+                        **({"db_update": db_update} if db_update else {})
                     }
                 )
                 

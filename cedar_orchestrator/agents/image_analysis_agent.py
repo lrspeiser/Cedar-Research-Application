@@ -253,15 +253,16 @@ Your task is to:
 3. Assess the PURPOSE: What is this image trying to communicate?
 4. Draw CONCLUSIONS: What insights can be derived from this image?
 5. Provide REASONING: Why do these conclusions follow from the visual evidence?
-6. Return results as valid JSON matching the exact schema provided
+6. Return results as valid JSON matching the exact schema provided. Additionally include a 'db_update' object with SQL to persist results.
 
 IMPORTANT:
 - Return ONLY valid JSON, no markdown code fences, no explanatory text
 - Be specific and quantitative in evidence and reasoning
 - Assess confidence honestly (0.0 = uncertain, 1.0 = certain)
 - For charts: extract as many data points as visible
-- For conclusions: connect observable evidence to logical inferences"""
-                    )
+- For conclusions: connect observable evidence to logical inferences
+- For 'db_update'.sql, provide SQLite-compatible DDL/DML and use {{project_id}}, {{branch_id}}, {{file_id}} placeholders for context"""
+                        )
                     },
                     {
                         "role": "user",
@@ -307,6 +308,9 @@ IMPORTANT:
                     purpose = analysis_data.get('purpose', {})
                     conclusions = analysis_data.get('conclusions', [])
                     metadata = analysis_data.get('metadata', {})
+
+                    # Capture db_update if present
+                    db_update = analysis_data.get('db_update') if isinstance(analysis_data, dict) else None
                     
                     result_text = f"""## Image Analysis Complete
 
@@ -358,7 +362,8 @@ IMPORTANT:
                         summary=f"Analyzed {file_metadata.get('filename', 'image')}: {purpose.get('primary_message', 'No summary')[:100]}",
                         artifacts={
                             "file_metadata": file_metadata,
-                            "analysis_json": analysis_data  # Store full JSON for SQLAgent
+                            "analysis_json": analysis_data,  # Store full JSON for SQLAgent
+                            **({"db_update": db_update} if db_update else {})
                         }
                     )
                     

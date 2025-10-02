@@ -467,6 +467,18 @@ def layout(title: str, body: str, header_label: Optional[str] = None,
             nav_html=nav_html,
             body=body,
         )
-    except Exception:
-        pass
+        # Guard: detect any unreplaced placeholders and log them
+        import re as _re
+        unreplaced = _re.findall(r'\{[a-zA-Z_][a-zA-Z0-9_]*\}', html_doc)
+        if unreplaced:
+            try:
+                logging.getLogger(__name__).warning(f"[ui_utils.layout] Unreplaced placeholders in HTML: {unreplaced}")
+            except Exception:
+                pass
+    except Exception as e:
+        # Log format errors clearly - never silently fail
+        try:
+            logging.getLogger(__name__).error(f"[ui_utils.layout] HTML format error: {e}")
+        except Exception:
+            pass
     return HTMLResponse(html_doc)

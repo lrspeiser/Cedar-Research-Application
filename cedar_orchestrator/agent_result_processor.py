@@ -44,7 +44,9 @@ class AgentResultProcessor:
         run_logs: List[str],
         db_session = None,
         project_id: Optional[int] = None,
-        branch_id: Optional[int] = None
+        branch_id: Optional[int] = None,
+        thread_id: Optional[int] = None,
+        file_id: Optional[int] = None
     ) -> tuple[List[AgentResult], bool]:
         """
         Process agent execution results and stream to WebSocket.
@@ -60,7 +62,7 @@ class AgentResultProcessor:
             if isinstance(result, AgentResult):
                 await AgentResultProcessor._process_valid_result(
                     result, i, websocket, run_logs, 
-                    db_session, project_id, branch_id
+                    db_session, project_id, branch_id, thread_id, file_id
                 )
                 valid_results.append(result)
                 await asyncio.sleep(0.2)
@@ -83,7 +85,9 @@ class AgentResultProcessor:
         run_logs: List[str],
         db_session,
         project_id: Optional[int],
-        branch_id: Optional[int]
+        branch_id: Optional[int],
+        thread_id: Optional[int],
+        file_id: Optional[int]
     ):
         """Process a successful agent result"""
         logger.info(f"[AgentResultProcessor] Result {index+1}: {result.agent_name} - "
@@ -94,6 +98,11 @@ class AgentResultProcessor:
         # Persist code artifacts
         await AgentResultProcessor._persist_code_artifact(
             result, db_session, project_id, branch_id
+        )
+
+        # Apply optional DB update (agent-provided SQL)
+        await AgentResultProcessor._apply_db_update(
+            result, db_session, project_id, branch_id, thread_id, file_id, websocket, run_logs
         )
         
         # Send to WebSocket
@@ -120,6 +129,87 @@ class AgentResultProcessor:
         except Exception:
             pass
     
+    @staticmethod
+    async def _apply_db_update(
+        result: AgentResult,
+        db_session,
+        project_id: Optional[int],
+        branch_id: Optional[int],
+        thread_id: Optional[int],
+        file_id: Optional[int],
+        websocket: Optional[WebSocket],
+        run_logs: List[str]
+    ):
+        """Execute agent-provided db_update.sql (via SQLRunner) and attach results.
+        The agent should include artifacts['db_update'] = { description, sql, idempotency_key?, run_mode }.
+        """
+        try:
+            if not db_session or not project_id or not branch_id:
+                return
+            dbu = None
+            try:
+                dbu = (result.artifacts or {}).get('db_update') if isinstance(result.artifacts, dict) else None
+            except Exception:
+                dbu = None
+            if not dbu:
+                return
+            sql_text = str(dbu.get('sql') or '').strip()
+            if not sql_text:
+                return
+            # Render placeholders
+            def _sub(s: str) -> str:
+                repl = s.replace('{{project_id}}', str(int(project_id)))
+                repl = repl.replace('{{branch_id}}', str(int(branch_id)))
+                repl = repl.replace('{{thread_id}}', str(int(thread_id)) if thread_id is not None else 'NULL')
+                repl = repl.replace('{{file_id}}', str(int(file_id)) if file_id is not None else 'NULL')
+                return repl
+            sql_exec = _sub(sql_text)
+            # Execute with SQLRunner for consistent reporting
+            try:
+                from cedar_orchestrator.agents.sql_runner import SQLRunner
+            except Exception:
+                from .agents.sql_runner import SQLRunner  # fallback relative import
+            runner = SQLRunner(llm_client=None)
+            exec_result = await runner.process(sql_exec, db_session=db_session, project_id=int(project_id), branch_id=int(branch_id))
+            # Attach result
+            result.artifacts = result.artifacts or {}
+            result.artifacts['db_update_result'] = {
+                'status': 'ok' if exec_result and exec_result.confidence >= 0.6 else 'error',
+                'report': getattr(exec_result, 'result', ''),
+                'summary': getattr(exec_result, 'summary', ''),
+            }
+            # Append a short note to the visible text so Chief Agent sees it
+            try:
+                short_line = "\n\nDB Update: " + (result.artifacts['db_update_result']['summary'] or 'executed')
+                result.result = (result.result or '') + short_line
+            except Exception:
+                pass
+            # Stream a secondary bubble for transparency
+            try:
+                if websocket:
+                    await websocket.send_json({
+                        'type': 'agent_result',
+                        'agent_name': 'SQLRunner (auto)',
+                        'text': result.artifacts['db_update_result']['report'] or result.artifacts['db_update_result']['summary'],
+                        'summary': result.artifacts['db_update_result']['summary']
+                    })
+            except Exception:
+                pass
+            # Log
+            try:
+                run_logs.append(f"DBUpdateOK: {result.display_name} -> {len(sql_exec)} chars SQL")
+            except Exception:
+                pass
+        except Exception as e:
+            logger.warning(f"[AgentResultProcessor] DB update failed: {type(e).__name__}: {e}")
+            try:
+                result.artifacts = result.artifacts or {}
+                result.artifacts['db_update_result'] = {'status': 'error', 'error': str(e)}
+                result.result = (result.result or '') + f"\n\nDB Update: error {type(e).__name__}: {e}"
+                run_logs.append(f"DBUpdateERR: {result.display_name}: {type(e).__name__}: {e}")
+            except Exception:
+                pass
+
     @staticmethod
     async def _persist_code_artifact(
         result: AgentResult,

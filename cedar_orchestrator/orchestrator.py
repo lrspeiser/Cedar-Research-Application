@@ -207,7 +207,7 @@ class ThinkerOrchestrator:
                 # Process results
                 valid_results, had_errors = await AgentResultProcessor.process_results(
                     results, agents, message, websocket, run_logs,
-                    db_session, project_id, branch_id
+                    db_session, project_id, branch_id, thread_id, file_id
                 )
         
         # Phase 3: Chief Agent Synthesis

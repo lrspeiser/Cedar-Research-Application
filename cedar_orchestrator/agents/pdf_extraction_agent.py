@@ -24,6 +24,10 @@ import shutil
 # Import shared file processing utilities
 from .file_processing_result import FileProcessingResult, PYMUPDF_AVAILABLE
 
+# Import fitz (PyMuPDF) if available
+if PYMUPDF_AVAILABLE:
+    import fitz
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -34,8 +38,8 @@ class PDFExtractionAgent:
     def __init__(self):
         self.available = PYMUPDF_AVAILABLE
         
-    async def process(self, file_path: str) -> FileProcessingResult:
-        """Extract text and images from PDF"""
+    async def process(self, file_path: str, project_id: Optional[int] = None, branch_id: Optional[int] = None, file_id: Optional[int] = None) -> FileProcessingResult:
+        """Extract text and images from PDF with optional db_update for persistence"""
         logger.info(f"[PDFExtractionAgent] Processing {file_path}")
         
         if not self.available:

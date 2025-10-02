@@ -33,6 +33,8 @@ from openai import AsyncOpenAI
 from .agent_result import AgentResult
 
 # Configure logging
+import logging
+logger = logging.getLogger(__name__)
 
 class ImageCreationAgent:
     """Agent that generates images (via OpenAI Images) and saves them into the project files store.
