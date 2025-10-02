@@ -831,7 +831,7 @@ def get_main_chat_script() -> str:
             // Always create a NEW planning bubble - never reuse
             var detIdTh = 'det_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
             thinkWrap = document.createElement('div'); thinkWrap.className = 'msg assistant';
-            var metaTh = document.createElement('div'); metaTh.className = 'meta small'; metaTh.innerHTML = "<span class='pill'>Assistant</span> <span class='title' style='font-weight:600'>planning</span>";
+            var metaTh = document.createElement('div'); metaTh.className = 'meta small'; metaTh.innerHTML = "<span class='pill'>Chief Agent</span> <span class='title' style='font-weight:600'>planning</span>";
             var bubTh = document.createElement('div'); bubTh.className = 'bubble assistant';
             // Link bubble to details for click-to-toggle
             bubTh.setAttribute('data-details-id', detIdTh);

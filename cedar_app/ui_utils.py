@@ -381,8 +381,12 @@ def layout(title: str, body: str, header_label: Optional[str] = None,
         except Exception:
             return False
     try:
-        _flag_preview = "true" if _truthy(env_get("CEDARPY_SHOW_PREVIEW")) else "false"
-        _flag_prompt = "true" if _truthy(env_get("CEDARPY_SHOW_PROMPT_BUBBLES")) else "false"
+        # Default behavior: preview ON unless explicitly disabled in .env
+        _env_prev = env_get("CEDARPY_SHOW_PREVIEW")
+        _flag_preview = "true" if (_env_prev is None or _truthy(_env_prev)) else "false"
+        # Default behavior: prompt bubbles OFF unless explicitly enabled in .env
+        _env_prompt = env_get("CEDARPY_SHOW_PROMPT_BUBBLES")
+        _flag_prompt = "true" if (_env_prompt is not None and _truthy(_env_prompt)) else "false"
         feature_flags_js = f"""
   <script>
     window.CEDAR_SHOW_PREVIEW = {_flag_preview};
@@ -390,7 +394,7 @@ def layout(title: str, body: str, header_label: Optional[str] = None,
   </script>
   """
     except Exception:
-        feature_flags_js = "<script>window.CEDAR_SHOW_PREVIEW=false;window.CEDAR_SHOW_PROMPT_BUBBLES=false;</script>"
+        feature_flags_js = "<script>window.CEDAR_SHOW_PREVIEW=true;window.CEDAR_SHOW_PROMPT_BUBBLES=false;</script>"
 
     # Build HTML document (avoid f-string to prevent brace parsing issues; use str.format with escaped braces)
     html_doc = """<!doctype html>
